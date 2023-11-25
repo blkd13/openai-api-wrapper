@@ -1,0 +1,38 @@
+{
+    "name": "openai-api-wrapper",
+    "version": "0.0.1",
+    "description": "",
+    "scripts": {
+        "build": "tsc",
+        "watch": "tsc -w",
+        "start": "tsc -w",
+        "cli": "node ./dist/app/cli.js",
+        "batch": "node ./dist/app/cli.js batch",
+        "server": "node ./dist/app/cli.js server",
+        "vision": "node ./dist/app/main/main-vision-plain.js"
+    },
+    "bin": {
+        "oaw": "./dist/app/cli.js"
+    },
+    "type": "module",
+    "author": "",
+    "license": "MIT",
+    "devDependencies": {
+        "@types/inquirer": "^9.0.7",
+        "@types/yargs": "^17.0.32",
+        "typescript": "^5.0.4"
+    },
+    "dependencies": {
+        "chalk": "^5.3.0",
+        "fs": "^0.0.1-security",
+        "https-proxy-agent": "^6.1.0",
+        "image-size": "^1.0.2",
+        "inquirer": "^9.2.12",
+        "openai": "^4.19.0",
+        "ora": "^7.0.1",
+        "rxjs": "^7.8.1",
+        "tiktoken": "^1.0.7",
+        "ts-node": "^10.9.1",
+        "yargs": "^17.7.2"
+    }
+}
