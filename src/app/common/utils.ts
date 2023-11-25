@@ -311,7 +311,11 @@ export class Utils {
      * @returns 
      */
     static dirname(filepath: string): string {
-        return new URL('.', filepath).pathname;
+        if (filepath.endsWith('/') || filepath.endsWith('\\')) {
+            // TODO ディレクトリの場合はそのまま返すべきかどうか結構悩む
+        } else { }
+        const fileChain = filepath.split(/\/|\\/);
+        return fileChain.slice(0, fileChain.length - 1).join('/');
     }
 }
 
