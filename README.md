@@ -13,7 +13,8 @@ OpenAIのAPIをラップして使いやすくしたものです。
 
 ## ディレクトリ構造
 
-```
+```markdown
+
 ├── README.md
 ├── history (通信ログが溜まるところ。エラー調査とかに使う。)
 │   ├── ...
@@ -64,6 +65,25 @@ export OPENAI_API_KEY="${YOUR_OPENAI_API_KEY}"
 
 # 必要ライブラリをインストール
 npm install
+```
+
+### CLI
+
+CLIの使い方はhelpを参照してください。
+
+```bash
+# ヘルプ
+npm run cli --help
+```
+
+コマンドをインストールする場合。
+
+```bash
+# oaw ユーザーのみにインストール
+npm link oaw
+
+# oaw グローバルにインストール
+npm link 
 ```
 
 ### バッチ利用

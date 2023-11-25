@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+// typescriptのデバッグ用にsource-map-supportを読み込む
+import 'source-map-support/register.js'
+
 import yargs from 'yargs/yargs';
 import { hideBin } from 'yargs/helpers';
 import { ArgumentsCamelCase } from 'yargs';
