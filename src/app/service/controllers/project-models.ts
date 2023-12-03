@@ -48,8 +48,8 @@ export const getProject = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(ProjectEntity).find({ where: { id: req.body.id }, relations: ['stages'] }).then((projects) => {
-            res.status(200).json(projects);
+        ds.getRepository(ProjectEntity).findOne({ where: { id: Number(req.params.id) }, relations: ['stages'] }).then((project) => {
+            res.status(200).json(project);
         }).catch((err) => {
             res.status(500).json({ message: err });
         });
@@ -64,7 +64,7 @@ export const updateProject = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(ProjectEntity).findOne({ where: { id: req.body.id } }).then((project) => {
+        ds.getRepository(ProjectEntity).findOne({ where: { id: Number(req.params.id) } }).then((project) => {
             if (project) {
                 if (req.body.name) {
                     project.name = req.body.name;
@@ -94,7 +94,7 @@ export const deleteProject = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(ProjectEntity).delete({ id: req.body.id }).then((result) => {
+        ds.getRepository(ProjectEntity).delete({ id: Number(req.params.id) }).then((result) => {
             res.status(200).json(result);
         }).catch((err) => {
             res.status(500).json({ message: err });
@@ -114,7 +114,7 @@ export const addDevelopmentStage = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(ProjectEntity).findOne({ where: { id: req.body.projectId } }).then((project) => {
+        ds.getRepository(ProjectEntity).findOne({ where: { id: Number(req.params.projectId) } }).then((project) => {
             if (project) {
                 const stage = new DevelopmentStageEntity();
                 stage.project = project;
@@ -148,7 +148,7 @@ export const getDevelopmentStageList = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(ProjectEntity).findOne({ where: { id: req.body.projectId }, relations: ['stages'] }).then((project) => {
+        ds.getRepository(ProjectEntity).findOne({ where: { id: Number(req.params.projectId) }, relations: ['stages'] }).then((project) => {
             if (project) {
                 res.status(200).json(project.stages);
             } else {
@@ -168,7 +168,7 @@ export const getDevelopmentStage = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DevelopmentStageEntity).find({ where: { id: req.body.id }, relations: ['tasks'] }).then((stages) => {
+        ds.getRepository(DevelopmentStageEntity).find({ where: { id: Number(req.params.id) }, relations: ['tasks'] }).then((stages) => {
             res.status(200).json(stages);
         }).catch((err) => {
             res.status(500).json({ message: err });
@@ -187,7 +187,7 @@ export const updateDevelopmentStage = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DevelopmentStageEntity).findOne({ where: { id: req.body.id } }).then((stage) => {
+        ds.getRepository(DevelopmentStageEntity).findOne({ where: { id: Number(req.params.id) } }).then((stage) => {
             if (stage) {
                 if (req.body.type) {
                     stage.type = req.body.type;
@@ -220,7 +220,7 @@ export const deleteDevelopmentStage = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DevelopmentStageEntity).delete({ id: req.body.id }).then((result) => {
+        ds.getRepository(DevelopmentStageEntity).delete({ id: Number(req.params.id) }).then((result) => {
             res.status(200).json(result);
         }).catch((err) => {
             res.status(500).json({ message: err });
@@ -239,7 +239,7 @@ export const addTask = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DevelopmentStageEntity).findOne({ where: { id: req.body.stageId } }).then((stage) => {
+        ds.getRepository(DevelopmentStageEntity).findOne({ where: { id: Number(req.params.stageId) } }).then((stage) => {
             if (stage) {
                 const task = new TaskEntity();
                 task.stage = stage;
@@ -272,7 +272,7 @@ export const getTaskList = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DevelopmentStageEntity).findOne({ where: { id: req.body.stageId }, relations: ['tasks'] }).then((stage) => {
+        ds.getRepository(DevelopmentStageEntity).findOne({ where: { id: Number(req.params.stageId) }, relations: ['tasks'] }).then((stage) => {
             if (stage) {
                 res.status(200).json(stage.tasks);
             } else {
@@ -292,7 +292,7 @@ export const getTask = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(TaskEntity).find({ where: { id: req.body.id }, relations: ['documents', 'discussions'] }).then((tasks) => {
+        ds.getRepository(TaskEntity).find({ where: { id: Number(req.params.id) }, relations: ['documents', 'discussions'] }).then((tasks) => {
             res.status(200).json(tasks);
         }).catch((err) => {
             res.status(500).json({ message: err });
@@ -310,7 +310,7 @@ export const updateTask = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(TaskEntity).findOne({ where: { id: req.body.id } }).then((task) => {
+        ds.getRepository(TaskEntity).findOne({ where: { id: Number(req.params.id) } }).then((task) => {
             if (task) {
                 if (req.body.name) {
                     task.name = req.body.name;
@@ -340,7 +340,7 @@ export const deleteTask = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(TaskEntity).delete({ id: req.body.id }).then((result) => {
+        ds.getRepository(TaskEntity).delete({ id: Number(req.params.id) }).then((result) => {
             res.status(200).json(result);
         }).catch((err) => {
             res.status(500).json({ message: err });
@@ -362,7 +362,7 @@ export const addDocument = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(TaskEntity).findOne({ where: { id: req.body.taskId } }).then((task) => {
+        ds.getRepository(TaskEntity).findOne({ where: { id: Number(req.params.taskId) } }).then((task) => {
             if (task) {
                 const document = new DocumentEntity();
                 document.type = req.body.type;
@@ -397,7 +397,7 @@ export const getDocumentList = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(TaskEntity).findOne({ where: { id: req.body.taskId } }).then((document) => {
+        ds.getRepository(TaskEntity).findOne({ where: { id: Number(req.params.taskId) } }).then((document) => {
             if (document) {
                 res.status(200).json(document?.documents);
             } else {
@@ -417,7 +417,7 @@ export const getDocument = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DocumentEntity).find({ where: { id: req.body.id } }).then((documents) => {
+        ds.getRepository(DocumentEntity).find({ where: { id: Number(req.params.id) } }).then((documents) => {
             res.status(200).json(documents);
         }).catch((err) => {
             res.status(500).json({ message: err });
@@ -438,7 +438,7 @@ export const updateDocument = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DocumentEntity).findOne({ where: { id: req.body.id } }).then((document) => {
+        ds.getRepository(DocumentEntity).findOne({ where: { id: Number(req.params.id) } }).then((document) => {
             if (document) {
                 if (req.body.type) {
                     document.type = req.body.type;
@@ -477,7 +477,7 @@ export const deleteDocument = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DocumentEntity).delete({ id: req.body.id }).then((result) => {
+        ds.getRepository(DocumentEntity).delete({ id: Number(req.params.id) }).then((result) => {
             res.status(200).json(result);
         }).catch((err) => {
             res.status(500).json({ message: err });
@@ -496,7 +496,7 @@ export const addDiscussion = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(TaskEntity).findOne({ where: { id: req.body.taskId } }).then((task) => {
+        ds.getRepository(TaskEntity).findOne({ where: { id: Number(req.params.taskId) } }).then((task) => {
             if (task) {
                 const discussion = new DiscussionEntity();
                 discussion.topic = req.body.topic;
@@ -526,7 +526,7 @@ export const getDiscussionList = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(TaskEntity).findOne({ where: { id: req.body.taskId }, relations: ['discussions'] }).then((task) => {
+        ds.getRepository(TaskEntity).findOne({ where: { id: Number(req.params.taskId) }, relations: ['discussions'] }).then((task) => {
             if (task) {
                 res.status(200).json(task.discussions);
             } else {
@@ -546,7 +546,7 @@ export const getDiscussion = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DiscussionEntity).find({ where: { id: req.body.id }, relations: ['statements'] }).then((discussions) => {
+        ds.getRepository(DiscussionEntity).find({ where: { id: Number(req.params.id) }, relations: ['statements'] }).then((discussions) => {
             res.status(200).json(discussions);
         }).catch((err) => {
             res.status(500).json({ message: err });
@@ -565,7 +565,7 @@ export const updateDiscussion = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DiscussionEntity).findOne({ where: { id: req.body.id } }).then((discussion) => {
+        ds.getRepository(DiscussionEntity).findOne({ where: { id: Number(req.params.id) } }).then((discussion) => {
             if (discussion) {
                 if (req.body.topic) {
                     discussion.topic = req.body.topic;
@@ -595,7 +595,7 @@ export const deleteDiscussion = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DiscussionEntity).delete({ id: req.body.id }).then((result) => {
+        ds.getRepository(DiscussionEntity).delete({ id: Number(req.params.id) }).then((result) => {
             res.status(200).json(result);
         }).catch((err) => {
             res.status(500).json({ message: err });
@@ -615,7 +615,7 @@ export const addStatement = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DiscussionEntity).findOne({ where: { id: req.body.discussionId } }).then((discussion) => {
+        ds.getRepository(DiscussionEntity).findOne({ where: { id: Number(req.params.discussionId) } }).then((discussion) => {
             if (discussion) {
                 const statement = new StatementEntity();
                 statement.discussion = discussion;
@@ -647,7 +647,7 @@ export const getStatementList = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DiscussionEntity).findOne({ where: { id: req.body.discussionId }, relations: ['statements'] }).then((discussion) => {
+        ds.getRepository(DiscussionEntity).findOne({ where: { id: Number(req.params.discussionId) }, relations: ['statements'] }).then((discussion) => {
             if (discussion) {
                 res.status(200).json(discussion.statements);
             } else {
@@ -668,7 +668,7 @@ export const getStatement = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(StatementEntity).find({ where: { id: req.body.id } }).then((statements) => {
+        ds.getRepository(StatementEntity).find({ where: { id: Number(req.params.id) } }).then((statements) => {
             res.status(200).json(statements);
         }).catch((err) => {
             res.status(500).json({ message: err });
@@ -687,7 +687,7 @@ export const updateStatement = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(StatementEntity).findOne({ where: { id: req.body.id } }).then((statement) => {
+        ds.getRepository(StatementEntity).findOne({ where: { id: Number(req.params.id) } }).then((statement) => {
             if (statement) {
                 if (req.body.sequence) {
                     statement.sequence = req.body.sequence;
@@ -720,7 +720,7 @@ export const deleteStatement = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(StatementEntity).delete({ id: req.body.id }).then((result) => {
+        ds.getRepository(StatementEntity).delete({ id: Number(req.params.id) }).then((result) => {
             res.status(200).json(result);
         }).catch((err) => {
             res.status(500).json({ message: err });

@@ -1,4 +1,4 @@
-import { body } from 'express-validator';
+import { body, param } from 'express-validator';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
@@ -187,7 +187,7 @@ export const updateUser = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(UserEntity).findOne({ where: { id: req.body.id } }).then((user: UserEntity | null) => {
+        ds.getRepository(UserEntity).findOne({ where: { id: req.info.user.id } }).then((user: UserEntity | null) => {
             if (user == null) {
                 res.status(401).json({ message: 'ユーザーが見つかりませんでした。' });
                 return;
@@ -195,7 +195,7 @@ export const updateUser = [
                 // ユーザー情報の更新
                 user.name = req.body.name;
                 user.save().then(() => {
-                    res.json({ message: 'ユーザー情報を更新しました。' });
+                    res.json({ message: 'ユーザー情報を更新しました。', user });
                 });
             }
         });
@@ -205,9 +205,9 @@ export const updateUser = [
 /**
  * [user認証] パスワード変更
  */
-export const updatePassword = [
-    body('password').trim().notEmpty(),  // .withMessage('パスワードを入力してください。'),
-    body('passwordConfirm').trim().notEmpty(),  // .withMessage('パスワード(確認)を入力してください。'),
+export const changePassword = [
+    body('password').trim().notEmpty(),
+    body('passwordConfirm').trim().notEmpty(),
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -229,7 +229,7 @@ export const updatePassword = [
                 user.passwordHash = bcrypt.hashSync(req.body.password, 10);
                 user.authGeneration = user.authGeneration || 0 + 1;
                 user.save().then(() => {
-                    res.json({ message: 'パスワードを変更しました。' });
+                    res.json({ message: 'パスワードを変更しました。', user });
                 });
             }
         });
