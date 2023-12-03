@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { NextFunction, Request, Response } from 'express';
 
-import { InviteEntity, UserEntity } from '../models/auth.js';
+import { InviteEntity, UserEntity } from '../entity/auth.entity.js';
 
 import { InviteRequest, UserRequest } from '../models/info.js';
 

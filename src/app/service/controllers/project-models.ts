@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 
-import { ProjectEntity, DevelopmentStageEntity, DiscussionEntity, DocumentEntity, StatementEntity, TaskEntity, } from '../models/project-models.js';
+import { ProjectEntity, DevelopmentStageEntity, DiscussionEntity, DocumentEntity, StatementEntity, TaskEntity, } from '../entity/project-models.entity.js';
 import { ds } from '../db.js';
 import { body, param, query } from 'express-validator';
 import { validationErrorHandler } from '../middleware/validation.js';

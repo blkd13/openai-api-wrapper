@@ -1,37 +1,24 @@
 // db.ts
-import { Sequelize } from 'sequelize';
-
-const sequelize = new Sequelize('database', 'username', 'password', {
-    // host: 'localhost',
-    dialect: 'sqlite',
-    storage: './data/database.sqlite'
-});
-
-// export default sequelize;
-
 
 import { DataSource } from "typeorm"
 import { fileURLToPath } from 'url';
 import path from 'path';
-import { DevelopmentStageEntity, DiscussionEntity, DocumentEntity, ProjectEntity, StatementEntity, TaskEntity } from './models/project-models.js';
-import { InviteEntity, UserEntity } from './models/auth.js';
 
 // import.meta.urlからディレクトリパスを取得
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
+console.log(`currentDir=${currentDir}`);
 
 export const ds = new DataSource({
     type: 'sqlite',
     database: './data/database.sqlite',
     entities: [
-        // path.join(currentDir, 'entity', '**', '*.entity.ts'),
-        ProjectEntity, DevelopmentStageEntity, TaskEntity, DocumentEntity, DiscussionEntity, StatementEntity,
-        UserEntity, InviteEntity,
+        path.join(currentDir, 'entity', '**', '*.entity.js'),
     ],
     synchronize: true,
     logging: true,
 })
 
-ds.initialize()
+await ds.initialize()
     .then(() => {
         console.log("Data Source has been initialized!")
     })

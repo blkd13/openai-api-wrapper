@@ -1,8 +1,8 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity } from 'typeorm';
 
-import { DevelopmentStageType, DocumentSubType, DocumentType, ProjectStatus } from '../../../generated/graphql.gen.js';
-import { MyBaseEntity } from './common.js';
-import { UserEntity } from './auth.js';
+import { MyBaseEntity } from './base.js';
+import { UserEntity } from './auth.entity.js';
+import { DevelopmentStageType, DocumentSubType, DocumentType, ProjectStatus } from '../models/values.js';
 
 @Entity()
 export class ProjectEntity extends MyBaseEntity {

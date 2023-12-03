@@ -6,7 +6,7 @@ import nodemailer from 'nodemailer';
 import { Request, Response } from 'express';
 
 import { InviteRequest, UserRequest } from '../models/info.js';
-import { UserEntity, InviteEntity } from '../models/auth.js';
+import { UserEntity, InviteEntity } from '../entity/auth.entity.js';
 import { InviteToken, JWT_SECRET, UserToken } from '../middleware/authenticate.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { MoreThan } from 'typeorm';

@@ -1,6 +1,6 @@
 import { Request } from 'express';
 
-import { InviteEntity, UserEntity } from './auth.js';
+import { InviteEntity, UserEntity } from '../entity/auth.entity.js';
 
 export interface UserRequest extends Request {
     /**
