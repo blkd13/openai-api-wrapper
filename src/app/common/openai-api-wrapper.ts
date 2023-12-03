@@ -277,7 +277,8 @@ export class OpenAIApiWrapper {
             let label = ''; // タイムスタンプをつける前のidempotencyKey。
             // idempotencyKeyが設定されてい無い場合は入力のhashを使う。
             const reqOptions: RequestOptions = {};
-            const argsHash = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
+            const argsHash = crypto.createHash('MD5').update(JSON.stringify(args)).digest('hex');
+            // const argsHash = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
             if (options && options.label) {
                 // idempotencyKeyが設定されている場合。
                 label = options.label;

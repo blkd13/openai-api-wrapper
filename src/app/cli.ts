@@ -3,6 +3,10 @@
 // typescriptのデバッグ用にsource-map-supportを読み込む
 import 'source-map-support/register.js'
 
+import { fileURLToPath } from 'url';
+import * as  fs from 'fs';
+import * as  path from 'path';
+
 import yargs from 'yargs/yargs';
 import { hideBin } from 'yargs/helpers';
 import { ArgumentsCamelCase } from 'yargs';
@@ -52,21 +56,34 @@ const messageEn = {
 };
 const message = messageJp;
 
+// package.jsonを読み込む
+const file = fileURLToPath(import.meta.url);
+const appDire = path.dirname(file);
+const packageJson = JSON.parse(fs.readFileSync(path.join(appDire, `../../package.json`), 'utf8'));
+const scriptName = Object.keys(packageJson.bin)[0];
+
+// ディレクトリからエージェント一覧を取得する
+const getDirectories = (source: string) => fs.readdirSync(source, { withFileTypes: true })
+    .filter((dirent) => dirent.isDirectory())
+    .map((dirent) => dirent.name);
+const agentList = getDirectories(path.join(appDire, `agent`));
+
+
 const argv = yargs(hideBin(process.argv))
-    .scriptName('oaw')
+    .scriptName(scriptName)
     .usage(`${message.usage}: $0 <command> [options]`)
-    // .version('v', message.version, '0.0.1')
+    .version(packageJson.version)
     .help()
     // .strict() // 引数の数が合わないとか知らないオプションとかでエラーにするかどうか
     .epilog(message.epilog) // ヘルプの最後に表示される
     .showHelpOnFail(true)
     .demandCommand(1, message.demandCommand)
     // batch 用の設定 ------------------------------------------------------------------------------
-    .example('$0 batch sample', `${message.example.batch} "sample"`)
+    .example('$0 batch sample', `${message.example.batch} 'sample`)
     .command(
         ['batch <agent> [step]', 'b'], message.example.batch,
         (yargs) => yargs
-            .positional('agent', { describe: message.agent, type: 'string', demandOption: true })
+            .positional('agent', { describe: message.agent, type: 'string', demandOption: true, choices: agentList })
             .positional('step', { describe: 'step', type: 'number', default: 0 }),
         (argv: ArgumentsCamelCase<{
             agent: string,
@@ -90,6 +107,7 @@ const argv = yargs(hideBin(process.argv))
             allowLocalFiles: boolean,
             cors: boolean,
         }>) => {
+            import(`./service/app.js`);
             if (['localhost', '127.0.0.1'].indexOf(argv.host as string) === -1) {
                 console.log(chalk.red(message.warningHost(argv.host as string)));
             } else { }
@@ -117,5 +135,5 @@ const argv = yargs(hideBin(process.argv))
             import(`./main/main-generate.js`).then(async (m) => { m.main(argv.gentype as string || '', argv.name as string || ''); });
         })
     .recommendCommands()
-    .completion()
+    .completion() // completion でコマンド補完用のスクリプトが生成される。それを.bashrcとかに書いておくと補完が効く。
     .parseSync();

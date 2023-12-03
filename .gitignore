@@ -47,3 +47,5 @@ Thumbs.db
 /bk
 history
 history.log
+/data/
+*.gen.ts

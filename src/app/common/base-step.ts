@@ -198,7 +198,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
                                                 { role: 'system', content: `All output is done in JSON.` },
                                                 { role: 'user', content: correctPrompt },
                                             ],
-                                            model: `gpt-3.5-turbo`,
+                                            model: `gpt-3.5-turbo`, // JSON整形の失敗をやり直すだけなのでgpt-3.5-turboで十分。
                                             temperature: 0,
                                             stream: true,
                                         }, {
