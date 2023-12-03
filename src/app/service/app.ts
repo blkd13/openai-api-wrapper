@@ -27,6 +27,8 @@ rootRouter.use('/invite', authInviteRouter);
 app.use('/api', rootRouter);
 // 認証系ルート設定終了
 
+
+// サーバー起動
 app.listen(3000, () => {
     console.log('Server is running on port 3000');
 });
