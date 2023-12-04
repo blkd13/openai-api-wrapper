@@ -100,6 +100,9 @@ export class DiscussionEntity extends MyBaseEntity {
     @Column()
     topic!: string;
 
+    @Column()
+    logLabel!: string;
+
     @OneToMany(() => StatementEntity, statement => statement.discussion)
     statements!: StatementEntity[];
 

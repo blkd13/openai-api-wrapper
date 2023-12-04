@@ -6,6 +6,8 @@ import { OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ChatCompletionCreateParamsStreaming } from "openai/resources/index.js";
+import { ds } from '../db.js';
+import { DiscussionEntity, TaskEntity, StatementEntity } from '../entity/project-models.entity.js';
 
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
@@ -86,6 +88,49 @@ export const chatCompletion = [
             },
             complete: () => {
                 clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);
+
+                if (req.body.taskId) {
+                    // project-modelsのtaskに議事録を追加する
+                    ds.getRepository(TaskEntity).findOne({ where: { id: req.body.taskId }, relations: ['discussions'] }).then(task => {
+                        if (!task) throw new Error(`task not found. id=${req.body.taskId}`);
+                        const discussion = new DiscussionEntity();
+                        discussion.logLabel = `chat-${clientId}-${req.query.threadId}`;
+                        discussion.topic = req.body.topic || 'chat';
+                        discussion.statements = discussion.statements || [];
+
+                        // promiseできちんと順番に処理しないと変なことになる。
+                        Promise.all(inDto.args.messages.map((message, index) => {
+                            const statement = new StatementEntity();
+                            statement.sequence = index;
+                            statement.discussion = discussion;
+                            statement.speaker = message.role === 'user' ? `user-${req.info.user.id}` : message.role;
+                            statement.content = String(message.content);
+                            discussion.statements.push(statement);
+                            // statementの更新
+                            return statement.save();
+                        })).then(() => {
+                            // ChatCompletionの最後のstatementを追加
+                            const statement = new StatementEntity();
+                            statement.sequence = inDto.args.messages.length;
+                            statement.discussion = discussion;
+                            statement.speaker = inDto.args.model;
+                            statement.content = text;
+                            discussion.statements.push(statement);
+                            // statementの更新
+                            return statement.save();
+                        }).then(() => {
+                            // discussionの更新
+                            return discussion.save();
+                        }).then(() => {
+                            // taskの更新
+                            task.discussions = task.discussions || [];
+                            task.discussions.push(discussion);
+                            return task.save();
+                        });
+                    });
+                } else {
+                    // 通常モード
+                }
                 // console.log(text);
             },
         });
