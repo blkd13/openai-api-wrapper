@@ -786,7 +786,7 @@ export const getStatementList = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(DiscussionEntity).findOneOrFail({ where: { id: Number(req.params.discussionId) }, relations: ['statements', 'statements.discussion'] }).then((discussion) => {
+        ds.getRepository(DiscussionEntity).findOneOrFail({ where: { id: Number(req.params.discussionId) }, relations: ['statements'] }).then((discussion) => {
             res.status(200).json(discussion.statements || []);
         }).catch((error) => {
             console.error(error);
