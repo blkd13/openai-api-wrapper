@@ -8,7 +8,7 @@ import path from 'path';
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 console.log(`currentDir=${currentDir}`);
 
-export const ds = new DataSource({
+const sqlite = new DataSource({
     type: 'sqlite',
     database: './data/database.sqlite',
     entities: [
@@ -16,7 +16,28 @@ export const ds = new DataSource({
     ],
     synchronize: true,
     logging: true,
+    // extra: {
+    //     pragma: {
+    //         journal_mode: "wal"
+    //     }
+    // }
 })
+
+const postgres = new DataSource({
+    type: 'postgres',
+    host: 'localhost',
+    port: 5432,
+    username: 'chatgpt',
+    password: 'a',
+    schema: 'project_models',
+    database: 'postgres',
+    entities: [
+        path.join(currentDir, 'entity', '**', '*.entity.js'),
+    ],
+    synchronize: true,
+    // logging: true,
+})
+export const ds = postgres;
 
 await ds.initialize()
     .then(() => {

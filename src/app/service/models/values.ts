@@ -1,10 +1,17 @@
 export enum ProjectStatus {
-    NotStarted = '未開始',
-    InProgress = '進行中',
-    OnHold = '中断',
-    Completed = '完了',
-    Cancelled = '中止',
-    PendingReview = 'レビュー待ち'
+    NotStarted = 'NotStarted',         // 未開始
+    InProgress = 'InProgress',         // 進行中
+    OnHold = 'OnHold',                 // 中断
+    Completed = 'Completed',           // 完了
+    Cancelled = 'Cancelled',           // 中止
+    PendingReview = 'PendingReview',   // レビュー待ち
+    Reviewed = 'Reviewed',             // レビュー済み
+    Approved = 'Approved',             // 承認済み
+    Rejected = 'Rejected',             // 拒否
+    Pending = 'Pending',               // 保留
+    Incomplete = 'Incomplete',         // 未完了
+    Deleted = 'Deleted',               // 削除済み
+    Hidden = 'Hidden',                 // 非表示
 }
 
 export enum DevelopmentStageType {

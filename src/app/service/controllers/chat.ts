@@ -48,8 +48,9 @@ export const initEvent = [
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders(); // flushHeaders()がないとヘッダーが飛ばない
 
-        // // 開始イベントを送信する。こうするとクライアント側でonOpenが呼ばれる
-        // clients[clientId]?.response.write('event: chatCompletionStream\n\n');
+        // 開始イベントを送信する。本来はflushHeadersだけでも十分のはずだが、
+        // プロキシが挟まっていたりするとヘッダーだけだと詰まることもあるので、データ部を送ることで詰まらないようにする。
+        clients[clientId]?.response.write('event: chatCompletionStream\n\n');
     }
 ];
 

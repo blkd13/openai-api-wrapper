@@ -1,5 +1,4 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity } from 'typeorm';
-
 import { MyBaseEntity } from './base.js';
 import { UserEntity } from './auth.entity.js';
 import { DevelopmentStageType, DocumentSubType, DocumentType, ProjectStatus } from '../models/values.js';
@@ -11,6 +10,12 @@ export class ProjectEntity extends MyBaseEntity {
 
     @Column()
     name!: string;
+
+    @Column()
+    label!: string;
+
+    @Column()
+    description?: string;
 
     @Column()
     status!: ProjectStatus;
@@ -85,7 +90,7 @@ export class DocumentEntity extends MyBaseEntity {
     @Column()
     title!: string;
 
-    @Column()
+    @Column({ type: 'text' })
     content!: string;
 
     @Column()
@@ -122,7 +127,7 @@ export class StatementEntity extends MyBaseEntity {
     @Column()
     speaker!: string;
 
-    @Column()
+    @Column({ type: 'text' })
     content!: string;
 
     @ManyToOne(() => DiscussionEntity, discussion => discussion.statements)

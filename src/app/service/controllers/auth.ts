@@ -124,45 +124,51 @@ export const passwordReset = [
             // 継続
         }
 
-        // パスワード設定（emailが事実上の鍵）
-        ds.getRepository(UserEntity).findOne({ where: { email: req.info.invite.email } }).then((user: UserEntity | null) => {
-            if (user) {
-                // 既存ユーザーの場合はパスワードを更新する
-                // パスワードのハッシュ化
-                user.passwordHash = bcrypt.hashSync(req.body.password, 10);
-                user.authGeneration = user.authGeneration || 0 + 1;
-            } else {
-                if (req.body.name == null || req.body.name == '') {
-                    res.status(401).json({ message: '名前を入力してください。' });
-                    return;
+        ds.transaction((manager) => {
+            // パスワード設定（emailが事実上の鍵）
+            return manager.getRepository(UserEntity).findOne({ where: { email: req.info.invite.email } }).then((user: UserEntity | null) => {
+                if (user) {
+                    // 既存ユーザーの場合はパスワードを更新する
+                    // パスワードのハッシュ化
+                    user.passwordHash = bcrypt.hashSync(req.body.password, 10);
+                    user.authGeneration = user.authGeneration || 0 + 1;
                 } else {
-                    // 継続
+                    // 初期名前をメールアドレスにする。エラーにならないように。。
+                    req.body.name == req.body.name || req.info.invite.email;
+                    // if (req.body.name == null || req.body.name == '') {
+                    //     res.status(401).json({ message: '名前を入力してください。' });
+                    //     throw new Error('名前を入力してください。');
+                    // } else {
+                    //     // 継続
+                    // }
+                    // 新規ユーザーの場合は登録する
+                    user = new UserEntity();
+                    user.name = req.body.name;
+                    user.name = user.name || 'dummy name';
+                    // jwtの検証で取得した情報をそのまま登録する
+                    user.email = req.info.invite.email;
+                    // パスワードのハッシュ化
+                    user.passwordHash = bcrypt.hashSync(req.body.password, 10);
+                    user.authGeneration = 1;
                 }
-                // 新規ユーザーの場合は登録する
-                user = new UserEntity();
-                user.name = req.body.name;
-                // jwtの検証で取得した情報をそのまま登録する
-                user.email = req.info.invite.email;
-                // パスワードのハッシュ化
-                user.passwordHash = bcrypt.hashSync(req.body.password, 10);
-                user.authGeneration = 1;
-            }
-            user.save().then(() => {
-                ds.getRepository(InviteEntity).findOne({ where: { id: req.info.invite.id } }).then((invite: InviteEntity | null) => {
+                return user;
+            }).then((user) => {
+                return manager.getRepository(UserEntity).save(user);
+            }).then((user) => {
+                return manager.getRepository(InviteEntity).findOne({ where: { id: req.info.invite.id } }).then((invite: InviteEntity | null) => {
                     if (invite) {
                         invite.status = 'used';
                         invite.save();
                     } else {
                         // エラー。起こりえないケース
                     }
-                }).then(() => {
-                    if (user) { // 囲わなくても大丈夫なパスなのにコンパイルエラーが出るので囲む
-                        // JWTの生成
-                        const userToken: UserToken = { type: 'user', id: user.id, authGeneration: user.authGeneration || 0 };
-                        const jwtToken = jwt.sign(userToken, JWT_SECRET, { expiresIn: '1y' });
-                        res.json({ message: 'パスワードを設定しました。', token: jwtToken });
-                    } else { }
+                    return user;
                 });
+            }).then((user) => {
+                // JWTの生成
+                const userToken: UserToken = { type: 'user', id: user.id, authGeneration: user.authGeneration || 0 };
+                const jwtToken = jwt.sign(userToken, JWT_SECRET, { expiresIn: '1y' });
+                res.json({ message: 'パスワードを設定しました。', token: jwtToken });
             });
         });
     }

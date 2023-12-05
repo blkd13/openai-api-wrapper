@@ -8,7 +8,7 @@ export class UserEntity extends MyBaseEntity {
     id!: number;
 
     @Column()
-    name!: string;
+    name?: string;
 
     @Column()
     email!: string;
@@ -41,6 +41,6 @@ export class InviteEntity extends MyBaseEntity {
     @Column()
     status!: string;
 
-    @Column()
+    @Column({ type: 'bigint' })
     limit!: number;
 }
