@@ -14,7 +14,7 @@ export class ProjectEntity extends MyBaseEntity {
     @Column()
     label!: string;
 
-    @Column()
+    @Column({ nullable: true })
     description?: string;
 
     @Column()
@@ -101,6 +101,12 @@ export class DocumentEntity extends MyBaseEntity {
 export class DiscussionEntity extends MyBaseEntity {
     @PrimaryGeneratedColumn()
     id!: number;
+
+    @Column({ nullable: true })
+    type?: DocumentType;
+
+    @Column({ nullable: true })
+    subType?: DocumentSubType;
 
     @Column()
     topic!: string;

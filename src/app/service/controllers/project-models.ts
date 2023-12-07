@@ -74,6 +74,25 @@ export const getProject = [
 ];
 
 /**
+ * [user認証] プロジェクト取得
+ */
+export const getProjectDeep = [
+    param('id').trim().notEmpty(),
+    validationErrorHandler,
+    (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        ds.getRepository(ProjectEntity).findOneOrFail({
+            where: { id: Number(req.params.id) }, relations: ['stages', 'stages.tasks', 'stages.tasks.documents', 'stages.tasks.discussions']
+        }).then((project) => {
+            res.status(200).json(project);
+        }).catch((error) => {
+            console.error(error);
+            res.status(error instanceof EntityNotFoundError ? 404 : 500).json({ message: `Error getting project ${req.params.id}` });
+        });
+    }
+];
+
+/**
  * [user認証] プロジェクト更新
  */
 export const updateProject = [
@@ -141,7 +160,7 @@ export const addDevelopmentStages = [
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         ds.transaction(tx => {
-            return tx.findOneOrFail(ProjectEntity, { where: { id: Number(req.params.projectId) } })
+            return tx.findOneOrFail(ProjectEntity, { where: { id: Number(req.params.projectId) }, relations: ['stages'] })
                 .then((project) => {
                     req.body.stages = req.body.stages || [];
                     if (sequencial) {
@@ -294,7 +313,7 @@ export const addTasks = [
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         ds.transaction(tx => {
-            return tx.findOneOrFail(DevelopmentStageEntity, { where: { id: Number(req.params.stageId) } })
+            return tx.findOneOrFail(DevelopmentStageEntity, { where: { id: Number(req.params.stageId) }, relations: ['tasks'] })
                 .then((stage) => {
                     req.body.tasks = req.body.tasks || [];
                     if (sequencial) {
@@ -451,7 +470,7 @@ export const addDocuments = [
         const req = _req as UserRequest;
         let task: TaskEntity;
         ds.transaction(tx => {
-            return tx.findOneOrFail(TaskEntity, { where: { id: Number(req.params.taskId) } }).then((_task) => {
+            return tx.findOneOrFail(TaskEntity, { where: { id: Number(req.params.taskId) }, relations: ['documents'] }).then((_task) => {
                 task = _task;
                 req.body.documents = req.body.documents || [];
                 if (sequencial) {
@@ -487,7 +506,7 @@ export const addDocuments = [
                 task.documents = task.documents || [];
                 task.documents.push(...documents);
                 return tx.save(TaskEntity, task).then((_task) => {
-                    return task.documents || [];
+                    return documents; // 更新分だけを返却する
                 });
             });
         }).then((documents) => {
@@ -614,6 +633,8 @@ export const addDiscussions = [
                             const discussion = new DiscussionEntity();
                             discussion.topic = _discussion.topic;
                             discussion.participants = _discussion.participants;
+                            discussion.type = _discussion.type || '';
+                            discussion.subType = _discussion.subType || '';
                             discussion.statements = [];
                             return tx.save(DiscussionEntity, discussion).then((savedDiscussion) => {
                                 before.push(savedDiscussion);
@@ -632,6 +653,8 @@ export const addDiscussions = [
                         const discussion = new DiscussionEntity();
                         discussion.topic = _discussion.topic;
                         discussion.participants = _discussion.participants;
+                        discussion.type = _discussion.type || '';
+                        discussion.subType = _discussion.subType || '';
                         discussion.statements = [];
                         return tx.save(DiscussionEntity, discussion);
                     })).then((savedDiscussions: DiscussionEntity[]) => {
@@ -751,7 +774,7 @@ export const addStatements = [
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         ds.transaction(tx => {
-            return tx.findOneOrFail(DiscussionEntity, { where: { id: Number(req.params.discussionId) } }).then((discussion) => {
+            return tx.findOneOrFail(DiscussionEntity, { where: { id: Number(req.params.discussionId) }, relations: ['statements'] }).then((discussion) => {
                 req.body.statements = req.body.statements || [];
                 return Promise.all(req.body.statements.map((_statement: any) => {
                     const statement = new StatementEntity();

@@ -58,6 +58,9 @@ export const initEvent = [
  * [user認証] チャットの送信
  */
 export const chatCompletion = [
+    // 雑に作ってしまった。。
+    // query -> connectionId, threadId
+    // body  -> args, options?, taskId?, type?, subType?, topic? ：taskId以降はdiscussionを作成するための情報。discussionを作成しない場合は不要。
     query('connectionId').trim().notEmpty(),
     query('threadId').trim().notEmpty(),
     body('args').notEmpty(),
@@ -71,9 +74,10 @@ export const chatCompletion = [
         // inDto.args.model = inDto.args.model || 'gpt-4-1106-preview';
 
         let text = '';
+        const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.threadId}`;
         aiApi.chatCompletionObservableStream(
             inDto.args, {
-            label: `chat-${clientId}-${req.query.threadId}`,
+            label: label,
         }).subscribe({
             next: next => {
                 const resObj = {
@@ -88,14 +92,15 @@ export const chatCompletion = [
                 clients[clientId]?.response.end(error);
             },
             complete: () => {
-                clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);
 
                 if (req.body.taskId) {
                     // project-modelsのtaskに議事録を追加する
                     ds.getRepository(TaskEntity).findOne({ where: { id: req.body.taskId }, relations: ['discussions'] }).then(task => {
                         if (!task) throw new Error(`task not found. id=${req.body.taskId}`);
                         const discussion = new DiscussionEntity();
-                        discussion.logLabel = `chat-${clientId}-${req.query.threadId}`;
+                        discussion.logLabel = label;
+                        discussion.type = req.body.type || '';
+                        discussion.subType = req.body.subType || '';
                         discussion.topic = req.body.topic || 'chat';
                         discussion.statements = discussion.statements || [];
 
@@ -127,10 +132,14 @@ export const chatCompletion = [
                             task.discussions = task.discussions || [];
                             task.discussions.push(discussion);
                             return task.save();
+                        }).finally(() => {
+                            // DB更新が終わってから終了イベントを送信する
+                            clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);
                         });
                     });
                 } else {
-                    // 通常モード
+                    // 通常モードは素直に終了
+                    clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);
                 }
                 // console.log(text);
             },

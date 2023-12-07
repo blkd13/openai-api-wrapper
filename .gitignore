@@ -45,7 +45,9 @@ Thumbs.db
 /results
 /prompts_and_responses
 /bk
-history
+history/
+history_*/
 history.log
 /data/
 *.gen.ts
+.env

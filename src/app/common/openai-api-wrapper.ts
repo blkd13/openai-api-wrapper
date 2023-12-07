@@ -201,7 +201,7 @@ export class OpenAIApiWrapper {
         // this.options = {};
         // console.log(this.options);
 
-        try { fss.mkdirSync(`${HISTORY_DIRE}`, { recursive: true }); } catch (e) { }
+        try { fs.mkdirSync(`${HISTORY_DIRE}`, { recursive: true }); } catch (e) { }
         // ヘッダー出力
         console.log(`timestamp               step  R time[ms]  prompt comple model    cost   label`);
     }

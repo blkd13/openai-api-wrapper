@@ -36,6 +36,7 @@ const postgres = new DataSource({
     ],
     synchronize: true,
     // logging: true,
+    useUTC: true,
 })
 export const ds = postgres;
 

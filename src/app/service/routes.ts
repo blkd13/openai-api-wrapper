@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { changePassword, deleteUser, getUser, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateUserToken } from './middleware/authenticate.js';
 import { chatCompletion, initEvent } from './controllers/chat.js';
-import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
+import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
 
 // routers/index.ts
 
@@ -35,6 +35,7 @@ authUserRouter.post('/chat-completion', chatCompletion);
 // プロジェクト系
 authUserRouter.post('/project', createProject);
 authUserRouter.get('/project-list', getProjectList);
+authUserRouter.get('/project/deep/:id', getProjectDeep);
 authUserRouter.get('/project/:id', getProject);
 authUserRouter.patch('/project/:id', updateProject);
 authUserRouter.delete('/project/:id', deleteProject);

@@ -37,21 +37,39 @@ export enum NotificationType {
     Webhook = 'Webhook'
 }
 
+
 export enum DocumentType {
-    Requirements = 'Requirements',
+    DeploymentPlan = 'Deployment Plan',
     DesignSpecifications = 'Design Specifications',
     ImplementationGuide = 'Implementation Guide',
-    TestCases = 'Test Cases',
-    DeploymentPlan = 'Deployment Plan',
     MaintenanceLog = 'Maintenance Log',
+    MeetingNotes = 'Meeting Notes',
     ProjectPlan = 'Project Plan',
-    MeetingNotes = 'Meeting Notes'
+    Requirements = 'Requirements',
+    TestCases = 'Test Cases',
+
+    // 要件定義関連
+    FeatureRequirements = 'Feature Requirements',    // Summary、Detail
+
+    // 基本設計工程
+    ScreenDesign = 'Screen Design',       // Summary、Detail
+    ScreenComponentDesign = 'Screen Component Design',
+    APIDesign = 'API Design',             // Summary、Detail
+    DatabaseDesign = 'Database Design',   // Summary、Detail
+    DatabaseTableDesign = 'Database Table Design',
+    DatabaseSequenceDesign = 'Database Table Design',
+    DatabaseIndexDesign = 'Database Table Design',
 }
+
 export enum DocumentSubType {
     // 要件定義関連
     BusinessRequirements = 'Business Requirements',
     SystemRequirements = 'System Requirements',
     UserStories = 'User Stories',
+
+    FeatureRequirements = 'Feature Requirements',
+    FeatureListSummary = 'Feature ListSummary',
+    FeatureListDetail = 'Feature List Detail',
 
     // 設計関連
     HighLevelDesign = 'High Level Design', // 日本語で言うところの「基本設計」
@@ -59,11 +77,19 @@ export enum DocumentSubType {
     DatabaseDesign = 'Database Design',    // 日本語で言うところの「DB設計」
     InterfaceDesign = 'Interface Design',  // 日本語で言うところの「画面設計」
 
+    // リストもの
+    SummaryList = 'Summary List',
+    DetailList = 'Detail List',
+
+    LowLevelDesign = 'Low Level Design',   // 日本語で言うところの「詳細設計」
+    ScreenDesign = 'Screen Design',        // 日本語で言うところの「画面設計」
+    ScreenTransitionDiagram = 'Screen Transition Diagram', // 日本語で言うところの「画面遷移図」
+    APIDocumentation = 'API Documentation',  // 日本語で言うところの「API設計」
+
     // 実装関連
     TechnicalSpecifications = 'Technical Specifications',
     DevelopmentGuidelines = 'Development Guidelines',
     SourceCode = 'Source Code',
-    APIDocumentation = 'APIドキュメント',   // 日本語で言うところの「API設計」
 
     // テスト関連
     TestPlan = 'Test Plan',
@@ -87,5 +113,12 @@ export enum DocumentSubType {
     // 会議とコミュニケーション関連
     MeetingAgenda = 'Meeting Agenda',
     MeetingMinutes = 'Meeting Minutes',
-    StakeholderCommunication = 'Stakeholder Communication'
+    StakeholderCommunication = 'Stakeholder Communication',
+
+    // その他
+    Other = 'Other',
+    Memo = 'Memo',
+    Notes = 'Notes',
+    Log = 'Log',
+    History = 'History',
 }
