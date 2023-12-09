@@ -90,8 +90,8 @@ export class DocumentEntity extends MyBaseEntity {
     @Column()
     title!: string;
 
-    @Column({ type: 'text' })
-    content!: string;
+    @Column({ type: 'text', nullable: true })
+    content?: string;
 
     @Column()
     status!: ProjectStatus;

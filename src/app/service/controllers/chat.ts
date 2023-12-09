@@ -5,9 +5,10 @@ import { body, query } from "express-validator";
 import { OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
-import { ChatCompletionCreateParamsStreaming } from "openai/resources/index.js";
+import { ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam } from "openai/resources/index.js";
 import { ds } from '../db.js';
 import { DiscussionEntity, TaskEntity, StatementEntity } from '../entity/project-models.entity.js';
+import { enqueueGenerator, qSubject } from './project-models.js';
 
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
@@ -80,63 +81,99 @@ export const chatCompletion = [
             label: label,
         }).subscribe({
             next: next => {
+                text += next;
                 const resObj = {
                     data: { threadId: req.query.threadId, content: next },
                     event: 'message',
                 };
                 clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
-                text += next;
             },
             error: error => {
                 console.log(error);
                 clients[clientId]?.response.end(error);
             },
             complete: () => {
-
                 if (req.body.taskId) {
-                    // project-modelsのtaskに議事録を追加する
-                    ds.getRepository(TaskEntity).findOne({ where: { id: req.body.taskId }, relations: ['discussions'] }).then(task => {
-                        if (!task) throw new Error(`task not found. id=${req.body.taskId}`);
-                        const discussion = new DiscussionEntity();
-                        discussion.logLabel = label;
-                        discussion.type = req.body.type || '';
-                        discussion.subType = req.body.subType || '';
-                        discussion.topic = req.body.topic || 'chat';
-                        discussion.statements = discussion.statements || [];
 
-                        // promiseできちんと順番に処理しないと変なことになる。
-                        Promise.all(inDto.args.messages.map((message, index) => {
-                            const statement = new StatementEntity();
-                            statement.sequence = index;
-                            statement.discussion = discussion;
-                            statement.speaker = message.role === 'user' ? `user-${req.info.user.id}` : message.role;
-                            statement.content = String(message.content);
-                            discussion.statements.push(statement);
-                            // statementの更新
-                            return statement.save();
-                        })).then(() => {
-                            // ChatCompletionの最後のstatementを追加
-                            const statement = new StatementEntity();
-                            statement.sequence = inDto.args.messages.length;
-                            statement.discussion = discussion;
-                            statement.speaker = inDto.args.model;
-                            statement.content = text;
-                            discussion.statements.push(statement);
-                            // statementの更新
-                            return statement.save();
-                        }).then(() => {
-                            // discussionの更新
-                            return discussion.save();
-                        }).then(() => {
-                            // taskの更新
-                            task.discussions = task.discussions || [];
-                            task.discussions.push(discussion);
-                            return task.save();
-                        }).finally(() => {
-                            // DB更新が終わってから終了イベントを送信する
-                            clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);
-                        });
-                    });
+                    // 並列実行
+                    const func = enqueueGenerator(['task', 'statement', 'discussion']);
+                    const d1 = { body: {} } as any;
+                    const d2 = {} as any;
+                    func(d1, d2, function () {
+                        (function (d1: { body: any }) {
+                            console.log();
+                            console.log(`d1=${JSON.stringify(d1)}`);
+                            console.log();
+                            // taskIdが指定されている場合は議事録を作成する
+                            const discussion = new DiscussionEntity();
+                            discussion.logLabel = label;
+                            discussion.type = req.body.type || '';
+                            discussion.subType = req.body.subType || '';
+                            discussion.topic = req.body.topic || 'chat';
+                            discussion.statements = [];
+
+                            const queryRunner = ds.createQueryRunner();
+                            queryRunner.connect().then(() => {
+                                queryRunner.startTransaction().then(() => {
+                                    queryRunner.manager.getRepository(TaskEntity).findOneOrFail({ where: { id: req.body.taskId }, relations: ['discussions'] }).then(task => {
+                                        // 並列実行
+                                        return Promise.all(inDto.args.messages.map((message, index) => {
+                                            const statement = new StatementEntity();
+                                            statement.sequence = index;
+                                            statement.discussion = discussion;
+                                            statement.speaker = message.role === 'user' ? `user-${req.info.user.id}` : message.role;
+                                            statement.content = String(message.content);
+                                            // statementの更新
+                                            return queryRunner.manager.save(StatementEntity, statement);
+                                        })).then((statements) => {
+                                            // 保存したstatementsをdiscussionに追加
+                                            discussion.statements.push(...statements);
+                                            // ChatCompletion からの返事を末尾に追加
+                                            const statement = new StatementEntity();
+                                            statement.sequence = inDto.args.messages.length;
+                                            statement.discussion = discussion;
+                                            statement.speaker = inDto.args.model;
+                                            statement.content = text;
+                                            discussion.statements.push(statement);
+                                            // statementの更新
+                                            return queryRunner.manager.save(StatementEntity, statement);
+                                        }).then((statement) => {
+                                            // 保存したstatementsをdiscussionに追加
+                                            discussion.statements.push(statement);
+                                            // discussionの更新
+                                            return queryRunner.manager.save(DiscussionEntity, discussion);
+                                        }).then((discussion) => {
+                                            // 保存したdiscussionをtaskに追加
+                                            // taskの更新
+                                            task.discussions = task.discussions || [];
+                                            task.discussions.push(discussion);
+                                            return queryRunner.manager.save(TaskEntity, task);
+                                        }).then((task) => {
+                                            queryRunner.commitTransaction().then(() => {
+                                            }).catch(err => {
+                                                queryRunner.rollbackTransaction();
+                                                throw err;
+                                            }).finally(() => {
+                                                queryRunner.release();
+                                            });
+                                        }).catch(err => {
+                                            queryRunner.rollbackTransaction();
+                                            throw err;
+                                        });
+                                        // });
+                                    }).catch(err => {
+                                        queryRunner.rollbackTransaction();
+                                        queryRunner.release();
+                                    }).finally(() => {
+                                        // DB更新が終わってから終了イベントを送信する
+                                        clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);
+                                        qSubject.next(d1.body.myQueue);
+                                    });
+                                });
+                            });
+                        })(d1)
+                    } as any);
+
                 } else {
                     // 通常モードは素直に終了
                     clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);

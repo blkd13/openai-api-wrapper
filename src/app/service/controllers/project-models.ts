@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { NextFunction, Request, Response } from 'express';
 
 import { ProjectEntity, DevelopmentStageEntity, DiscussionEntity, DocumentEntity, StatementEntity, TaskEntity, } from '../entity/project-models.entity.js';
 import { ds } from '../db.js';
@@ -7,6 +7,8 @@ import { validationErrorHandler } from '../middleware/validation.js';
 import { UserRequest } from '../models/info.js';
 import { EntityNotFoundError, Not } from 'typeorm';
 import { ProjectStatus } from '../models/values.js';
+import { Utils } from '../../common/utils.js';
+import { Subject } from 'rxjs';
 
 /**
  * Create系は動くと思うがそれ以外は未検証
@@ -159,53 +161,57 @@ export const addDevelopmentStages = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(ProjectEntity, { where: { id: Number(req.params.projectId) }, relations: ['stages'] })
-                .then((project) => {
-                    req.body.stages = req.body.stages || [];
-                    if (sequencial) {
-                        // 逐次処理
-                        return req.body.stages.reduce((promise: Promise<DevelopmentStageEntity[]>, _stage: any) => {
-                            return promise.then((before) => {
-                                const stage = new DevelopmentStageEntity();
-                                stage.project = project;
-                                stage.type = _stage.type;
-                                stage.name = _stage.name;
-                                stage.status = _stage.status;
-                                stage.tasks = [];
-                                return tx.save(DevelopmentStageEntity, stage).then((savedStage) => {
-                                    before.push(savedStage);
-                                    project.stages = project.stages || [];
-                                    project.stages.push(savedStage);
-                                    return tx.save(ProjectEntity, project).then((_project) => {
-                                        project.stages = []; // 循環参照を切るためにあえてprojectのstagesを空にする
-                                        return before;
-                                    });
-                                });
-                            });
-                        }, Promise.resolve([]));
-                    } else {
-                        // 並列処理
-                        return Promise.all(req.body.stages.map((_stage: any) => {
+        ds.getRepository(ProjectEntity).findOneOrFail({ where: { id: Number(req.params.projectId) }, relations: ['stages'] }).then((project) => {
+            project.stages = project.stages || [];
+            return ds.transaction(tx => {
+                req.body.stages = req.body.stages || [];
+                if (sequencial) {
+                    // 逐次処理
+                    return (req.body.stages as DevelopmentStageEntity[]).reduce((promise: Promise<DevelopmentStageEntity[]>, _stage: DevelopmentStageEntity) => {
+                        return promise.then((before) => {
                             const stage = new DevelopmentStageEntity();
                             stage.project = project;
                             stage.type = _stage.type;
                             stage.name = _stage.name;
                             stage.status = _stage.status;
                             stage.tasks = [];
-                            return tx.save(DevelopmentStageEntity, stage);
-                        })).then((savedStages: DevelopmentStageEntity[]) => {
-                            project.stages = project.stages || [];
-                            project.stages.push(...savedStages);
-                            return tx.save(ProjectEntity, project).then((_project) => {
-                                project.stages = []; // 循環参照を切るためにあえてprojectのstagesを空にする
-                                return savedStages;
+                            return tx.save(DevelopmentStageEntity, stage).then((savedStage) => {
+                                before.push(savedStage);
+                                project.stages.push(savedStage);
+                                return savedStage;
                             });
+                        }) as Promise<DevelopmentStageEntity[]>;
+                    }, Promise.resolve([])).then((stages: DevelopmentStageEntity[]) => {
+                        return tx.save(ProjectEntity, project).then((_project) => {
+                            project.stages = []; // 循環参照を切るためにあえてprojectのstagesを空にする
+                            return stages;
                         });
-                    }
-                }).then((stages) => {
-                    res.status(201).json(stages);
-                });
+                    });
+                } else {
+                    // 並列処理
+                    return Promise.all(req.body.stages.map((_stage: DevelopmentStageEntity) => {
+                        const stage = new DevelopmentStageEntity();
+                        stage.project = project;
+                        stage.type = _stage.type;
+                        stage.name = _stage.name;
+                        stage.status = _stage.status;
+                        stage.tasks = [];
+                        return tx.save(DevelopmentStageEntity, stage);
+                    })).then((savedStages: DevelopmentStageEntity[]) => {
+                        console.log(`0savedStages=${JSON.stringify(savedStages)}`);
+                        project.stages = project.stages || [];
+                        project.stages.push(...savedStages);
+                        console.log(`1savedStages=${JSON.stringify(project.stages)}`);
+                        return tx.save(ProjectEntity, project).then((_project) => {
+                            project.stages = []; // 循環参照を切るためにあえてprojectのstagesを空にする
+                            return savedStages;
+                        });
+                    });
+                }
+            });
+        }).then((stages: DevelopmentStageEntity[]) => {
+            // console.log(stages);
+            res.status(201).json(stages);
         }).catch((error) => {
             console.error(error);
             res.status(error instanceof EntityNotFoundError ? 404 : 500).json({ message: `Error adding stage to project ${req.params.projectId}` });
@@ -259,22 +265,23 @@ export const updateDevelopmentStage = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(DevelopmentStageEntity, { where: { id: Number(req.params.id) }, relations: ['tasks'] }).then((stage) => {
-                if (req.body.type) {
-                    stage.type = req.body.type;
-                } else {/* do nothing */ }
-                if (req.body.name) {
-                    stage.name = req.body.name;
-                } else {/* do nothing */ }
-                if (req.body.status) {
-                    stage.status = req.body.status;
-                } else {/* do nothing */ }
+        ds.getRepository(DevelopmentStageEntity).findOneOrFail({ where: { id: Number(req.params.id) }, relations: ['tasks'] }).then((stage) => {
+            if (req.body.type) {
+                stage.type = req.body.type;
+            } else {/* do nothing */ }
+            if (req.body.name) {
+                stage.name = req.body.name;
+            } else {/* do nothing */ }
+            if (req.body.status) {
+                stage.status = req.body.status;
+            } else {/* do nothing */ }
+            // 更新トランザクション
+            return ds.transaction(tx => {
                 return tx.save(DevelopmentStageEntity, stage).then((stage) => {
                     stage.tasks = stage.tasks || [];
                     res.status(200).json(stage);
                 });
-            });
+            })
         }).catch((error) => {
             console.error(error);
             res.status(error instanceof EntityNotFoundError ? 404 : 500).json({ message: `Error updating stage ${req.params.id}` });
@@ -312,51 +319,50 @@ export const addTasks = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(DevelopmentStageEntity, { where: { id: Number(req.params.stageId) }, relations: ['tasks'] })
-                .then((stage) => {
-                    req.body.tasks = req.body.tasks || [];
-                    if (sequencial) {
-                        // 逐次処理
-                        return req.body.tasks.reduce((promise: Promise<TaskEntity[]>, _task: any) => {
-                            return promise.then((before) => {
-                                const task = new TaskEntity();
-                                task.stage = stage;
-                                task.name = _task.name;
-                                task.status = _task.status;
-                                task.documents = [];
-                                task.discussions = [];
-                                return tx.save(TaskEntity, task).then((savedTask) => {
-                                    before.push(savedTask);
-                                    stage.tasks = stage.tasks || [];
-                                    stage.tasks.push(savedTask);
-                                    return tx.save(DevelopmentStageEntity, stage).then((_stage) => {
-                                        stage.tasks = []; // 循環参照を切るためにあえてstageのtasksを空にする
-                                        return before;
-                                    });
-                                });
-                            });
-                        }, Promise.resolve([]));
-                    } else {
-                        // 並列処理
-                        return Promise.all(req.body.tasks.map((_task: any) => {
+        return ds.getRepository(DevelopmentStageEntity).findOneOrFail({ where: { id: Number(req.params.stageId) }, relations: ['tasks'] }).then((stage) => {
+            req.body.tasks = req.body.tasks || [];
+            return ds.transaction(tx => {
+                if (sequencial) {
+                    // 逐次処理
+                    return (req.body.tasks as TaskEntity[]).reduce((promise: Promise<TaskEntity[]>, _task: TaskEntity) => {
+                        return promise.then((before) => {
                             const task = new TaskEntity();
                             task.stage = stage;
                             task.name = _task.name;
                             task.status = _task.status;
                             task.documents = [];
                             task.discussions = [];
-                            return tx.save(TaskEntity, task);
-                        })).then((savedTasks: TaskEntity[]) => {
-                            stage.tasks = stage.tasks || [];
-                            stage.tasks.push(...savedTasks); // idが振られたtaskをstageに追加して保存
-                            return tx.save(DevelopmentStageEntity, stage).then((_stage) => {
-                                stage.tasks = []; // 循環参照を切るためにあえてstageのtasksを空にする
-                                return savedTasks;
-                            })
+                            return tx.save(TaskEntity, task).then((savedTask) => {
+                                before.push(savedTask);
+                                stage.tasks = stage.tasks || [];
+                                stage.tasks.push(savedTask);
+                                return tx.save(DevelopmentStageEntity, stage).then((_stage) => {
+                                    stage.tasks = []; // 循環参照を切るためにあえてstageのtasksを空にする
+                                    return before;
+                                });
+                            });
                         });
-                    }
-                });
+                    }, Promise.resolve([]));
+                } else {
+                    // 並列処理
+                    return Promise.all(req.body.tasks.map((_task: TaskEntity) => {
+                        const task = new TaskEntity();
+                        task.stage = stage;
+                        task.name = _task.name;
+                        task.status = _task.status;
+                        task.documents = [];
+                        task.discussions = [];
+                        return tx.save(TaskEntity, task);
+                    })).then((savedTasks: TaskEntity[]) => {
+                        stage.tasks = stage.tasks || [];
+                        stage.tasks.push(...savedTasks); // idが振られたtaskをstageに追加して保存
+                        return tx.save(DevelopmentStageEntity, stage).then((_stage) => {
+                            stage.tasks = []; // 循環参照を切るためにあえてstageのtasksを空にする
+                            return savedTasks;
+                        })
+                    });
+                }
+            });
         }).then((tasks: TaskEntity[]) => {
             res.status(201).json(tasks);
         }).catch((error) => {
@@ -412,22 +418,23 @@ export const updateTask = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(TaskEntity, {
-                where: { id: Number(req.params.id) }, relations: ['documents', 'discussions']
-            }).then((task) => {
-                if (req.body.name) {
-                    task.name = req.body.name;
-                } else {/* do nothing */ }
-                if (req.body.status) {
-                    task.status = req.body.status;
-                } else {/* do nothing */ }
+        ds.getRepository(TaskEntity).findOneOrFail({
+            where: { id: Number(req.params.id) }, relations: ['documents', 'discussions']
+        }).then((task) => {
+            if (req.body.name) {
+                task.name = req.body.name;
+            } else {/* do nothing */ }
+            if (req.body.status) {
+                task.status = req.body.status;
+            } else {/* do nothing */ }
+            ;
+            return ds.transaction(tx => {
                 return tx.save(TaskEntity, task);
-            }).then((task) => {
-                task.documents = task.documents || [];
-                task.discussions = task.discussions || [];
-                res.status(200).json(task);
-            });
+            })
+        }).then((task) => {
+            task.documents = task.documents || [];
+            task.discussions = task.discussions || [];
+            res.status(200).json(task);
         }).catch((error) => {
             console.error(error);
             res.status(error instanceof EntityNotFoundError ? 404 : 500).json({ message: `Error updating task ${req.params.id}` });
@@ -455,10 +462,87 @@ export const deleteTask = [
 ];
 
 
+
+// なんでかはわからないが並列処理かけまくるとエラーが発生するのでqueueを自前で用意した。
+// 多分QueryRunnerのリソース開放が間に合ってないとかだと思うので、リソース上げ下げも全部手で書けば直ると思われるけど一旦これで対応する。
+// TODO なかなかありえない実装だが、とりあえず動くのでこのままにしておく。当然、ゆくゆくはこのキューの仕組みは排除する。
+export const qSubject = new Subject<{ uuid: string, lock: EntityName[] }>();
+
+// exec queue
+// const queue = new PQueue({ concurrency: 1 });
+type EntityName = 'project' | 'stage' | 'task' | 'document' | 'discussion' | 'statement';
+const queueMap: { [key: string]: { req: Request, res: Response, next: NextFunction } } = {};
+const queue: Record<EntityName, string[]> = { project: [], stage: [], task: [], document: [], discussion: [], statement: [], };
+
+export function enqueueGenerator(lock: EntityName[]) {
+    return (req: Request, res: Response, next: NextFunction) => {
+        // enqueue
+        const uuid = Utils.generateUUID();
+        queueMap[uuid] = { req, res, next };
+        for (const entityName of lock) { queue[entityName].push(uuid); }
+
+        // body.myQueue に自分のuuidとlockをセット
+        req.body.myQueue = { uuid, lock };
+
+        // 待ち行列の先頭が自分なら処理を実行
+        if (lock.find((entityName) => queue[entityName].length > 1)) {
+            // 並ぶ
+            console.log();
+            console.log(`################## 並ぶ ${uuid}`);
+            console.log();
+        } else {
+            // 並ばない
+            console.log();
+            console.log(`################## 不待 ${uuid}`);
+            console.log();
+            next();
+        }
+    };
+}
+qSubject.asObservable().subscribe((obj: { uuid: string, lock: EntityName[] }) => {
+    console.log();
+    console.log(`################## 検知 ${JSON.stringify(obj)}`);
+    console.log();
+    // dequeue
+    for (const entityName of obj.lock) queue[entityName].shift();
+    delete queueMap[obj.uuid];
+
+    // 次の先頭の人を動かす
+    const uuidCount: { [key: string]: number } = {};
+
+    // queueの先頭のuuidをカウント
+    Object.values(queue).forEach((uuids) => {
+        if (uuids[0] in uuidCount) {
+            uuidCount[uuids[0] ?? ''] += 1;
+        } else {
+            uuidCount[uuids[0] ?? ''] = 1;
+        }
+    });
+
+    // 実行
+    Object.keys(uuidCount).filter(uuid => uuid).forEach(uuid => {
+        console.log();
+        console.log(`################## カウント ${uuid} ${uuidCount[uuid]} / ${queueMap[uuid].req.body.myQueue.lock.length}`);
+        console.log(JSON.stringify(queueMap[uuid].req.body.myQueue));
+        console.log();
+        if (queueMap[uuid].req.body.myQueue.lock.length === uuidCount[uuid]) {
+            // ロック要求数 === ロック取得数であれば実行
+            console.log();
+            console.log(`################## 実行 ${uuid}`);
+            console.log(JSON.stringify(queue));
+            console.log();
+            queueMap[uuid].next();
+        } else {
+            // それ以外は待つ
+        }
+    });
+});
+
 /**
  * [user認証] ドキュメント追加
  */
 export const addDocuments = [
+    enqueueGenerator(['task', 'document']),
     param('taskId').trim().notEmpty(),
     body('documents.*.type').trim().notEmpty(),
     body('documents.*.subType').trim().notEmpty(),
@@ -468,15 +552,13 @@ export const addDocuments = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        let task: TaskEntity;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(TaskEntity, { where: { id: Number(req.params.taskId) }, relations: ['documents'] }).then((_task) => {
-                task = _task;
-                req.body.documents = req.body.documents || [];
+        return ds.getRepository(TaskEntity).findOneOrFail({ where: { id: Number(req.params.taskId) }, relations: ['stage.project', 'documents', 'discussions'] }).then((task: TaskEntity) => {
+            req.body.documents = req.body.documents || [];
+            return ds.transaction(tx => {
                 if (sequencial) {
                     // 逐次処理
-                    return req.body.documents.reduce((promise: Promise<DocumentEntity[]>, _document: any) => {
-                        return promise.then((before) => {
+                    return (req.body.documents as DocumentEntity[]).reduce((promise: Promise<DocumentEntity[]>, _document: DocumentEntity) => {
+                        return promise.then((before: DocumentEntity[]) => {
                             const document = new DocumentEntity();
                             document.type = _document.type;
                             document.subType = _document.subType;
@@ -485,35 +567,47 @@ export const addDocuments = [
                             document.status = _document.status;
                             return tx.save(DocumentEntity, document).then((savedDocument) => {
                                 before.push(savedDocument);
+                                task.documents = task.documents || [];
+                                task.documents.push(savedDocument);
                                 return before;
                             });
                         });
-                    }, Promise.resolve([]));
+                    }, Promise.resolve([] as DocumentEntity[])).then((documents: DocumentEntity[]) => {
+                        return tx.save(TaskEntity, task).then((_task) => {
+                            task.documents = []; // 循環参照を切るためにあえてtaskのdocumentsを空にする
+                            return documents as DocumentEntity[];
+                        });
+                    });
                 } else {
                     // 並列処理
-                    return Promise.all(req.body.documents.map((_document: any) => {
+                    return Promise.all(req.body.documents.map((_document: DocumentEntity) => {
                         const document = new DocumentEntity();
                         document.type = _document.type;
                         document.subType = _document.subType;
                         document.title = _document.title;
                         document.content = _document.content;
                         document.status = _document.status;
+                        console.log(`save document ${document.title}`);
                         return tx.save(DocumentEntity, document);
-                    }));
+                    })).then((documents) => {
+                        // idが振られたdocumentをtaskに追加して保存
+                        task.documents = task.documents || [];
+                        task.documents.push(...documents);
+                        return tx.save(TaskEntity, task).then((_task) => {
+                            return documents; // 更新分だけを返却する
+                        });
+                    });
                 }
-            }).then((documents) => {
-                // idが振られたdocumentをtaskに追加して保存
-                task.documents = task.documents || [];
-                task.documents.push(...documents);
-                return tx.save(TaskEntity, task).then((_task) => {
-                    return documents; // 更新分だけを返却する
-                });
             });
-        }).then((documents) => {
+        }).then((documents: DocumentEntity[]) => {
+            console.log(`All save document ${documents.map(document => document.title)}`); // TODO: ここでエラーが発生する
             res.status(201).json(documents);
         }).catch((error) => {
             console.error(error);
             res.status(error instanceof EntityNotFoundError ? 404 : 500).json({ message: `Error adding document to task ${req.params.taskId}` });
+        }).finally(() => {
+            // 次の人を動かす
+            qSubject.next(req.body.myQueue);
         });
     }
 ];
@@ -565,26 +659,27 @@ export const updateDocument = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(DocumentEntity, { where: { id: Number(req.params.id) } }).then((document) => {
-                if (req.body.type) {
-                    document.type = req.body.type;
-                } else {/* do nothing */ }
-                if (req.body.subType) {
-                    document.subType = req.body.subType;
-                } else {/* do nothing */ }
-                if (req.body.title) {
-                    document.title = req.body.title;
-                } else {/* do nothing */ }
-                if (req.body.content) {
-                    document.content = req.body.content;
-                } else {/* do nothing */ }
-                if (req.body.status) {
-                    document.status = req.body.status;
-                } else {/* do nothing */ }
+        ds.getRepository(DocumentEntity).findOneOrFail({ where: { id: Number(req.params.id) } }).then((document) => {
+            if (req.body.type) {
+                document.type = req.body.type;
+            } else {/* do nothing */ }
+            if (req.body.subType) {
+                document.subType = req.body.subType;
+            } else {/* do nothing */ }
+            if (req.body.title) {
+                document.title = req.body.title;
+            } else {/* do nothing */ }
+            if (req.body.content) {
+                document.content = req.body.content;
+            } else {/* do nothing */ }
+            if (req.body.status) {
+                document.status = req.body.status;
+            } else {/* do nothing */ }
+            ;
+            return ds.transaction(tx => {
                 return tx.save(DocumentEntity, document);
-            });
-        }).then((document) => {
+            })
+        }).then((document: DocumentEntity) => {
             res.status(200).json(document);
         }).catch((error) => {
             console.error(error);
@@ -623,18 +718,18 @@ export const addDiscussions = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(TaskEntity, { where: { id: Number(req.params.taskId) }, relations: ['discussions'] }).then((task) => {
-                req.body.discussions = req.body.discussions || [];
+        ds.getRepository(TaskEntity).findOneOrFail({ where: { id: Number(req.params.taskId) }, relations: ['discussions'] }).then((task) => {
+            req.body.discussions = req.body.discussions || [];
+            return ds.transaction(tx => {
                 if (sequencial) {
                     // 逐次処理
-                    return req.body.discussions.reduce((promise: Promise<DiscussionEntity[]>, _discussion: any) => {
+                    return (req.body.discussions as DiscussionEntity[]).reduce((promise: Promise<DiscussionEntity[]>, _discussion: DiscussionEntity) => {
                         return promise.then((before) => {
                             const discussion = new DiscussionEntity();
                             discussion.topic = _discussion.topic;
                             discussion.participants = _discussion.participants;
-                            discussion.type = _discussion.type || '';
-                            discussion.subType = _discussion.subType || '';
+                            discussion.type = _discussion.type || '' as any;
+                            discussion.subType = _discussion.subType || '' as any;
                             discussion.statements = [];
                             return tx.save(DiscussionEntity, discussion).then((savedDiscussion) => {
                                 before.push(savedDiscussion);
@@ -649,12 +744,12 @@ export const addDiscussions = [
                     }, Promise.resolve([]));
                 } else {
                     // 並列処理
-                    return Promise.all(req.body.discussions.map((_discussion: any) => {
+                    return Promise.all(req.body.discussions.map((_discussion: DiscussionEntity) => {
                         const discussion = new DiscussionEntity();
                         discussion.topic = _discussion.topic;
                         discussion.participants = _discussion.participants;
-                        discussion.type = _discussion.type || '';
-                        discussion.subType = _discussion.subType || '';
+                        discussion.type = _discussion.type || '' as any;
+                        discussion.subType = _discussion.subType || '' as any;
                         discussion.statements = [];
                         return tx.save(DiscussionEntity, discussion);
                     })).then((savedDiscussions: DiscussionEntity[]) => {
@@ -666,8 +761,8 @@ export const addDiscussions = [
                         });
                     });
                 }
-            });
-        }).then((discussions) => {
+            })
+        }).then((discussions: DiscussionEntity[]) => {
             res.status(201).json(discussions);
         }).catch((error) => {
             console.error(error);
@@ -722,19 +817,19 @@ export const updateDiscussion = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(DiscussionEntity, { where: { id: Number(req.params.id) }, relations: ['statements'] }).then((discussion) => {
-                if (req.body.topic) {
-                    discussion.topic = req.body.topic;
-                } else {/* do nothing */ }
-                if (req.body.participants && req.body.participants.length > 0) {
-                    discussion.participants = req.body.participants;
-                } else {/* do nothing */ }
+        ds.getRepository(DiscussionEntity).findOneOrFail({ where: { id: Number(req.params.id) }, relations: ['statements'] }).then((discussion) => {
+            if (req.body.topic) {
+                discussion.topic = req.body.topic;
+            } else {/* do nothing */ }
+            if (req.body.participants && req.body.participants.length > 0) {
+                discussion.participants = req.body.participants;
+            } else {/* do nothing */ }
+            return ds.transaction(tx => {
                 return tx.save(DiscussionEntity, discussion);
-            }).then((discussion) => {
-                discussion.statements = discussion.statements || [];
-                res.status(200).json(discussion);
-            });
+            })
+        }).then((discussion: DiscussionEntity) => {
+            discussion.statements = discussion.statements || [];
+            res.status(200).json(discussion);
         }).catch((error) => {
             console.error(error);
             res.status(error instanceof EntityNotFoundError ? 404 : 500).json({ message: `Error updating discussion ${req.params.id}` });
@@ -773,10 +868,10 @@ export const addStatements = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(DiscussionEntity, { where: { id: Number(req.params.discussionId) }, relations: ['statements'] }).then((discussion) => {
-                req.body.statements = req.body.statements || [];
-                return Promise.all(req.body.statements.map((_statement: any) => {
+        ds.getRepository(DiscussionEntity).findOneOrFail({ where: { id: Number(req.params.discussionId) }, relations: ['statements'] }).then((discussion) => {
+            req.body.statements = req.body.statements || [];
+            return ds.transaction(tx => {
+                return Promise.all(req.body.statements.map((_statement: StatementEntity) => {
                     const statement = new StatementEntity();
                     statement.discussion = discussion;
                     statement.sequence = _statement.sequence;
@@ -787,12 +882,12 @@ export const addStatements = [
                     discussion.statements = discussion.statements || [];
                     discussion.statements.push(...savedStatements);
                     return tx.save(DiscussionEntity, discussion).then((_discussion) => {
-                        discussion.statements = []; // 循環参照を切るためにあえてdiscussionのstatementsを空にする
+                        discussion.statements = []; // 循環参照を切るためにあえてdiscussionのstatementsを空にして返却する
                         return savedStatements;
                     });
                 });
             });
-        }).then((statements) => {
+        }).then((statements: StatementEntity[]) => {
             res.status(201).json(statements);
         }).catch((error) => {
             console.error(error);
@@ -847,21 +942,21 @@ export const updateStatement = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(StatementEntity, { where: { id: Number(req.params.id) } }).then((statement) => {
-                if (req.body.sequence) {
-                    statement.sequence = req.body.sequence;
-                } else {/* do nothing */ }
-                if (req.body.speaker) {
-                    statement.speaker = req.body.speaker;
-                } else {/* do nothing */ }
-                if (req.body.content) {
-                    statement.content = req.body.content;
-                } else {/* do nothing */ }
+        ds.getRepository(StatementEntity).findOneOrFail({ where: { id: Number(req.params.id) } }).then((statement) => {
+            if (req.body.sequence) {
+                statement.sequence = req.body.sequence;
+            } else {/* do nothing */ }
+            if (req.body.speaker) {
+                statement.speaker = req.body.speaker;
+            } else {/* do nothing */ }
+            if (req.body.content) {
+                statement.content = req.body.content;
+            } else {/* do nothing */ }
+            return ds.transaction(tx => {
                 return tx.save(StatementEntity, statement);
-            }).then((statement) => {
-                res.status(200).json(statement);
-            });
+            })
+        }).then((statement: StatementEntity) => {
+            res.status(200).json(statement);
         }).catch((error) => {
             console.error(error);
             res.status(error instanceof EntityNotFoundError ? 404 : 500).json({ message: `Error updating statement ${req.params.id}` });
