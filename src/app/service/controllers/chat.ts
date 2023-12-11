@@ -101,9 +101,9 @@ export const chatCompletion = [
                     const d2 = {} as any;
                     func(d1, d2, function () {
                         (function (d1: { body: any }) {
-                            console.log();
-                            console.log(`d1=${JSON.stringify(d1)}`);
-                            console.log();
+                            // console.log();
+                            // console.log(`d1=${JSON.stringify(d1)}`);
+                            // console.log();
                             // taskIdが指定されている場合は議事録を作成する
                             const discussion = new DiscussionEntity();
                             discussion.logLabel = label;
