@@ -198,10 +198,10 @@ export const addDevelopmentStages = [
                         stage.tasks = [];
                         return tx.save(DevelopmentStageEntity, stage);
                     })).then((savedStages: DevelopmentStageEntity[]) => {
-                        console.log(`0savedStages=${JSON.stringify(savedStages)}`);
+                        // console.log(`0savedStages=${JSON.stringify(savedStages)}`);
                         project.stages = project.stages || [];
                         project.stages.push(...savedStages);
-                        console.log(`1savedStages=${JSON.stringify(project.stages)}`);
+                        // console.log(`1savedStages=${JSON.stringify(project.stages)}`);
                         return tx.save(ProjectEntity, project).then((_project) => {
                             project.stages = []; // 循環参照を切るためにあえてprojectのstagesを空にする
                             return savedStages;
@@ -487,22 +487,22 @@ export function enqueueGenerator(lock: EntityName[]) {
         // 待ち行列の先頭が自分なら処理を実行
         if (lock.find((entityName) => queue[entityName].length > 1)) {
             // 並ぶ
-            console.log();
-            console.log(`################## 並ぶ ${uuid}`);
-            console.log();
+            // console.log();
+            // console.log(`################## 並ぶ ${uuid}`);
+            // console.log();
         } else {
             // 並ばない
-            console.log();
-            console.log(`################## 不待 ${uuid}`);
-            console.log();
+            // console.log();
+            // console.log(`################## 不待 ${uuid}`);
+            // console.log();
             next();
         }
     };
 }
 qSubject.asObservable().subscribe((obj: { uuid: string, lock: EntityName[] }) => {
-    console.log();
-    console.log(`################## 検知 ${JSON.stringify(obj)}`);
-    console.log();
+    // console.log();
+    // console.log(`################## 検知 ${JSON.stringify(obj)}`);
+    // console.log();
     // dequeue
     for (const entityName of obj.lock) queue[entityName].shift();
     delete queueMap[obj.uuid];
@@ -521,16 +521,16 @@ qSubject.asObservable().subscribe((obj: { uuid: string, lock: EntityName[] }) =>
 
     // 実行
     Object.keys(uuidCount).filter(uuid => uuid).forEach(uuid => {
-        console.log();
-        console.log(`################## カウント ${uuid} ${uuidCount[uuid]} / ${queueMap[uuid].req.body.myQueue.lock.length}`);
-        console.log(JSON.stringify(queueMap[uuid].req.body.myQueue));
-        console.log();
+        // console.log();
+        // console.log(`################## カウント ${uuid} ${uuidCount[uuid]} / ${queueMap[uuid].req.body.myQueue.lock.length}`);
+        // console.log(JSON.stringify(queueMap[uuid].req.body.myQueue));
+        // console.log();
         if (queueMap[uuid].req.body.myQueue.lock.length === uuidCount[uuid]) {
             // ロック要求数 === ロック取得数であれば実行
-            console.log();
-            console.log(`################## 実行 ${uuid}`);
-            console.log(JSON.stringify(queue));
-            console.log();
+            // console.log();
+            // console.log(`################## 実行 ${uuid}`);
+            // console.log(JSON.stringify(queue));
+            // console.log();
             queueMap[uuid].next();
         } else {
             // それ以外は待つ
