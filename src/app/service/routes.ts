@@ -3,6 +3,7 @@ import { changePassword, deleteUser, getUser, onetimeLogin, passwordReset, reque
 import { authenticateInviteToken, authenticateUserToken } from './middleware/authenticate.js';
 import { chatCompletion, initEvent } from './controllers/chat.js';
 import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
+import { getDirectoryTree, getFile, saveFile } from './controllers/directory-tree.js';
 
 // routers/index.ts
 
@@ -74,3 +75,9 @@ authUserRouter.get('/discussion/:discussionId/statement-list', getStatementList)
 authUserRouter.get('/statement/:id', getStatement);
 authUserRouter.patch('/statement/:id', updateStatement);
 authUserRouter.delete('/statement/:id', deleteStatement);
+
+
+// ディレクトリツリー系
+authUserRouter.get('/directory-tree/:path/*', getDirectoryTree); // 最低1階層は必要
+authUserRouter.get('/file/:path/*', getFile); // 最低1階層は必要
+authUserRouter.post('/file/:path/*', saveFile); // 最低1階層は必要
