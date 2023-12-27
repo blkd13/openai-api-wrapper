@@ -94,12 +94,28 @@ export const saveFile = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
+        const filepath = `${process.cwd()}/data/workflow/${req2path(req)}`;
+        createDirectoryRecursive(path.dirname(`data/workflow/${req2path(req)}`));
+        console.log(path.dirname(filepath));
         fs.writeFile(`${process.cwd()}/data/workflow/${req2path(req)}`, req.body.body, (err) => {
             if (err) {
                 res.status(500).json({ message: err.message });
             } else {
+                console.log(`save ${filepath}`);
                 res.json({ message: 'success' });
             }
         });
     }
 ];
+
+function createDirectoryRecursive(directoryPath: string) {
+    const parts = directoryPath.split(path.sep);
+    for (let i = 1; i <= parts.length; i++) {
+        const currentPath = path.join(...parts.slice(0, i));
+        console.log(`check ${currentPath}`);
+        if (!fs.existsSync(currentPath)) {
+            fs.mkdirSync(currentPath);
+            console.log(`mkdir ${currentPath}`);
+        }
+    }
+}
