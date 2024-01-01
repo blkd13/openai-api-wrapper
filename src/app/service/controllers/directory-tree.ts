@@ -53,8 +53,6 @@ function req2path(req: Request): string {
     } else {
         subPath = req.params.path; // サブパスを取得
     }
-    subPath = subPath.replace(/\/+/g, '/'); // 重複するスラッシュを削除
-    subPath = subPath.replace(/\/$/, ''); // 末尾のスラッシュを削除
     // ディレクトリトラバーサル対策
     if (subPath.includes('..')) {
         throw new Error("Access to the parent directory is not allowed.");
@@ -94,10 +92,10 @@ export const saveFile = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const filepath = `${process.cwd()}/data/workflow/${req2path(req)}`;
-        createDirectoryRecursive(path.dirname(`data/workflow/${req2path(req)}`));
+        const filepath = `data/workflow/${req2path(req)}`;
+        createDirectoryRecursive(path.dirname(filepath));
         console.log(path.dirname(filepath));
-        fs.writeFile(`${process.cwd()}/data/workflow/${req2path(req)}`, req.body.body, (err) => {
+        fs.writeFile(`${process.cwd()}/${filepath}`, req.body.body, (err) => {
             if (err) {
                 res.status(500).json({ message: err.message });
             } else {
