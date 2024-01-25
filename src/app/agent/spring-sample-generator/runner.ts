@@ -589,7 +589,7 @@ class Step0053_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
 
                 ${classAnnotations[className] ? classAnnotations[className].join('\n') : ''}
                 @Data
-                public class ${className} {
+                public class ${className} extends BaseEntity {
                 
                 ${fields}
                 }

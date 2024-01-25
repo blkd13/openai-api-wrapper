@@ -20,9 +20,12 @@ import java.time.LocalDateTime;
 public class BaseEntity implements Serializable {
 
   @Column
-  private LocalDateTime tsIns;
+  @Temporal(TemporalType.TIMESTAMP)
+  private LocalDateTime createdAt;
+
   @Column
-  private LocalDateTime tsUpd;
+  @Temporal(TemporalType.TIMESTAMP)
+  private LocalDateTime updatedAt;
 
   @PrePersist
   public void onPrePersist() {
