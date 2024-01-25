@@ -321,6 +321,8 @@ export function javaServiceImplementsMap(
                 const props = interfaceTypeMap[interfaceType].map(field => `\t\tprivate ${field.type} ${field.name};`).join('\n');
                 return Utils.trimLines(`
                 \t@Data
+                \t${props && props.length > 0 ? '@AllArgsConstructor' : Utils.TRIM_LINES_DELETE_LINE}
+                \t@NoArgsConstructor
                 \tpublic static class ${interfaceType} {
                 ${props}
                 \t}`);
@@ -354,7 +356,7 @@ export function javaServiceImplementsMap(
                 ${serviceImplData[joinKey].methodAnnotations.map(anno => `\t${anno}`).join('\n') || Utils.TRIM_LINES_DELETE_LINE}
                 \t@Override
                 \tpublic ${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(${pascalServiceName}${pascalMethodName}RequestDto request) {
-                ${serviceImplData[joinKey].methodBodyInnerCodes.map(code => `\t\t${code}`).join('\n')}
+                ${serviceImplData[joinKey].methodBodyInnerCodes.map(code => code.split('\n').map(line => (line.startsWith('\t') || line.startsWith('  ')) ? line : `\t\t${line}`).join('\n')).join('\n')}
                 \t}
                 \t
             `);
@@ -454,6 +456,13 @@ export function javaServiceImplementsMap(
             package ${PACKAGE_NAME}.domain.service;
 
             import lombok.Data;
+            import lombok.AllArgsConstructor;
+            import lombok.NoArgsConstructor;
+            import org.springframework.web.multipart.MultipartFile;
+            import java.io.File;
+            import java.time.Period;
+            import java.math.BigDecimal;
+            import java.math.BigInteger;
             import java.util.List;
             import java.util.Map;
             import java.time.LocalDate;
@@ -553,8 +562,13 @@ export function javaServiceImplementsMap(
 
 
 const importMap = {
+    File: 'java.io.File',
+    BigDecimal: 'java.math.BigDecimal',
+    BigInteger: 'java.math.BigInteger',
+
     // jakarta.persistence: 'jakarta.persistence.*',
     Column: 'jakarta.persistence.Column',
+
     MappedSuperclass: 'jakarta.persistence.MappedSuperclass',
     PrePersist: 'jakarta.persistence.PrePersist',
     PreUpdate: 'jakarta.persistence.PreUpdate',

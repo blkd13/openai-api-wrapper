@@ -11,6 +11,7 @@ import ResourceNotFoundException from './spring-template/ResourceNotFoundExcepti
 import CustomException from './spring-template/CustomException.java.js';
 import BaseEntity from './spring-template/BaseEntity.java.js';
 import DemoApplication from './spring-template/DemoApplication.java.js';
+import application from './spring-template/application.yml.js';
 import Pom from './spring-template/pom.xml.js';
 
 const __dirname = Utils.basename(fileURLToPath(import.meta.url));
@@ -1667,7 +1668,7 @@ class Step0130_RepositoryMethod extends BaseMultiStepDomainModelGenerator {
 
                 @Repository
                 public interface ${entityName}Repository extends JpaRepository<${entityName}, Long> {
-                ${methodList.map(method => '\tpublic ' + method.replace(/^public /g, '')).join('\n')}
+                ${methodList.map(method => '\tpublic ' + method.replace(/^public /g, '').replace(/;$/g, '') + ';\n').join('')}
                 }
             `);
             fss.writeFileSync(outputFileName, methodsBody);
@@ -1838,7 +1839,8 @@ export async function main() {
     fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PACKAGE_DIRE}/DemoApplication.java`, DemoApplication.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
     const split0 = PACKAGE_NAME.split('\.');
     const name = split0.pop() || '';
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PROJECT_NAME}/pom.xml`, Pom.replace(/\{\{groupId\}\}/g, split0.join('.')).replace(/\{\{artifactId\}\}/g, name).replace(/\{\{name\}\}/g, name));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/spring/pom.xml`, Pom.replace(/\{\{groupId\}\}/g, split0.join('.')).replace(/\{\{artifactId\}\}/g, name).replace(/\{\{name\}\}/g, name));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/spring/src/main/resources/application.yml`, application.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
     let obj;
     return Promise.resolve().then(() => {
         obj = new Step0000_RequirementsToFeatureListSummary();
