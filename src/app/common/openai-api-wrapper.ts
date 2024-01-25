@@ -314,7 +314,7 @@ export class OpenAIApiWrapper {
                 const take = numForm(Date.now() - bef, 9);
                 const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
                 // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
-                tokenCount.prompt_tokens = encoding_for_model((['gpt-4-1106-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any).model) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder).length;
+                tokenCount.completion_tokens = encoding_for_model((['gpt-4-1106-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any).model) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder).length;
                 const completion_tokens = numForm(tokenCount.completion_tokens, 6);
 
                 const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
