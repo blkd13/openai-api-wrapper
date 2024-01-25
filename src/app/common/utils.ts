@@ -595,6 +595,93 @@ export class Utils {
     }
 
     /**
+     * 複数形の単語を単数形に変換する関数
+     * @param word 
+     * @returns 
+     */
+    static singularize(word: string): string {
+        // 不規則な複数形の単語
+        const irregulars: { [key: string]: string } = {
+            children: 'child',
+            men: 'man',
+            women: 'woman',
+            mice: 'mouse',
+            geese: 'goose',
+            feet: 'foot',
+            teeth: 'tooth'
+        };
+
+        // 不規則形のチェック
+        if (irregulars[word]) {
+            return irregulars[word];
+        }
+
+        // 末尾が"ies"の場合（"flies" -> "fly"）
+        if (word.endsWith('ies') && word.length > 3 && !'aeiou'.includes(word.charAt(word.length - 4))) {
+            return word.slice(0, -3) + 'y';
+        }
+
+        // 末尾が"es"の場合（"watches" -> "watch"）、特定の単語を除外
+        if (word.endsWith('es') && !word.endsWith('sses') && !word.endsWith('uses') && word.length > 2) {
+            return word.slice(0, -2);
+        }
+
+        // 末尾が"s"の場合（"cats" -> "cat"）、特定の単語を除外
+        if (word.endsWith('s') && !word.endsWith('ss') && !word.endsWith('us') && !word.endsWith('is') && word.length > 1) {
+            return word.slice(0, -1);
+        }
+
+        // その他のケースでは、単語をそのまま返す
+        return word;
+    }
+
+    /**
+     * 単数形の単語を複数形に変換する関数
+     * @param word 
+     * @returns 
+     */
+    static pluralize(word: string): string {
+        // 不規則な複数形の単語
+        const irregulars: { [key: string]: string } = {
+            child: 'children',
+            man: 'men',
+            woman: 'women',
+            mouse: 'mice',
+            goose: 'geese',
+            foot: 'feet',
+            tooth: 'teeth'
+        };
+
+        // 不規則形のチェック
+        if (irregulars[word]) {
+            return irregulars[word];
+        }
+
+        // 末尾が"f"または"fe"の場合
+        if (word.endsWith('f')) {
+            return word.slice(0, -1) + 'ves';
+        }
+        if (word.endsWith('fe')) {
+            return word.slice(0, -2) + 'ves';
+        }
+
+        // 末尾が"y"で、その前が子音の場合
+        if (word.endsWith('y') && word.length > 1 && !'aeiou'.includes(word.charAt(word.length - 2))) {
+            return word.slice(0, -1) + 'ies';
+        }
+
+        // 末尾が"s", "x", "z", "ch", "sh"の場合
+        if (word.endsWith('s') || word.endsWith('x') || word.endsWith('z') || word.endsWith('ch') || word.endsWith('sh')) {
+            return word + 'es';
+        }
+
+        // その他のケースでは、単純に"s"を追加
+        return word + 's';
+    }
+
+    // ここから下は失敗作
+
+    /**
      * Markdownテキストを解析してJSONに変換する関数
      * @param markdown 
      */

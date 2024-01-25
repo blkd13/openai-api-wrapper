@@ -6,11 +6,6 @@ import { Utils } from '../../common/utils.js';
 import { parseJavaCode, javaServiceTemplateMap, javaServiceImplementsMap, parseJavaMethodSignatureWithGenerics } from "./helper.js";
 import fss from '../../common/fss.js';
 import * as fs from 'fs';
-import * as path from 'path';
-
-import { ChildProcess, exec } from 'child_process';
-import { promisify } from 'util';
-import { readdir } from 'fs/promises';
 
 import ResourceNotFoundException from './spring-template/ResourceNotFoundException.java.js';
 import CustomException from './spring-template/CustomException.java.js';
@@ -18,11 +13,13 @@ import BaseEntity from './spring-template/BaseEntity.java.js';
 import DemoApplication from './spring-template/DemoApplication.java.js';
 import Pom from './spring-template/pom.xml.js';
 
-
-const PROJECT_NAME = 'dentist-reservation-system-01';
+const __dirname = Utils.basename(fileURLToPath(import.meta.url));
+const PROJECT_NAME = 'deposit-management-system-01';
 const PACKAGE_NAME = 'com.example.demo';
-const PACKAGE_DIRE = `${PROJECT_NAME}/src/main/java/com/example/demo`;
-const INPUT_PROMPT = Utils.trimLines(`お題は「歯医者の予約システム」です。`);
+const PACKAGE_DIRE = `spring/src/main/java/com/example/demo`;
+const INPUT_PROMPT = Utils.trimLines(`
+お題は「貸金業の貸付管理システム」です。
+`);
 
 /**
  * このエージェント用の共通設定。
@@ -38,6 +35,13 @@ abstract class BaseStepDomainModelGenerator extends BaseStep {
     systemMessage = this.systemMessageJa;
     temperature: number = 0.0; // ランダム度合い。0に近いほど毎回同じ結果になる。プログラムのようなものは 0 に、文章系は 1 にするのが良い。
     format = StepOutputFormat.MARKDOWN;
+}
+/**
+ * このエージェント用の共通設定。
+ * エージェントごとに設定したいデフォルト値が異なるのでrunnerの最初に書くことにした。
+ */
+abstract class BaseMultiStepDomainModelGenerator extends MultiStep {
+    agentName: string = Utils.basename(Utils.dirname(import.meta.url));
 }
 
 class Step0000_RequirementsToFeatureListSummary extends BaseStepDomainModelGenerator {
@@ -143,7 +147,7 @@ class Step0020_FeatureListDetailToJsonFormat extends BaseStepDomainModelGenerato
     }
 }
 
-class Step0030_DesignSummary extends MultiStep {
+class Step0030_DesignSummary extends BaseMultiStepDomainModelGenerator {
     featureList!: string[];
     constructor() {
         super();
@@ -252,7 +256,7 @@ class Step0030_DesignSummary extends MultiStep {
         // 全部まとめてファイルに出力する。
         // const reportList = result.map((targetName: string, index: number) => `# ${this.featureList[index]}\n\n${targetName}`);
         const reportList = result.map((targetName: string, index: number) => `${targetName}`);
-        const outputFileName = `results/domain-model-generator/${PROJECT_NAME}/summary/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
+        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/summary/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
         fss.writeFileSync(outputFileName, reportList.join('\n---\n'));
         return result;
     }
@@ -291,7 +295,7 @@ class Step0031_DesignSummaryReview extends BaseStepDomainModelGenerator {
     }
 }
 
-class Step0033_DesignSummaryRefine extends MultiStep {
+class Step0033_DesignSummaryRefine extends BaseMultiStepDomainModelGenerator {
     instructions!: { title: string, content: string[] }[];
     constructor() {
         super();
@@ -334,7 +338,7 @@ class Step0033_DesignSummaryRefine extends MultiStep {
         // 全部まとめてファイルに出力する。
         // const reportList = result.map((targetName: string, index: number) => `# ${this.featureList[index]}\n\n${targetName}`);
         const reportList = result.map((targetName: string, index: number) => `${targetName}`);
-        const outputFileName = `results/domain-model-generator/${PROJECT_NAME}/summary/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
+        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/summary/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
         fss.writeFileSync(outputFileName, reportList.join('\n---\n'));
         return result;
     }
@@ -383,6 +387,7 @@ class Step0040_EntityList extends BaseStepDomainModelGenerator {
                 これから提示する設計書をよく読んで、ドメイン駆動設計の要領でEntityを抽出してください。
                 Enumは対象外です。
                 出力形式は「Entity抽出のサンプル」を参考にしてください。
+                Entityの名前はPasCalCaseで記述してください。(OJTのように、大文字が連続する名前は禁止です。Ojtと書いてください。)
             `),
             children: [{
                 title: `評価ポイント`,
@@ -427,6 +432,7 @@ class Step0050_EntityAttributes extends BaseStepDomainModelGenerator {
                 これから提示する設計書をよく読んで、Entity一覧の各EntityのAttributesを抽出してください。
                 javaのコードを書くようなイメージで、Attributesを抽出してください。
                 追加の補助クラス、enumについても省略せずに記載してください。
+                Attributesの名前はCamelCaseで記述してください。(OJTのように、大文字が連続する名前は禁止です。ojtと書いてください。)
             `),
             children: [
             ],
@@ -442,14 +448,14 @@ class Step0050_EntityAttributes extends BaseStepDomainModelGenerator {
         },];
     }
 }
-class Step0053_EntityAttributesJpa extends BaseStepDomainModelGenerator {
+class Step0053_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
+    format: StepOutputFormat = StepOutputFormat.JSON;
     constructor() {
         super();
         this.chapters = [{
             title: `Instructions`,
             content: Utils.trimLines(`
-                これから提示する設計書をよく読んで、Entityに対してJPAで使えるようにアノテーションを付与してください。
-                lombokの@Dataを付与することでgetter/setterは省略してください。
+                これから提示する設計書をよく読んで、Entityに対してJPAで使えるようにアノテーションを考えてください。
             `),
             children: [
             ],
@@ -462,21 +468,149 @@ class Step0053_EntityAttributesJpa extends BaseStepDomainModelGenerator {
                 title: `Entity`,
                 content: Utils.setMarkdownBlock(new Step0050_EntityAttributes().formed, 'markdown'),
             }],
-        },];
+        }, {
+            title: 'Output Format',
+            content: Utils.trimLines(`
+                以下のJSONフォーマットで整理してください。
+                アノテーションは必要に応じて追加してもよいです。
+                \`\`\`json
+                {
+                    "classAnnotations": {
+                        "@Entity": ["EntityClassName", "EntityClassName2",],
+                        "@Table": ["TableClassName", "TableClassName2",],
+                        "@Embeddable": ["EmbeddableClassName", "EmbeddableClassName2",],
+                        "@MappedSuperclass": ["MappedSuperclassName", "MappedSuperclassName2",],
+                    },
+                    "fieldAnnotations": {
+                        "@Id": { "ClassName": ["IdFieldName"], "ClassName2": ["IdFieldName"], },
+                        "@GeneratedValue(strategy = GenerationType.IDENTITY)": { "ClassName": ["IdFieldName"], "ClassName2": ["IdFieldName"], },
+                        "@EmbeddedId": { "ClassName": ["IdFieldName", "IdFieldName2"], "ClassName2": ["IdFieldName", "IdFieldName2"], },
+                        "@Embedded": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
+                        "@Column(nullable = false)": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
+                        "@Enumerated(EnumType.STRING)": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
+                        "@ManyToOne": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
+                        "@OneToMany": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
+                        "@OneToOne(ownside)": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
+                        "@OneToOne(non-ownside)": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
+                        "@JoinColumn": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
+                    },
+                }
+                \`\`\`
+            `),
+        }];
     }
     postProcess(result: string): string {
-        // クラスごとに分割して出力する。
-        const models = parseJavaCode(result, PACKAGE_NAME);
+        // アノテーションを整理する。
+        const annos = Utils.jsonParse(result) as { classAnnotations: { [key: string]: string[] }, fieldAnnotations: { [key: string]: { [key: string]: string[] } } };
+        // クラスアノテーションをクラスキーで整理する。
+        const classAnnotations = Object.entries(annos.classAnnotations).reduce((acc, [anno, classNames]) => {
+            classNames.forEach(className => {
+                acc[className] = acc[className] || [];
+                acc[className].push(anno);
+            });
+            return acc;
+        }, {} as { [key: string]: string[] });
+        // フィールドアノテーションをクラスキーとフィールドキーで整理する。
+        const fieldAnnotations = Object.entries(annos.fieldAnnotations).reduce((acc, [anno, classFieldNames]) => {
+            Object.entries(classFieldNames).forEach(([className, fieldNames]) => {
+                fieldNames.forEach(fieldName => {
+                    acc[className] = acc[className] || {};
+                    acc[className][fieldName] = acc[className][fieldName] || [];
+
+                    // 項目名の微調整
+                    if (anno === '@JoinColumn') {
+                        // @JoinColumnは_idがついてしまっているので、_idを削除したフィールド名と同期させておく
+                        acc[className][Utils.toCamelCase(fieldName.replace(/_[Ii][Dd]$/, ''))] = acc[className][fieldName];
+                    } else if (anno === '@OneToMany') {
+                        // @OneToMayは項目名が複数形になってしまうので単数形に変換したオブジェクトと同期させておく
+                        acc[className][Utils.singularize(fieldName)] = acc[className][fieldName];
+                    } else { }
+
+                    // JOIN系のアノテーションは結合条件を記述する必要があるので、ここで結合条件を記述する。
+                    if (anno === '@ManyToOne') {
+                        // @ManyToOne
+                        // @JoinColumn(name = "customer_id", referencedColumnName = "id")
+                        // private Customer customer;
+                        acc[className][fieldName].push(anno);
+                    } else if (anno === '@OneToMany') {
+                        // @OneToMany(mappedBy = "customer", cascade = CascadeType.ALL)
+                        // private List<TransactionHistory> transactionHistories;
+                        acc[className][fieldName].push(`${anno}(mappedBy = "${Utils.toCamelCase(className)}", cascade = CascadeType.ALL)`);
+                    } else if (anno === '@OneToOne(ownside)') {
+                        // @OneToOne(mappedBy = "customer", cascade = CascadeType.ALL)
+                        // private CreditReport creditReport;
+                        acc[className][fieldName].push(`${anno}(mappedBy = "${Utils.toCamelCase(className)}", cascade = CascadeType.ALL)`);
+                    } else if (anno === '@OneToOne(non-ownside)') {
+                        // @OneToOne
+                        // @JoinColumn(name = "customer_id", referencedColumnName = "id")
+                        // private Customer customer;
+                        acc[className][fieldName].push(`@OneToOne`);
+                    } else if (anno === '@JoinColumn') {
+                        acc[className][fieldName].push(`@JoinColumn(name = "${Utils.toSnakeCase(fieldName)}", referencedColumnName = "id")`);
+                    } else {
+                        acc[className][fieldName].push(anno);
+                    }
+                });
+            });
+            return acc;
+        }, {} as { [key: string]: { [key: string]: string[] } });
+
+        const models = parseJavaCode(Utils.mdTrim(new Step0050_EntityAttributes().formed), PACKAGE_NAME);
         Object.entries(models.classes).forEach(([className, obj]) => {
-            fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/entity/${className}.java`, obj.source);
+            const fields = obj.props.map(field => {
+                const _fieldAnnoMap = fieldAnnotations[className] || fieldAnnotations[`${className}Entity`] || [];
+                const _fieldAnnoList = _fieldAnnoMap[field.name] || _fieldAnnoMap[field.name.replace(/I[Dd]$/, '')] || _fieldAnnoMap[field.name.replace(/_[Ii][Dd]$/, '')] || [];
+                const annotations = _fieldAnnoList.map(anno => `\t${anno}\n`).join('');
+                return `${annotations}\tprivate ${field.type} ${field.name};\n`;
+            }).join('\n');
+
+            // Entityの場合は@Tableアノテーションを付与する。
+            if ((classAnnotations[className] || []).find(anno => anno === '@Entity')) {
+                // 複数形のスネークケースにする
+                const pluralized = Utils.toSnakeCase(className).split('_').map((word, index, ary) => index === ary.length - 1 ? Utils.pluralize(word) : word).join('_');
+                classAnnotations[className].push(`@Table(name = "${pluralized}")`);
+            } else { }
+
+            obj.source = Utils.trimLines(`
+                package ${PACKAGE_NAME}.domain.entity;
+
+                import lombok.Data;
+                import jakarta.persistence.*;
+                import java.math.BigDecimal;
+                import java.math.BigInteger;
+                import java.time.LocalDate;
+                import java.time.LocalDateTime;
+                import java.time.LocalTime;
+                import java.time.Period;
+                import java.util.List;
+                import java.util.Map;
+                import ${PACKAGE_NAME}.domain.enums.*;
+
+                ${classAnnotations[className] ? classAnnotations[className].join('\n') : ''}
+                @Data
+                public class ${className} {
+                
+                ${fields}
+                }
+            `);
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/entity/${className}.java`, obj.source);
         });
         Object.entries(models.enums).forEach(([className, obj]) => {
-            fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/enums/${className}.java`, obj.source);
+            obj.source = Utils.trimLines(`
+                package ${PACKAGE_NAME}.domain.entity;
+
+                public enum ${className} {
+                    ${obj.values.join(', ')}
+                }
+            `);
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/enums/${className}.java`, obj.source);
         });
+
+        // // クラスごとに分割して出力する。
 
         const entitySource = Object.entries(models.classes).map(([className, obj]) => Utils.setMarkdownBlock(obj.source, `java ${PACKAGE_NAME}.domain.entity.${className}`)).join('\n\n');
         const enumsSource = Object.entries(models.enums).map(([className, obj]) => Utils.setMarkdownBlock(obj.source, `java ${PACKAGE_NAME}.domain.enums.${className}`)).join('\n\n');
-        fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/entities.md`, entitySource + '\n\n---\n\n' + enumsSource);
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, entitySource + '\n\n---\n\n' + enumsSource);
         return result;
     }
 }
@@ -581,7 +715,7 @@ class Step0060_ViewList extends BaseStepDomainModelGenerator {
     }
 }
 
-class Step0070_ViewDocuments extends MultiStep {
+class Step0070_ViewDocuments extends BaseMultiStepDomainModelGenerator {
     viewList!: { name: string, destinationList: string[], relatedFeatureList: string[] }[];
     constructor() {
         super();
@@ -698,7 +832,7 @@ class Step0070_ViewDocuments extends MultiStep {
         // 全部まとめてファイルに出力する。
         // const reportList = result.map((targetName: string, index: number) => `# ${this.featureList[index]}\n\n${targetName}`);
         const reportList = result.map((targetName: string, index: number) => `${targetName}`);
-        const outputFileName = `results/domain-model-generator/${PROJECT_NAME}/summary/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
+        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/summary/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
         fss.writeFileSync(outputFileName, reportList.join('\n---\n'));
         return result;
     }
@@ -869,9 +1003,9 @@ class Step0092_ServiceMethodListReqRes extends BaseStepDomainModelGenerator {
         const serviceDataTable = mergedAPIList.map(row => `| ${row.slice(0, 3).concat(row.slice(5, 10)).join(' | ')} |`).join('\n');
 
         // markdownとjsonで出力する。
-        fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/ApiList.md`, apiDataTable);
-        fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceList.md`, serviceDataTable);
-        fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceList.json`, JSON.stringify(serviceData, null, 2));
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ApiList.md`, apiDataTable);
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.md`, serviceDataTable);
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, JSON.stringify(serviceData, null, 2));
         return result;
     }
 }
@@ -904,15 +1038,15 @@ class Step0095_ApiListJson extends BaseStepDomainModelGenerator {
  * APIドキュメントを作成する。
  * ※要らないかもしれない。
  */
-class Step0100_ApiDocuments extends MultiStep {
+class Step0100_ApiDocuments extends BaseMultiStepDomainModelGenerator {
     viewList!: { name: string, destinationList: string[], relatedFeatureList: string[] }[];
     constructor() {
         super();
         // const ENTITY_LIST = Utils.setMarkdownBlock(Utils.mdTrim(new Step0053_EntityAttributesJpa().formed), 'java');
-        const ENTITY_LIST = fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/entities.md`, 'utf-8');
-        const entityData = parseJavaCode(Utils.mdTrim(new Step0053_EntityAttributesJpa().formed), PACKAGE_NAME);
+        const ENTITY_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8');
+        const entityData = parseJavaCode(Utils.mdTrim(new Step0050_EntityAttributes().formed), PACKAGE_NAME);
         const REPOSITORY_LIST = entityData.entityList.map(entityName => `- ${entityName}Repository<${entityName}, Long>`).join('\n');
-        const API_LIST = fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/ApiList.md`, 'utf-8');
+        const API_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ApiList.md`, 'utf-8');
 
         // 画面一覧から画面と紐づく機能一覧を取得する。
         this.viewList = JSON.parse(new Step0060_ViewList().formed).viewList;
@@ -1083,7 +1217,7 @@ class Step0100_ApiDocuments extends MultiStep {
         }, {});
 
         type MetaServiceData = { [key: string]: { [key: string]: { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] } } };
-        const serviceData = JSON.parse(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
+        const serviceData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
 
         // console.log(entityData);
         this.childStepList = Object.entries(serviceData).map(([serviceName, apiData]) =>
@@ -1108,20 +1242,20 @@ class Step0100_ApiDocuments extends MultiStep {
             return prev;
         }, {} as Record<string, any>);
 
-        const outputFileName = `results/domain-model-generator/${PROJECT_NAME}/ServiceDocs.json`;
+        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/ServiceDocs.json`;
         fss.writeFileSync(outputFileName, JSON.stringify(allObj, null, 2));
         return result;
     }
 }
 
-class Step0110_ApiSourceReqRes extends MultiStep {
+class Step0110_ApiSourceReqRes extends BaseMultiStepDomainModelGenerator {
     constructor() {
         super();
         // const ENTITY_LIST = Utils.setMarkdownBlock(Utils.mdTrim(new Step0053_EntityAttributesJpa().formed), 'java');
-        const ENTITY_LIST = fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/entities.md`, 'utf-8');
+        const ENTITY_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8');
 
         type MetaServiceData = { [key: string]: { [key: string]: { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] } } };
-        const serviceData = JSON.parse(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
+        const serviceData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
         class Step0110_ApiSourceReqResChil extends BaseStepDomainModelGenerator {
             // model: GPTModels = 'gpt-3.5-turbo';
             format: StepOutputFormat = StepOutputFormat.JSON;
@@ -1205,19 +1339,19 @@ class Step0110_ApiSourceReqRes extends MultiStep {
             return prev;
         }, {} as Record<string, any>);
 
-        const outputFileName = `results/domain-model-generator/${PROJECT_NAME}/request-response.json`;
+        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/request-response.json`;
         fss.writeFileSync(outputFileName, JSON.stringify(allObj, null, 2));
         return result;
     }
 }
 
 
-class Step0120_ApiSourceJson extends MultiStep {
+class Step0120_ApiSourceJson extends BaseMultiStepDomainModelGenerator {
     constructor() {
         super();
-        const ENTITY_LIST = fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/entities.md`, 'utf-8');
-        const SERVICE_LIST = fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceList.md`, 'utf-8');
-        const entityData = parseJavaCode(Utils.mdTrim(new Step0053_EntityAttributesJpa().formed), PACKAGE_NAME);
+        const ENTITY_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8');
+        const SERVICE_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.md`, 'utf-8');
+        const entityData = parseJavaCode(Utils.mdTrim(new Step0050_EntityAttributes().formed), PACKAGE_NAME);
         const REPOSITORY_LIST = entityData.entityList.map(entityName => `- ${entityName}Repository<${entityName}, Long>`).join('\n');
 
         // 画面一覧から画面と紐づく機能一覧を取得する。
@@ -1237,14 +1371,14 @@ class Step0120_ApiSourceJson extends MultiStep {
 
 
         type MetaServiceData = Record<string, Record<string, { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] }>>;
-        const serviceData = JSON.parse(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
-        const reqResData = JSON.parse(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/request-response.json`, 'utf-8')) as Record<string, Record<string, { type: string, name: string, validations?: string[] }[]>>;
-        const serviceDocsData = JSON.parse(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceDocs.json`, 'utf-8')) as Record<string, string>;
+        const serviceData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
+        const reqResData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/request-response.json`, 'utf-8')) as Record<string, Record<string, { type: string, name: string, validations?: string[] }[]>>;
+        const serviceDocsData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceDocs.json`, 'utf-8')) as Record<string, string>;
         const serviceTemplateMap = javaServiceTemplateMap(serviceData, reqResData, serviceDocsData, entityData, PACKAGE_NAME);
 
         const exceptionSource =
-            Utils.setMarkdownBlock(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/ResourceNotFoundException.java`, 'utf-8'), 'java com.example.demo.exception.ResourceNotFoundException') + '\n\n' +
-            Utils.setMarkdownBlock(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/CustomException.java`, 'utf-8'), 'java com.example.demo.exception.CustomException')
+            Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/ResourceNotFoundException.java`, 'utf-8'), 'java com.example.demo.exception.ResourceNotFoundException') + '\n\n' +
+            Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/CustomException.java`, 'utf-8'), 'java com.example.demo.exception.CustomException')
 
         // console.log(serviceTemplateMap);
         class Step0120_ApiSourceJsonChil extends BaseStepDomainModelGenerator {
@@ -1385,50 +1519,35 @@ class Step0120_ApiSourceJson extends MultiStep {
         // });
 
         type MetaServiceData = Record<string, Record<string, { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] }>>;
-        const serviceData = JSON.parse(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
-        const reqResData = JSON.parse(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/request-response.json`, 'utf-8')) as Record<string, Record<string, { type: string, name: string, validations?: string[] }[]>>;
-        const serviceDocsData = JSON.parse(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceDocs.json`, 'utf-8')) as Record<string, string>;
+        const serviceData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
+        const reqResData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/request-response.json`, 'utf-8')) as Record<string, Record<string, { type: string, name: string, validations?: string[] }[]>>;
+        const serviceDocsData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceDocs.json`, 'utf-8')) as Record<string, string>;
 
-        const entityData = parseJavaCode(Utils.mdTrim(new Step0053_EntityAttributesJpa().formed), PACKAGE_NAME);
+        const entityData = parseJavaCode(Utils.mdTrim(new Step0050_EntityAttributes().formed), PACKAGE_NAME);
         const javaServiceImplementsMapObj = javaServiceImplementsMap(serviceData, reqResData, serviceDocsData, allObj, entityData, PACKAGE_NAME);
 
-        const outputFileName = `results/domain-model-generator/${PROJECT_NAME}/service-data.json`;
+        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/service-data.json`;
         fss.writeFileSync(outputFileName, JSON.stringify(allObj, null, 2));
         Object.entries(javaServiceImplementsMapObj).forEach(([key, value]) => {
-            fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/service/impl/${key}Impl.java`, value.implement);
-            fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/service/${key}.java`, value.interface);
-            fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/controller/${key}Controller.java`, value.controller);
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/service/impl/${key}Impl.java`, value.implement);
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/service/${key}.java`, value.interface);
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/controller/${key}Controller.java`, value.controller);
         });
 
-        // const execPromise = promisify(exec);
-        // Promise.all(Object.entries(javaServiceImplementsMapObj).map(([key, value]) => [
-        //     `results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/service/impl/${key}Impl.java`,
-        //     `results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/controller/${key}Controller.java`,
-        //     // `results/domain-model-generator/${PROJECT_NAME}/service/${key}.java`,
-        // ]).flat().map(filePath => {
-        //     console.log(`Formatting ${filePath}...`);
-        //     try {
-        //         return execPromise(`java -jar lib/google-java-format-1.19.2-all-deps.jar --replace "${filePath}"`);
-        //     } catch {
-        //         return Promise.resolve();
-        //     }
-        // })).then(() => {
-        //     console.log('All Java files have been formatted.');
-        // }).catch((error) => console.error('Error formatting Java files:', error));
         return result;
     }
 }
 
 
-class Step0130_RepositoryMethod extends MultiStep {
+class Step0130_RepositoryMethod extends BaseMultiStepDomainModelGenerator {
     constructor() {
         super();
         // const ENTITY_LIST = Utils.setMarkdownBlock(Utils.mdTrim(new Step0053_EntityAttributesJpa().formed), 'java');
-        const ENTITY_LIST = fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/entities.md`, 'utf-8');
-        const API_LIST = fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceList.md`, 'utf-8');
+        const ENTITY_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8');
+        const API_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.md`, 'utf-8');
 
         type MetaServiceData = Record<string, Record<string, { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] }>>;
-        const serviceData = JSON.parse(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
+        const serviceData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
 
         // console.log(serviceTemplateMap);
         class Step0130_RepositoryMethodChil extends BaseStepDomainModelGenerator {
@@ -1452,7 +1571,7 @@ class Step0130_RepositoryMethod extends MultiStep {
                         `),
                     }, {
                         title: 'Target Source Code',
-                        content: Utils.setMarkdownBlock(fs.readFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/service/impl/${apiId}Impl.java`, 'utf-8'), 'java'),
+                        content: Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/service/impl/${apiId}Impl.java`, 'utf-8'), 'java'),
                     }, {
                         title: '参考資料',
                         children: [{
@@ -1490,11 +1609,11 @@ class Step0130_RepositoryMethod extends MultiStep {
             prev[keys[index]] = obj;
             return prev;
         }, {} as Record<string, Record<string, Record<string, string[]>>>);
-        const outputFileName = `results/domain-model-generator/${PROJECT_NAME}/repository-methods.json`;
+        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/repository-methods.json`;
         fss.writeFileSync(outputFileName, JSON.stringify(allObj, null, 2));
         // console.dir(allObj, { depth: 5 });
 
-        const entityData = parseJavaCode(Utils.mdTrim(new Step0053_EntityAttributesJpa().formed), PACKAGE_NAME).classes;
+        const entityData = parseJavaCode(Utils.mdTrim(new Step0050_EntityAttributes().formed), PACKAGE_NAME).classes;
         // console.dir(entityData, { depth: 5 });
 
         // RespositoryのJSONベースでメソッドをまとめる。
@@ -1529,7 +1648,7 @@ class Step0130_RepositoryMethod extends MultiStep {
                 methodSet.add(methodSignature.methodName);
                 return boolean;
             });
-            const outputFileName = `results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/repository/${entityName}Repository.java`;
+            const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/repository/${entityName}Repository.java`;
             const methodsBody = Utils.trimLines(`
                 package ${PACKAGE_NAME}.domain.repository;
 
@@ -1558,7 +1677,7 @@ class Step0130_RepositoryMethod extends MultiStep {
     }
 }
 
-class Step0080_ApiList0 extends MultiStep {
+class Step0080_ApiList0 extends BaseMultiStepDomainModelGenerator {
     viewList!: { name: string, destinationList: string[], relatedFeatureList: string[] }[];
     constructor() {
         super();
@@ -1598,7 +1717,7 @@ class Step0080_ApiList0 extends MultiStep {
         // 全部まとめてファイルに出力する。
         // const reportList = result.map((targetName: string, index: number) => `# ${ this.featureList[index] }\n\n${ targetName }`);
         const reportList = result.map((targetName: string, index: number) => `${targetName}`);
-        const outputFileName = `results/domain-model-generator/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
+        const outputFileName = `results/${this.agentName}/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
         fss.writeFileSync(outputFileName, reportList.join('\n---\n'));
         return result;
     }
@@ -1713,13 +1832,13 @@ export async function main() {
     BaseEntity
     DemoApplication
     Utils.replaceTemplateStringDeep
-    fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/ResourceNotFoundException.java`, ResourceNotFoundException.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
-    fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/CustomException.java`, CustomException.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
-    fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/entity/BaseEntity.java`, BaseEntity.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
-    fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PACKAGE_DIRE}/DemoApplication.java`, DemoApplication.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/ResourceNotFoundException.java`, ResourceNotFoundException.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/CustomException.java`, CustomException.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/entity/BaseEntity.java`, BaseEntity.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PACKAGE_DIRE}/DemoApplication.java`, DemoApplication.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
     const split0 = PACKAGE_NAME.split('\.');
     const name = split0.pop() || '';
-    fss.writeFileSync(`results/domain-model-generator/${PROJECT_NAME}/${PROJECT_NAME}/pom.xml`, Pom.replace(/\{\{groupId\}\}/g, split0.join('.')).replace(/\{\{artifactId\}\}/g, name).replace(/\{\{name\}\}/g, name));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PROJECT_NAME}/pom.xml`, Pom.replace(/\{\{groupId\}\}/g, split0.join('.')).replace(/\{\{artifactId\}\}/g, name).replace(/\{\{name\}\}/g, name));
     let obj;
     return Promise.resolve().then(() => {
         obj = new Step0000_RequirementsToFeatureListSummary();
@@ -1769,9 +1888,9 @@ export async function main() {
         return obj.run();
         // obj.postProcess(obj.result);
     }).then(() => {
-        obj = new Step0055_EntityAttributesToOpenAPI(); // ※使ってない：ここは並列化可能
-        obj.initPrompt();
-        return obj.run();
+        //     obj = new Step0055_EntityAttributesToOpenAPI(); // ※使ってない：ここは並列化可能
+        //     obj.initPrompt();
+        //     return obj.run();
     }).then(() => {
         obj = new Step0060_ViewList(); // 画面一覧を作る
         obj.initPrompt();

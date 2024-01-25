@@ -404,6 +404,7 @@ export function javaServiceImplementsMap(
         imports.add(`org.springframework.beans.factory.annotation.Autowired`);
         imports.add(`org.springframework.http.HttpStatus`);
         imports.add(`org.springframework.transaction.annotation.Transactional`);
+        imports.add(`org.springframework.web.multipart.MultipartFile`);
         imports.add(`lombok.Data`);
         imports.add(`lombok.RequiredArgsConstructor`);
         imports.add(`lombok.extern.slf4j.Slf4j`);
