@@ -22,6 +22,8 @@ import Pom from './spring-template/pom.xml.js';
 const PROJECT_NAME = 'dentist-reservation-system-01';
 const PACKAGE_NAME = 'com.example.demo';
 const PACKAGE_DIRE = `${PROJECT_NAME}/src/main/java/com/example/demo`;
+const INPUT_PROMPT = Utils.trimLines(`お題は「歯医者の予約システム」です。`);
+
 /**
  * このエージェント用の共通設定。
  * エージェントごとに設定したいデフォルト値が異なるのでrunnerの最初に書くことにした。
@@ -51,7 +53,7 @@ class Step0000_RequirementsToFeatureListSummary extends BaseStepDomainModelGener
                 出力はシステム名と機能一覧のみとし、余計なことは書かないでください。
             `),
         }, {
-            content: `お題は「歯医者の予約システム」です。`,
+            content: INPUT_PROMPT,
         }];
     }
 }
