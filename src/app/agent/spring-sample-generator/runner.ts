@@ -597,7 +597,7 @@ class Step0053_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
         });
         Object.entries(models.enums).forEach(([className, obj]) => {
             obj.source = Utils.trimLines(`
-                package ${PACKAGE_NAME}.domain.entity;
+                package ${PACKAGE_NAME}.domain.enums;
 
                 public enum ${className} {
                     ${obj.values.join(', ')}
