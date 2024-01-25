@@ -28,7 +28,7 @@ export interface StructuredPrompt {
 function toMarkdown(chapter: StructuredPrompt, layer: number = 1) {
     let sb = '';
     if (chapter.title) {
-        sb += `\n${'#'.repeat(layer)} ${chapter.title}\n\n`;
+        sb += `${'#'.repeat(layer)} ${chapter.title}\n\n`;
     } else { }
     let content;
     content = chapter.contentJp || chapter.contentEn;
@@ -90,6 +90,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
     // model: GPTModels = 'gpt-4';
     model: GPTModels = 'gpt-4-1106-preview';
     systemMessage = 'You are an experienced and talented software engineer.';
+    presetMessage: ChatCompletionMessageParam[] = [];
     assistantMessage = '';
     visionPath = ''; // 画像読み込ませるとき用のパス。現状は1ステップ1画像のみにしておく。
     temperature = 0.0;
@@ -99,9 +100,10 @@ export abstract class BaseStep extends BaseStepInterface<string> {
     chapters: StructuredPrompt[] = []; // {title: string, content: string, children: chapters[]}
 
     /** io */
-    get promptPath() { return `./prompts_and_responses/${this.agentName}/${Utils.safeFileName(this.label)}.prompt.md`; }
-    get resultPath() { return `./prompts_and_responses/${this.agentName}/${Utils.safeFileName(this.label)}.result.md`; }
-    get formedPath() { return `./prompts_and_responses/${this.agentName}/${Utils.safeFileName(this.label)}.result.${{ markdown: 'md', text: 'txt' }[this.format as any as string] || this.format.toString()}`; }
+    labelPrefix = '';
+    get promptPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.prompt.md`; }
+    get resultPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.result.md`; }
+    get formedPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.result.${{ markdown: 'md', text: 'txt' }[this.format as any as string] || this.format.toString()}`; }
 
     get prompt() { return fs.readFileSync(this.promptPath, 'utf-8'); }
     get result() { return fs.readFileSync(this.resultPath, 'utf-8'); }
@@ -138,6 +140,11 @@ export abstract class BaseStep extends BaseStepInterface<string> {
                 const messages: ChatCompletionMessageParam[] = [];
                 if (this.systemMessage) {
                     messages.push({ role: 'system', content: this.systemMessage });
+                } else { }
+
+                // presetMessage
+                if (this.presetMessage.length > 0) {
+                    messages.push(...this.presetMessage);
                 } else { }
 
                 if (this.visionPath) {

@@ -234,6 +234,16 @@ export class OpenAIApiWrapper {
                 delete args.response_format;
             }
 
+            if (args.temperature && typeof args.temperature === 'string') {
+                args.temperature = Number(args.temperature) || 0.7;
+            } else { }
+            if (args.top_p && typeof args.top_p === 'string') {
+                args.top_p = Number(args.top_p) || 1;
+            } else { }
+            if (args.n && typeof args.n === 'string') {
+                args.n = Number(args.n);
+            } else { }
+
             let imagePrompt = 0;
             if (['gpt-4-vision-preview'].indexOf(args.model) !== -1) {
                 args.messages.forEach(message => {

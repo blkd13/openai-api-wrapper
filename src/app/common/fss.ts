@@ -117,6 +117,27 @@ class FsSafeImpl {
             func(path.toString());
         });
     }
+
+    /**
+     * ディレクトリを再帰的に読み込む。
+     * @param directory 
+     * @returns 
+     */
+    getFilesRecursively(directory: string): string[] {
+        const filesInDirectory = fs.readdirSync(directory);
+        let filesList: string[] = [];
+
+        for (const file of filesInDirectory) {
+            const absolutePath = path.join(directory, file);
+            if (fs.statSync(absolutePath).isDirectory()) {
+                filesList = [...filesList, ...this.getFilesRecursively(absolutePath)];
+            } else {
+                filesList.push(absolutePath);
+            }
+        }
+
+        return filesList;
+    }
 }
 
 interface FsSafeParam {
@@ -347,5 +368,12 @@ interface FsSafe {
      */
     mkdirSync(path: fs.PathLike, options?: fs.Mode | fs.MakeDirectoryOptions | null): string | undefined;
 
+
+    /**
+     * ディレクトリを再帰的に読み込む。
+     * @param directory 
+     * @returns 
+     */
+    getFilesRecursively(directory: string): string[];
 }
 export default new FsSafeImpl() as FsSafe;

@@ -191,6 +191,20 @@ export class Utils {
         }
     }
 
+    static trimExceptTabs(str: string): string {
+        // 先頭と末尾の半角スペースと改行を削除（タブと全角スペースは残る）
+        return str.replace(/^[ \r\n]+|[ \r\n]+$/g, '');
+    }
+    static trimStartExceptTabs(str: string): string {
+        // 先頭の半角スペースと改行を削除（タブと全角スペースは残る）
+        return str.replace(/^[ \r\n]+/g, '');
+    }
+    static trimEndExceptTabs(str: string): string {
+        // 末尾の半角スペースと改行を削除（タブと全角スペースは残る）
+        return str.replace(/[ \r\n]+$/g, '');
+    }
+
+    static TRIM_LINES_DELETE_LINE = 'XXXX_TRIM_LINES_DELETE_LINE_XXXX'; // この文字列が含まれている行は削除する
     /**
      * インデントを削除する
      * @param {string} str 
@@ -198,11 +212,12 @@ export class Utils {
      */
     static trimLines(str: string): string {
         const list = str.split('\n');
-        const line = list.find((line, index) => line.trim().length > 0);
+        const line = list.find((line, index) => Utils.trimExceptTabs(line).length > 0);
         if (line) { } else { return str; }
-        const indent = line.length - line.trimLeft().length;
+        const indent = line.length - Utils.trimStartExceptTabs(line).length;
+        if (indent === 0) { return str; }
         const regex = new RegExp(`^ {${indent}}`, 'g');
-        return list.map(line => line.replace(regex, '')).join('\n').trim();
+        return Utils.trimExceptTabs(list.filter(line => !line.includes(Utils.TRIM_LINES_DELETE_LINE)).map(line => line.replace(regex, '')).join('\n'));
     }
 
     /**
@@ -330,6 +345,302 @@ export class Utils {
             return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         });
         return uuid;
+    }
+
+    /**
+     * Pythonのrangeのようなもの
+     * @param start 
+     * @param end 
+     * @param step 
+     */
+    static *range(start: number, end?: number, step: number = 1): Generator<number> {
+        // stepが0の場合は無限ループになるのでエラー
+        if (step === 0) throw new Error('step cannot be 0');
+        // endが指定されない場合はstartをendとして扱う
+        if (end === undefined) [start, end] = [0, start];
+        // stepが負の場合はstartとendを入れ替える
+        if (step < 0) [start, end] = [end, start];
+        // stepが正の場合はstartからendまでstepずつ増やしながらyieldする
+        for (let i = start; i < end; i += step)  yield i;
+    }
+
+    /**
+     * 配列をどんな次元のものでもフラットにする。
+     * @param arr 
+     * @returns 
+     */
+    static flatten(arr: any[]): any[] {
+        return arr.reduce((acc, val) => Array.isArray(val) ? [...acc, ...Utils.flatten(val)] : [...acc, val], []);
+    }
+
+    /**
+     * テンプレート文字列中の ${varName} を変数で置換する。
+     * @param template 
+     * @param variables 
+     * @returns 
+     */
+    static replaceTemplateString(template: string, variables: { [key: string]: any }): string {
+        return template.replace(/\$\{([^}]+)\}/g, (_, name) => {
+            // console.log(name, variables);
+            // ヒットしなかったら置換しない
+            return variables[name] === null || variables[name] === undefined ? `\${${name}}` : variables[name];
+        });
+    }
+
+    /**
+     * テンプレート文字列中の ${varName} を変数で置換する。
+     * ※変数がオブジェクトの場合はドットで区切って再帰的に置換する。
+     * @param template 
+     * @param variables 
+     * @returns 
+     */
+    static replaceTemplateStringDeep(template: string, variables: { [key: string]: any }): string {
+        return template.replace(/\$\{([^}]+)\}/g, (_, name) => {
+            const replace = name.split('.').reduce((acc: { [key: string]: any }, key: string) => {
+                if (acc === null || acc === undefined) { return acc; }
+                return acc[key];
+            }, variables);
+            // ヒットしなかったら置換しない
+            return replace === null || replace === undefined ? `\${${name}}` : replace;
+        });
+    }
+
+    /**
+     * jsonを適当に整形してmarkdownに変換する。
+     * あんまりうまく行ってないのでライブラリ持ってきた方がいいかもしれない。
+     * @param json 
+     * @returns 
+     */
+    static jsonToMarkdown(json: any): string {
+        const obj = Utils.jsonToMarkdown0(json, 0);
+        // console.log(obj.list);
+        let beforeLayer = 0;
+        let arrayLayer = 0;
+        const md = obj.list.map(obj => {
+            let md = '';
+            // 7階層以上のオブジェクトは配列に変換する
+            // バグるので一旦やめる。けど7階層以上できてしまうので悩ましい。
+            // if (obj.type === 'object' && obj.layer >= 6) { obj.type = 'array'; }
+
+            if (obj.type === 'object') {
+                md = `${'#'.repeat(obj.layer + 1)} ${obj.md}`;
+                arrayLayer = 0;
+            } else if (obj.type === 'array') {
+                md = `${'  '.repeat(arrayLayer)}- ${obj.md}`;
+                arrayLayer++;
+            } else if (obj.type === 'literal') {
+                if (beforeLayer > obj.layer) {
+                    // ここに来ること自体が失敗。7階層以上をarrayにしようとするとやっぱり変になる。
+                    arrayLayer = 0;
+                } else { }
+                md = `${'  '.repeat(arrayLayer)}- ${obj.md}`;
+            } else {
+                md = '';
+            }
+            beforeLayer = obj.layer;
+            return md;
+        }).join('\n');
+        // console.log(md);
+        return md;
+    }
+    protected static jsonToMarkdown0(json: any, layer: number): { md: string, hasBlock: boolean, list: { layer: number, type: 'object' | 'array' | 'literal', md: string }[] } {
+        // console.log(JSON.stringify(json));
+        const list: { layer: number, type: 'object' | 'array' | 'literal', md: string }[] = [];
+        if (json === undefined || json === null) {
+            return { md: '', hasBlock: false, list };
+        } else if (Array.isArray(json)) {
+            // オブジェクト型の場合
+            // 途中にオブジェクト型が混ざるとリストの途中にブロックが入ってしまうので、一旦オブジェクトとリテラルを選り分けて、リテラルから先に処理する。
+            const nullFilterd = json.filter(value => !(value === null || value === undefined));
+            // console.log(nullFilterd);
+            const objectKeyList = nullFilterd.filter(value => !Array.isArray(value) && typeof value === 'object');
+            const arrayKeyList = nullFilterd.filter(value => Array.isArray(value));
+            const literalKeyList = nullFilterd.filter(value => !(Array.isArray(value) || typeof value === 'object'));
+            let hasBlock = false;
+            [...literalKeyList, ...arrayKeyList, ...objectKeyList].forEach((value, index) => {
+                if (value === null || value === undefined) {
+                    // nullやundefinedは出力しない（keyごと削除）
+                } else if (Array.isArray(value)) {
+                    const obj = Utils.jsonToMarkdown0(value, layer + 1);
+                    if (obj.hasBlock) {
+                        hasBlock = true;
+                        list.push({ layer, type: 'object', md: `${index}` });
+                    } else {
+                        list.push({ layer, type: 'array', md: `${index}` });
+                    }
+                    obj.list.forEach(obj => list.push(obj));
+                } else if (typeof value === 'object') {
+                    // オブジェクト型かつ子要素もオブジェクト型の場合はブロックとして表示する
+                    const obj = Utils.jsonToMarkdown0(value, layer + 1);
+                    if (obj.hasBlock) {
+                        hasBlock = true;
+                        list.push({ layer, type: 'object', md: `${index}` });
+                    } else {
+                        list.push({ layer, type: 'array', md: `${index}` });
+                    }
+                    obj.list.forEach(obj => list.push(obj));
+                } else {
+                    list.push({ layer, type: 'literal', md: `${index}: ${value}` });
+                }
+            });
+            return { md: '', hasBlock, list };
+        } else if (typeof json === 'object') {
+            // オブジェクト型の場合
+            // 途中にオブジェクト型が混ざるとリストの途中にブロックが入ってしまうので、一旦オブジェクトとリテラルを選り分けて、リテラルから先に処理する。
+            const nullFilterd = Object.entries(json).filter(([key, value]) => !(value === null || value === undefined));
+            const objectKeyList = nullFilterd.filter(([key, value]) => !Array.isArray(value) && typeof value === 'object').map(([key, value]) => key);
+            const arrayKeyList = nullFilterd.filter(([key, value]) => Array.isArray(value)).map(([key, value]) => key);
+            const literalKeyList = nullFilterd.filter(([key, value]) => !(Array.isArray(value) || typeof value === 'object')).map(([key, value]) => key);
+            let hasBlock = false;
+            [...literalKeyList, ...arrayKeyList, ...objectKeyList].forEach(key => {
+                const value = json[key];
+                if (value === null || value === undefined) {
+                    // nullやundefinedは出力しない（keyごと削除）
+                } else if (Array.isArray(value)) {
+                    const obj = Utils.jsonToMarkdown0(value, layer + 1);
+                    if (obj.hasBlock) {
+                        hasBlock = true;
+                        console.log(`array: ${key} ${list.length}`);
+                        list.push({ layer, type: 'object', md: `${key}` });
+                    } else {
+                        list.push({ layer, type: 'array', md: `${key}` });
+                    }
+                    obj.list.forEach(obj => list.push(obj));
+                } else if (typeof value === 'object') {
+                    // オブジェクト型かつ子要素もオブジェクト型の場合はブロックとして表示する
+                    const obj = Utils.jsonToMarkdown0(value, layer + 1);
+                    hasBlock = true;
+                    list.push({ layer, type: 'object', md: `${key}` });
+                    obj.list.forEach(obj => list.push(obj));
+                } else {
+                    list.push({ layer, type: 'literal', md: `${key}: ${value}` });
+                }
+            });
+            return { md: '', hasBlock, list };
+        } else {
+            list.push({ layer, type: 'literal', md: `${json}` });
+            return { md: ``, hasBlock: false, list };
+        }
+    }
+
+    /**
+     * markdownのコードブロックを```で囲む。
+     * @param {*} str
+     * @returns
+     */
+    static setMarkdownBlock(text: string, blockType: string = ''): string {
+        if (blockType === 'json') {
+            if (text && (
+                (text.startsWith('{') && text.endsWith('}'))
+                || (text.startsWith('[') && text.endsWith(']'))
+            )) {
+                try {
+                    JSON.stringify(JSON.parse(text));
+                    return `\`\`\`${blockType}\n${text}\n\`\`\``;
+                } catch (e) { /** json変換できないものはjson扱いにしない。 */ }
+            } else { /** 最初と最後の文字で仮判定。 */ }
+        } else {
+        }
+        return `\`\`\`${blockType}\n${text}\n\`\`\``;
+    }
+
+    /**
+     * markdownの見出しのレベルを変更する。
+     * @param {*} str
+     * @returns
+     */
+    static addMarkdownDepth(text: string, num: number = 1): string {
+        const add = '#'.repeat(num);
+        let isCodeBlock = false;
+        return text.split('\n').map(line => {
+            if (line.startsWith('```')) {
+                isCodeBlock = !isCodeBlock;
+            } else {
+            }
+            if (isCodeBlock) {
+                return line;
+            } else {
+                if (line.startsWith('#')) {
+                    return `${add}${line}`;
+                } else {
+                    return line;
+                }
+            }
+        }).join('\n');
+    }
+
+    static loadTableDataFromMarkdown(markdown: string, index = 0): { header: string[], data: string[][] } {
+        const lines = markdown.split('\n');
+        const header = [];
+        const data: string[][] = [];
+        for (let i = index; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.startsWith('|')) {
+                header.push(...line.split('|').filter((_, index) => index > 0 && index < line.split('|').length - 1).map(str => str.trim()));
+                i++; // ヘッダーの次の行はスキップ
+                for (let j = i + 1; j < lines.length; j++) {
+                    const line = lines[j];
+                    if (line.startsWith('|')) {
+                        data.push(line.split('|').filter((_, index) => index > 0 && index < line.split('|').length - 1).map(str => str.trim()));
+                        i = j;
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+
+            }
+        }
+        return { header, data };
+    }
+
+    /**
+     * Markdownテキストを解析してJSONに変換する関数
+     * @param markdown 
+     */
+    static markdownToObject(markdown: string): any {
+        const obj0: any[] = [];
+        this.markdownToObject0(markdown.split('\n'), 0, obj0, 1, 0);
+        return obj0;
+    }
+
+    /**
+     * Markdownテキストを解析してJSONに変換する関数
+     * @param markdown 
+     */
+    static markdownToObject0(markdownLines: string[], rowIndex: number, obj: any[], blockLayer: number, listLayer: number): any {
+
+        for (let i = rowIndex; i < markdownLines.length; i++) {
+            const line = markdownLines[i];
+            if (line.match(/^```/)) {
+                let sb = line + '\n';
+                for (let j = i + 1; j < markdownLines.length; j++) {
+                    const line = markdownLines[j];
+                    sb += line + '\n';
+                    if (line.match(/^```/)) {
+                        i = j;
+                        break;
+                    } else { }
+                }
+                obj.push(sb);
+            } else {
+                const match = line.match(/^(#+)\s/);
+                if (match) {
+                    match[1].length;
+                    if (match[1].length === blockLayer) {
+                        obj.push({ title: line, body: '' });
+                    } else if (match[1].length < blockLayer) {
+                        return i;
+                    } else if (match[1].length > blockLayer) {
+                        const obj0: any[] = [];
+                        i = this.markdownToObject0(markdownLines, i, obj0, blockLayer + 1, 0);
+                        obj.push(obj0);
+                    }
+                }
+                obj.push(line);
+            }
+        }
+        return obj;
     }
 }
 
