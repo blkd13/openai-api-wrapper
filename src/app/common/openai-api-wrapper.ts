@@ -224,7 +224,7 @@ export class OpenAIApiWrapper {
             args.stream = true;
 
             // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
-            if (args.response_format?.type == 'json_object' && ['gpt-4-1106-preview'].indexOf(args.model) !== -1) {
+            if (args.response_format?.type == 'json_object' && ['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo-1106'].indexOf(args.model) !== -1) {
                 const userMessage = args.messages.filter(message => message.role === 'user');
                 const lastUserMessage = args.messages[args.messages.indexOf(userMessage[userMessage.length - 1])];
                 if (!(lastUserMessage.content as string).includes('json')) {
@@ -302,10 +302,10 @@ export class OpenAIApiWrapper {
             let attempts = 0;
 
             // ログ出力用オブジェクト
-            const prompt = args.messages.map(message => `role:\n${message.role}\ncontent:\n${message.content}`).join('\n');
+            const prompt = args.messages.map(message => `<im_start>${message.role}\n${message.content}<im_end>`).join('\n');
             const tokenCount = new TokenCount(args.model as GPTModels, 0, 0);
             // gpt-4-1106-preview に未対応のため、gpt-4に置き換え。プロンプトのトークンを数えるだけなのでモデルはどれにしてもしても同じだと思われるが。。。
-            tokenCount.prompt_tokens = encoding_for_model((['gpt-4-1106-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any).model) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+            tokenCount.prompt_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             tokenCount.prompt_tokens += imagePrompt;
             this.tokenCountList.push(tokenCount);
 
@@ -314,7 +314,7 @@ export class OpenAIApiWrapper {
                 const take = numForm(Date.now() - bef, 9);
                 const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
                 // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
-                tokenCount.completion_tokens = encoding_for_model((['gpt-4-1106-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any).model) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder).length;
+                tokenCount.completion_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
                 const completion_tokens = numForm(tokenCount.completion_tokens, 6);
 
                 const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
@@ -360,7 +360,7 @@ export class OpenAIApiWrapper {
 }
 
 // TiktokenModelが新モデルに追いつくまでは自己定義で対応する。
-// export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-1106-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
+// export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
 export type GPTModels = TiktokenModel;
 
 /**
@@ -416,13 +416,18 @@ export class TokenCount {
         'gpt-4-32k': 'gpt4-32k',
         'gpt-4-32k-0314': 'gpt4-32k',
         'gpt-4-32k-0613': 'gpt4-32k',
+        'gpt-4-turbo-preview': 'gpt4-128',
         'gpt-4-1106-preview': 'gpt4-128',
+        'gpt-4-0125-preview': 'gpt4-128',
         'gpt-4-vision-preview': 'gpt4-vis',
-        'gpt-3.5-turbo': 'gpt3.5  ',
+        'gpt-3.5-turbo': 'gpt3-16k',
         'gpt-3.5-turbo-0301': 'gpt3.5  ',
         'gpt-3.5-turbo-0613': 'gpt3.5  ',
+        'gpt-3.5-turbo-1106': 'gpt3-16k',
         'gpt-3.5-turbo-16k': 'gpt3-16k',
-        'gpt-3.5-turbo-16k-0613': 'gpt3-16k',
+        'gpt-3.5-turbo-16k-0613	': 'gpt3-16k',
+        'gpt-3.5-turbo-instruct': 'gpt3.5  ',
+        'gpt-3.5-turbo-instruct-0914': 'gpt3.5  ',
     };
 
     // コスト

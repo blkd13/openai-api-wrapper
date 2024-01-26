@@ -62,6 +62,8 @@ export abstract class BaseStepInterface<T> {
     get label() { return this._label || this.constructor.name; }
     set label(label) { this._label = label; }
 
+    labelPrefix = '';
+
     /** プロンプトを組み立ててファイルに書き込む。つまり、initPromptを呼ばなければファイルは上書きされない。 */
     abstract initPrompt(): T;
     /** プロンプトを加工したり投げる前に何かしたいときはここで。 */
@@ -100,7 +102,6 @@ export abstract class BaseStep extends BaseStepInterface<string> {
     chapters: StructuredPrompt[] = []; // {title: string, content: string, children: chapters[]}
 
     /** io */
-    labelPrefix = '';
     get promptPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.prompt.md`; }
     get resultPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.result.md`; }
     get formedPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.result.${{ markdown: 'md', text: 'txt' }[this.format as any as string] || this.format.toString()}`; }
@@ -274,10 +275,28 @@ export class MultiStep extends BaseStepInterface<string[]> {
         return prompt;
     }
 
+    get resultPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.result.md`; }
+    get formedPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.result.json`; }
+
+    get result() { return fs.readFileSync(this.resultPath, 'utf-8'); }
+    get formed() { return fs.readFileSync(this.formedPath, 'utf-8'); }
+
     async run(): Promise<string[]> {
         return new Promise<string[]>((resolve, reject) => {
             Promise.all(this.childStepList.map(step => step.run())).then((resultList: string[]) => {
-                resolve(this.postProcess(resultList));
+                // 全部まとめてファイルに出力する。
+                fss.writeFile(this.resultPath, resultList.join('\n\n---\n\n'), (err: any) => {
+                    if (err) reject(err);
+                    // まとめてJSONにもする。
+                    const summary = this.childStepList.reduce((prev: any, step: BaseStep, index: number) => {
+                        prev[step.label.substring(step.constructor.name.length + 1)] = resultList[index];
+                        return prev;
+                    }, {} as { [key: string]: string });
+                    fss.writeFile(this.formedPath, JSON.stringify(summary), (err: any) => {
+                        if (err) reject(err);
+                        resolve(this.postProcess(resultList));
+                    });
+                });
             }).catch((err: any) => {
                 reject(err);
             });
