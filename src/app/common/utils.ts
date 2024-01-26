@@ -151,25 +151,25 @@ export class Utils {
         }, []);
     }
 
-    /**
-     * Markdownのコードブロックを```を外したものにする。
-     * @param {string} text - Markdown形式のテキスト
-     * @returns {string} コメント形式に変換されたテキスト
-     */
-    static convertCodeBlocks(text: string): string {
-        let split = text.split(/```.*\n|```$/, -1);
-        return split.map((code, index) => {
-            if (code.length === 0) {
-                return code;
-            } else {
-                if (index % 2 === 1) {
-                    return code;
-                } else {
-                    return code.split('\n').map(line => `// ${line}`).join('\n');
-                }
-            }
-        }).join('');
-    }
+    // /**
+    //  * Markdownのコードブロックを```を外したものにする。
+    //  * @param {string} text - Markdown形式のテキスト
+    //  * @returns {string} コメント形式に変換されたテキスト
+    //  */
+    // static convertCodeBlocks(text: string): string {
+    //     let split = text.split(/```.*\n|```$/, -1);
+    //     return split.map((code, index) => {
+    //         if (code.length === 0) {
+    //             return code;
+    //         } else {
+    //             if (index % 2 === 1) {
+    //                 return code;
+    //             } else {
+    //                 return code.split('\n').map(line => `// ${line}`).join('\n');
+    //             }
+    //         }
+    //     }).join('');
+    // }
 
     /**
      * JSONを安全にstringifyする関数を生成する

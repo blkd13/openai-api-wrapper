@@ -68,7 +68,7 @@ async function visRun(imagePathList: string[] = []) {
 
             return Promise.all(
                 distinctArray.map((targetName) => (openai.chat.completions.create({
-                    model: 'gpt-4-1106-preview',
+                    model: 'gpt-4-turbo-preview',
                     messages: [
                         // AIビジネスの専門家
                         { role: 'system', content: 'Experts in AI-related businesses' },

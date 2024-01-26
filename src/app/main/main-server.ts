@@ -183,7 +183,7 @@ const server = http.createServer((req, res) => {
             const json = JSON.parse(body) as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
             // console.log(body);
 
-            json.args.model = json.args.model || 'gpt-4-1106-preview';
+            json.args.model = json.args.model || 'gpt-4-turbo-preview';
             let text = '';
             aiApi.chatCompletionObservableStream(
                 json.args, {

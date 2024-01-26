@@ -3,21 +3,32 @@ import { fileURLToPath } from 'url';
 import { BaseStep, MultiStep, StepOutputFormat } from "../../common/base-step.js";
 import { GPTModels } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
-import { parseJavaCode, javaServiceTemplateMap, javaServiceImplementsMap, parseJavaMethodSignatureWithGenerics } from "./helper.js";
+import { parseJavaCode, javaServiceTemplateMap, javaServiceImplementsMap, DtoClass, EntityClass, EntityModelClass, TIME_TYPE_REMAP, TIME_TYPE_COLUMN_DEFINITION, ServiceMethod } from "./helper.js";
 import fss from '../../common/fss.js';
 import * as fs from 'fs';
 
-import ResourceNotFoundException from './spring-template/ResourceNotFoundException.java.js';
-import CustomException from './spring-template/CustomException.java.js';
-import BaseEntity from './spring-template/BaseEntity.java.js';
-import DemoApplication from './spring-template/DemoApplication.java.js';
-import application from './spring-template/application.yml.js';
-import Pom from './spring-template/pom.xml.js';
+import spring_ResourceNotFoundException from './spring-template/ResourceNotFoundException.java.js';
+import spring_CustomException from './spring-template/CustomException.java.js';
+import spring_BaseEntity from './spring-template/BaseEntity.java.js';
+import spring_DemoApplication from './spring-template/DemoApplication.java.js';
+import spring_application from './spring-template/application.yml.js';
+import spring_Pom from './spring-template/pom.xml.js';
+import angular_apiInterceptor from './angular-template/api.interceptor.ts.js';
+import angular_appConfig from './angular-template/app.config.ts.js';
+import angular_environmentDevelopment from './angular-template/environment.development.ts.js';
+import angular_environment from './angular-template/environment.ts.js';
+import angular_package from './angular-template/package.json.js';
+import angular_tailwindConfig from './angular-template/tailwind.config.js.js';
+import angular_proxyConf from './angular-template/proxy.conf.js.js';
 
-const __dirname = Utils.basename(fileURLToPath(import.meta.url));
+import { JAVA_FQCN_MAP, javaTypeToTypescript } from './constant.js';
+
+
+const __dirname = Utils.basename(Utils.dirname(import.meta.url));
+console.log(__dirname);
 const PROJECT_NAME = 'deposit-management-system-01';
 const PACKAGE_NAME = 'com.example.demo';
-const PACKAGE_DIRE = `spring/src/main/java/com/example/demo`;
+const SPRING_DIRE = `spring/src/main/java/com/example/demo`;
 const INPUT_PROMPT = Utils.trimLines(`
 お題は「貸金業の貸付管理システム」です。
 `);
@@ -28,8 +39,7 @@ const INPUT_PROMPT = Utils.trimLines(`
  */
 abstract class BaseStepDomainModelGenerator extends BaseStep {
     agentName: string = Utils.basename(Utils.dirname(import.meta.url));
-    model: GPTModels = 'gpt-4-1106-preview';
-    // labelPrefix: string = `${this.agentName}_${this.model}`;
+    model: GPTModels = 'gpt-4-turbo-preview';
     labelPrefix: string = `${PROJECT_NAME}/`;  // ラベルのプレフィックス。サブディレクトリに分けるように/を入れておくと便利。
     systemMessageJa = '経験豊富で優秀なソフトウェアエンジニア。専門はドメイン駆動設計。';
     systemMessageEn = 'Experienced and talented software engineer. Specialized in domain-driven design.';
@@ -41,8 +51,9 @@ abstract class BaseStepDomainModelGenerator extends BaseStep {
  * このエージェント用の共通設定。
  * エージェントごとに設定したいデフォルト値が異なるのでrunnerの最初に書くことにした。
  */
-abstract class BaseMultiStepDomainModelGenerator extends MultiStep {
+abstract class MultiStepDomainModelGenerator extends MultiStep {
     agentName: string = Utils.basename(Utils.dirname(import.meta.url));
+    labelPrefix: string = `${PROJECT_NAME}/`;  // ラベルのプレフィックス。サブディレクトリに分けるように/を入れておくと便利。
 }
 
 class Step0000_RequirementsToFeatureListSummary extends BaseStepDomainModelGenerator {
@@ -148,7 +159,7 @@ class Step0020_FeatureListDetailToJsonFormat extends BaseStepDomainModelGenerato
     }
 }
 
-class Step0030_DesignSummary extends BaseMultiStepDomainModelGenerator {
+class Step0030_DesignSummary extends MultiStepDomainModelGenerator {
     featureList!: string[];
     constructor() {
         super();
@@ -158,7 +169,7 @@ class Step0030_DesignSummary extends BaseMultiStepDomainModelGenerator {
                 super();
 
                 // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
-                this.label = `${this.constructor.name}_${Utils.safeFileName(feature)}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                this.label = `${this.constructor.name}_${feature}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
                 // 個別の指示を作成。
                 this.chapters = [
                     {
@@ -250,15 +261,26 @@ class Step0030_DesignSummary extends BaseMultiStepDomainModelGenerator {
         const _tmp = JSON.parse(new Step0020_FeatureListDetailToJsonFormat().formed);
         this.featureList = _tmp.featureList;
         // childStepListを組み立て。
-        this.childStepList = this.featureList.map(targetName => new Step0030_DesignSummaryChil(targetName));
+        this.childStepList = this.featureList.map(targetName => new Step0030_DesignSummaryChil(Utils.safeFileName(targetName)));
     }
 
     postProcess(result: string[]): string[] {
         // 全部まとめてファイルに出力する。
-        // const reportList = result.map((targetName: string, index: number) => `# ${this.featureList[index]}\n\n${targetName}`);
-        const reportList = result.map((targetName: string, index: number) => `${targetName}`);
-        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/summary/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
-        fss.writeFileSync(outputFileName, reportList.join('\n---\n'));
+        const mas = this.childStepList.reduce((acc: { [key: string]: string }, step: BaseStep, index: number) => {
+            const feature = (step as any).feature;
+            acc[feature] = step.formed;
+            // "機能"の有無で取りこぼしを防ぐ。
+            acc[feature.replace(/機能$/g, '')] = step.formed;
+            acc[feature + '機能'] = step.formed;
+            acc[feature.replace(/機能の詳細化$/g, '')] = step.formed;
+            acc[feature + '機能の詳細化'] = step.formed;
+            acc[feature.replace(/の詳細化$/g, '')] = step.formed;
+            acc[feature + 'の詳細化'] = step.formed;
+            return acc;
+        }, {} as { [key: string]: string });
+
+        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/FeatureDocs.json`;
+        fss.writeFileSync(outputFileName, JSON.stringify(mas, null, 2));
         return result;
     }
 }
@@ -296,7 +318,7 @@ class Step0031_DesignSummaryReview extends BaseStepDomainModelGenerator {
     }
 }
 
-class Step0033_DesignSummaryRefine extends BaseMultiStepDomainModelGenerator {
+class Step0033_DesignSummaryRefine extends MultiStepDomainModelGenerator {
     instructions!: { title: string, content: string[] }[];
     constructor() {
         super();
@@ -448,6 +470,21 @@ class Step0050_EntityAttributes extends BaseStepDomainModelGenerator {
             }],
         },];
     }
+    postProcess(result: string): string {
+        const models = parseJavaCode(result, PACKAGE_NAME);
+        const modelSources = Object.entries(models.classes).map(([className, obj]) => Utils.trimLines(`
+            export class ${className} {
+            ${obj.props.map(prop => `\t${prop.name}: ${javaTypeToTypescript(prop.type)};`).join('\n')}
+            }
+        `)).join('\n\n');
+        const enumSources = Object.entries(models.enums).map(([className, obj]) => Utils.trimLines(`
+            export enum ${className} {
+            \t${obj.values.join(', ')}
+            }
+        `)).join('\n\n');
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/angular/src/app/models/models.ts`, modelSources + '\n\n' + enumSources);
+        return result;
+    }
 }
 class Step0053_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
     format: StepOutputFormat = StepOutputFormat.JSON;
@@ -470,6 +507,7 @@ class Step0053_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                 content: Utils.setMarkdownBlock(new Step0050_EntityAttributes().formed, 'markdown'),
             }],
         }, {
+            // さぼり防止用にJSON形式で出力させる。Entity全量を一気にjavaに書き換えろというとChatGPT4がさぼるのでJSON形式で出力させる。こうするとさぼらない。
             title: 'Output Format',
             content: Utils.trimLines(`
                 以下のJSONフォーマットで整理してください。
@@ -556,62 +594,116 @@ class Step0053_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
             return acc;
         }, {} as { [key: string]: { [key: string]: string[] } });
 
+        const modelMas: EntityModelClass = { entityNameList: [], classes: {}, enums: {} };
         const models = parseJavaCode(Utils.mdTrim(new Step0050_EntityAttributes().formed), PACKAGE_NAME);
         Object.entries(models.classes).forEach(([className, obj]) => {
-            const fields = obj.props.map(field => {
-                const _fieldAnnoMap = fieldAnnotations[className] || fieldAnnotations[`${className}Entity`] || [];
-                const _fieldAnnoList = _fieldAnnoMap[field.name] || _fieldAnnoMap[field.name.replace(/I[Dd]$/, '')] || _fieldAnnoMap[field.name.replace(/_[Ii][Dd]$/, '')] || [];
-                const annotations = _fieldAnnoList.map(anno => `\t${anno}\n`).join('');
-                return `${annotations}\tprivate ${field.type} ${field.name};\n`;
-            }).join('\n');
+            const imports = new Set<string>();
+            imports.add('Data');
 
+            const entityClass = new EntityClass('entity', className, imports, obj.props); // typeはentityかvalueObjectかだけど一旦仮置きでentityにしておく。
+            modelMas.classes[className] = entityClass; // マスターに追加する。
+
+            // クラスアノテーションを付与する。
+            let extendsClass = '';
             // Entityの場合は@Tableアノテーションを付与する。
             if ((classAnnotations[className] || []).find(anno => anno === '@Entity')) {
+                imports.add('Entity');
                 // 複数形のスネークケースにする
                 const pluralized = Utils.toSnakeCase(className).split('_').map((word, index, ary) => index === ary.length - 1 ? Utils.pluralize(word) : word).join('_');
                 classAnnotations[className].push(`@Table(name = "${pluralized}")`);
-            } else { }
+                imports.add('Table');
+                classAnnotations[className].push(`@EqualsAndHashCode(callSuper=false)`);
+                imports.add('EqualsAndHashCode');
 
-            obj.source = Utils.trimLines(`
+                extendsClass = ' extends BaseEntity';
+                modelMas.entityNameList.push(className); // エンティティのリストに追加する。
+            } else {
+                // Entityでない場合は、@Embeddableアノテーションがついているはずなので、Embeddableをimportする。
+                imports.add('Embeddable');
+                entityClass.type = 'valueObject';
+            }
+
+            // Fieldのアノテーションを付与する。
+            const fields = obj.props.map(field => {
+                const _fieldAnnoMap = fieldAnnotations[className] || fieldAnnotations[`${className}Entity`] || [];
+                entityClass.annotations = _fieldAnnoMap[field.name] || _fieldAnnoMap[field.name.replace(/I[Dd]$/, '')] || _fieldAnnoMap[field.name.replace(/_[Ii][Dd]$/, '')] || [];
+                entityClass.annotations.forEach(anno => {
+                    // import文を作成するために、型名を集める。
+                    imports.add(anno.trim().replace('@', '').replace(/\(.*/g, ''));
+                });
+                field.type.split(/[<>,.?]/).forEach(s => imports.add(s)); // import文を作成するために、型名を集める。
+
+                // TIME_TYPE_REMAPにマッチする型名をTIME_TYPE_COLUMN_DEFINITIONに変換する。
+                Object.entries(TIME_TYPE_REMAP).forEach(([from, to]) => {
+                    // console.log(`TIME_TYPE_REMAP: ${field.type} => ${to}`);
+                    // if (field.type.match(new RegExp(`(^${from}$|^${from}\W|\W${from}\W|\W${from}$)`))) {
+                    if (field.type === from) {
+                        field.type = field.type.replace(from, to);
+                        // console.log(`TIME_TYPE_REMAP: ${from} => ${to}`);
+                        for (let i = 0; i < entityClass.annotations.length; i++) {
+                            const anno = entityClass.annotations[i];
+                            if (entityClass.annotations[i].startsWith('@Column')) {
+                                // @Columnが既にあるので、columnDefinitionを追加する。
+                                entityClass.annotations[i] = anno.substring(0, anno.length - 1) + `, columnDefinition = "${TIME_TYPE_COLUMN_DEFINITION[field.type]}")`;
+                                break;
+                            } else if (i == entityClass.annotations.length - 1) {
+                                // 最後の要素なので、@Columnを追加する。
+                                entityClass.annotations.push(`@Column(columnDefinition = "${TIME_TYPE_COLUMN_DEFINITION[field.type]}")`);
+                                break;
+                            } else { }
+                        }
+                    } else { }
+                });
+
+                const annotations = entityClass.annotations.map(anno => `\t${anno}\n`).join('');
+                return `${annotations}\tprivate ${field.type} ${field.name};\n`;
+            }).join('\n');
+
+            // 拾いにくいクラスをハードコーディングでimportする。
+            ['EnumType.STRING', 'GenerationType.IDENTITY', 'CascadeType.ALL',].forEach(s => {
+                if (fields.includes(s)) {
+                    imports.add(s.split('.')[0]);
+                } else { }
+            }); // import文を作成するために、型名を集める。
+
+            // import文を作成する。
+            const importList = Array.from(imports)
+                .filter(importName => JAVA_FQCN_MAP[importName])
+                .filter(importName => !JAVA_FQCN_MAP[importName].startsWith(`${PACKAGE_NAME}.entity.`)) // 同じパッケージのクラスはimportしない。
+                .map(importName => `import ${JAVA_FQCN_MAP[importName]};\n`).sort().join('');
+
+            entityClass.source = Utils.trimLines(`
                 package ${PACKAGE_NAME}.domain.entity;
 
-                import lombok.Data;
-                import jakarta.persistence.*;
-                import java.math.BigDecimal;
-                import java.math.BigInteger;
-                import java.time.LocalDate;
-                import java.time.LocalDateTime;
-                import java.time.LocalTime;
-                import java.time.Period;
-                import java.util.List;
-                import java.util.Map;
-                import ${PACKAGE_NAME}.domain.enums.*;
-
+                ${importList || Utils.TRIM_LINES_DELETE_LINE}
                 ${classAnnotations[className] ? classAnnotations[className].join('\n') : ''}
                 @Data
-                public class ${className} extends BaseEntity {
+                public class ${className}${extendsClass} {
                 
                 ${fields}
                 }
-            `);
-            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/entity/${className}.java`, obj.source);
+            `).replace(/\t/g, '    '); // タブをスペース4つに変換する。
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/entity/${className}.java`, entityClass.source);
         });
         Object.entries(models.enums).forEach(([className, obj]) => {
-            obj.source = Utils.trimLines(`
+            const enumClass = { source: '', values: obj.values };
+            modelMas.enums[className] = enumClass; // マスターに追加する。
+
+            enumClass.source = Utils.trimLines(`
                 package ${PACKAGE_NAME}.domain.enums;
 
                 public enum ${className} {
                     ${obj.values.join(', ')}
                 }
-            `);
-            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/enums/${className}.java`, obj.source);
+            `).replace(/\t/g, '    '); // タブをスペース4つに変換する。
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/enums/${className}.java`, enumClass.source);
         });
 
-        // // クラスごとに分割して出力する。
-
-        const entitySource = Object.entries(models.classes).map(([className, obj]) => Utils.setMarkdownBlock(obj.source, `java ${PACKAGE_NAME}.domain.entity.${className}`)).join('\n\n');
-        const enumsSource = Object.entries(models.enums).map(([className, obj]) => Utils.setMarkdownBlock(obj.source, `java ${PACKAGE_NAME}.domain.enums.${className}`)).join('\n\n');
-        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, entitySource + '\n\n---\n\n' + enumsSource);
+        // Entityは良く使うので1ファイルにまとめておく。
+        const entitySource = Utils.setMarkdownBlock(Object.entries(models.classes).map(([className, obj]) => obj.source).join('\n').replace(/^(?:package |import |@Table).*(\r?\n)/gm, ''), `java ${PACKAGE_NAME}.domain.entity`);
+        const enumsSource = Utils.setMarkdownBlock(Object.entries(models.enums).map(([className, obj]) => obj.source).join('\n').replace(/^(?:package ).*(\r?\n)/gm, ''), `java ${PACKAGE_NAME}.domain.enum`);
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, (entitySource + '\n\n---\n\n' + enumsSource).replace(/\n\n\n/g, '\n\n'));
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, JSON.stringify(modelMas, null, 2));
         return result;
     }
 }
@@ -702,27 +794,47 @@ class Step0060_ViewList extends BaseStepDomainModelGenerator {
             }, {
                 title: `Entity一覧`,
                 content: Utils.setMarkdownBlock(Utils.mdTrim(new Step0050_EntityAttributes().formed), 'java'),
+            }, {
+                title: `フレームワーク`,
+                content: `Angular + Spring Boot + JPA + PostgreSQL`,
             }],
         }, {
             title: 'Output Format',
             content: Utils.trimLines(`
                 出力フォーマットは以下の通りです。
                 \`\`\`json
-                {"viewList":[{"name": "View name(as varName)","destinationList":["destination view name","destination view name"],"relatedFeatureList":["機能一覧の設計書のタイトル","機能一覧の設計書のタイトル"]}]}
+                {"viewList":[{"name": "View name(as varName)","type":"page/dialog/parts","destinationList":["destination view name","destination view name"],"relatedFeatureList":["機能一覧の設計書のタイトル","機能一覧の設計書のタイトル"]}]}
                 \`\`\`
             `),
             //　"partsList":["parts(as varName)","parts(as varName)"],
         },];
     }
+
+    postProcess(result: string): string {
+        // 全量纏めて使いやすい形に整形する。
+        const viewList = JSON.parse(result).viewList;
+        const mas = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/FeatureDocs.json`, 'utf-8')) as { [key: string]: string };
+        // console.log(Object.keys(mas));
+        // viewListのオブジェクトに関連機能の設計書を埋め込む。
+        viewList.forEach((feature: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }) => {
+            feature.relatedFeatureDocumentList = feature.relatedFeatureDocumentList || [];
+            for (let index = 0; index < feature.relatedFeatureList.length; index++) {
+                feature.relatedFeatureDocumentList.push(mas[feature.relatedFeatureList[index]] || feature.name);
+            }
+        });
+
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ViewList.json`, JSON.stringify({ viewList }, null, 2));
+        return result;
+    }
 }
 
-class Step0070_ViewDocuments extends BaseMultiStepDomainModelGenerator {
-    viewList!: { name: string, destinationList: string[], relatedFeatureList: string[] }[];
+class Step0070_ViewDocuments extends MultiStepDomainModelGenerator {
+    viewList!: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }[];
     constructor() {
         super();
         class Step0070_ViewDocumentsChil extends BaseStepDomainModelGenerator {
             // model: GPTModels = 'gpt-3.5-turbo';
-            constructor(public feature: { name: string, destinationList: string[], relatedFeatureList: string[] }) {
+            constructor(public feature: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }) {
                 super();
                 // {"viewList":[{"name": "View name","destinationList":["parts","parts"],"relatedFeatureList":["featureName","featureName"]}]}
 
@@ -740,7 +852,7 @@ class Step0070_ViewDocuments extends BaseMultiStepDomainModelGenerator {
                         title: '設計書',
                         children: [{
                             title: `機能設計書`,
-                            content: Utils.setMarkdownBlock(feature.relatedFeatureList.join('\n\n---\n\n'), 'markdown'),
+                            content: Utils.setMarkdownBlock(feature.relatedFeatureDocumentList.join('\n\n---\n\n'), 'markdown'),
                             children: [{
                                 title: `画面遷移先`,
                                 content: feature.destinationList.map((destination: string) => `* ${destination}`).join('\n'),
@@ -806,35 +918,17 @@ class Step0070_ViewDocuments extends BaseMultiStepDomainModelGenerator {
                 ];
             }
         }
-        this.viewList = JSON.parse(new Step0060_ViewList().formed).viewList;
-        const mas = new Step0030_DesignSummary().childStepList.reduce((acc: { [key: string]: string }, step: BaseStep) => {
-            const feature = (step as any).feature;
-            acc[feature] = step.formed;
-            // "機能"の有無で取りこぼしを防ぐ。
-            acc[feature.replace(/機能$/g, '')] = step.formed;
-            acc[feature + '機能'] = step.formed;
-            acc[feature.replace(/機能の詳細化$/g, '')] = step.formed;
-            acc[feature + '機能の詳細化'] = step.formed;
-            acc[feature.replace(/の詳細化$/g, '')] = step.formed;
-            acc[feature + 'の詳細化'] = step.formed;
-            return acc;
-        }, {} as { [key: string]: string });
-        // console.log(Object.keys(mas));
-        this.viewList.forEach((feature: { name: string, destinationList: string[], relatedFeatureList: string[] }) => {
-            for (let index = 0; index < feature.relatedFeatureList.length; index++) {
-                // console.log(feature.relatedFeatureList[index]);
-                feature.relatedFeatureList[index] = mas[feature.relatedFeatureList[index] || feature.name];
-            }
-        });
-        this.childStepList = this.viewList.map(targetName => new Step0070_ViewDocumentsChil(targetName));
+        this.viewList = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ViewList.json`, 'utf-8')).viewList as { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }[];
+        this.childStepList = this.viewList.map(target => new Step0070_ViewDocumentsChil(target));
     }
 
     postProcess(result: string[]): string[] {
-        // 全部まとめてファイルに出力する。
-        // const reportList = result.map((targetName: string, index: number) => `# ${this.featureList[index]}\n\n${targetName}`);
-        const reportList = result.map((targetName: string, index: number) => `${targetName}`);
-        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/summary/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
-        fss.writeFileSync(outputFileName, reportList.join('\n---\n'));
+        const allObj = this.viewList.reduce((all: { [key: string]: string }, view: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }, index: number) => {
+            all[view.name] = result[index];
+            return all;
+        }, {});
+        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/ViewDocs.json`;
+        fss.writeFileSync(outputFileName, JSON.stringify(allObj, null, 2));
         return result;
     }
 }
@@ -957,56 +1051,75 @@ class Step0092_ServiceMethodListReqRes extends BaseStepDomainModelGenerator {
         const mergedAPIList = [];
 
         // 前回ステップで作成したものをmarkdownテーブルから読み込む。
-        const serviceData = Utils.loadTableDataFromMarkdown(new Step0090_ServiceMethodList().formed).data.reduce((before: { [key: string]: { [key: string]: { usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] } } }, current: string[]) => {
+        const serviceList = Utils.loadTableDataFromMarkdown(new Step0090_ServiceMethodList().formed).data.reduce((before: { [key: string]: { [key: string]: { usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] } } }, current: string[]) => {
             const [serviceName, apiName, usageScreenIdListString, entityListString, serviceListString, documentListString] = current;
             if (!before[serviceName]) {
                 before[serviceName] = {};
             } else { }
-            const usageScreenIdList = usageScreenIdListString.split(',').filter(entity => entity !== '');
-            const entityList = entityListString.split(',').filter(entity => entity !== '');
-            const serviceList = serviceListString.split(',').filter(entity => entity !== '');
-            const documentList = documentListString.split(',').filter(entity => entity !== '');
+            const usageScreenIdList = usageScreenIdListString.split(',').map(s => s.trim()).filter(s => s);
+            const entityList = entityListString.split(',').map(s => s.trim()).filter(s => s);
+            const serviceList = serviceListString.split(',').map(s => s.trim()).filter(s => s);
+            const documentList = documentListString.split(',').map(s => s.trim()).filter(s => s);
             before[serviceName][apiName] = { usageScreenIdList, entityList, serviceList, documentList };
             return before;
-        }, {}) as { [key: string]: { [key: string]: { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] } } };
+        }, {}) as { [key: string]: { [key: string]: ServiceMethod } };
 
         // 今回のステップで作成したものをmarkdownテーブルから読み込む。
         Utils.loadTableDataFromMarkdown(result).data.forEach(element => {
-            const [serviceName, apiName, name, method, endpoint, request, response] = element;
-            serviceData[serviceName][apiName] = { ...serviceData[serviceName][apiName], name, method, endpoint, request, response };
+            const [serviceName, apiName, name, method, _endpoint, request, response] = element;
+
+            // endpointとpathVariableを整備する。
+            const pathVariableListByEndpoint = Array.from(_endpoint.matchAll(/\{([^}]+)\}/g)).map(match => match[1]);
+            let pathVariableList = request.split(',').filter((_, index) => index < pathVariableListByEndpoint.length).map(s => s.trim().split(' ')[1]);
+            let endpoint = _endpoint;
+            if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase())) {
+                // POST, PUT, PATCHの場合は、pathVariableを削除する。
+                endpoint = endpoint.replace(/\{([^}]+)\}/g, '').replace(/\/$/, '');
+                pathVariableList = [];
+            } else {
+                // GET, DELETEの場合は、pathVariableを使えるように整備する。
+                pathVariableListByEndpoint.forEach((pathVariable, index) => {
+                    endpoint = endpoint.replace(`{${pathVariable}}`, `{${pathVariableList[index]}}`);
+                });
+            }
+            serviceList[serviceName][apiName] = { ...serviceList[serviceName][apiName], name, method, endpoint, pathVariableList, request, response };
         });
 
+        const entityModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, 'utf-8')) as EntityModelClass;
         // テーブル形式のデータを作成する。
-        const heads = ['serviceName', 'apiName', 'name', 'method', 'endpoint', 'request', 'response', 'usageScreenIdList', 'Dependent Repositories', 'Dependent Services', 'Related Functional Specifications'];
+        const heads = ['serviceName', 'apiName', 'name', 'method', 'endpoint', 'pathVariableList', 'request', 'response', 'usageScreenIdList', 'Dependent Repositories', 'Dependent Services', 'Related Functional Specifications'];
         mergedAPIList.push(heads);
         mergedAPIList.push(heads.map(() => '---'));
-        Object.keys(serviceData).forEach(serviceName => {
-            Object.keys(serviceData[serviceName]).forEach(apiName => {
+        Object.keys(serviceList).forEach(serviceName => {
+            Object.keys(serviceList[serviceName]).forEach(apiName => {
+                // const pathVariableList = (serviceList[serviceName][apiName].endpoint.match(/\{([^}]+)\}/g) || []).map(pathVariable => pathVariable.replace(/^\{/, '').replace(/\}$/, ''));
                 mergedAPIList.push([serviceName, apiName,
-                    serviceData[serviceName][apiName].name,
-                    serviceData[serviceName][apiName].method,
-                    serviceData[serviceName][apiName].endpoint,
-                    serviceData[serviceName][apiName].request,
-                    serviceData[serviceName][apiName].response,
-                    serviceData[serviceName][apiName].usageScreenIdList.join(','),
-                    serviceData[serviceName][apiName].entityList.map(entity => `${entity}Repository<${entity}, Long>`).join(','),
-                    serviceData[serviceName][apiName].serviceList.join(','),
-                    serviceData[serviceName][apiName].documentList.join(',')
+                    serviceList[serviceName][apiName].name,
+                    serviceList[serviceName][apiName].method.toUpperCase(), // httpメソッドは大文字にする。
+                    serviceList[serviceName][apiName].endpoint,
+                    serviceList[serviceName][apiName].pathVariableList.join(','),
+                    serviceList[serviceName][apiName].request,
+                    serviceList[serviceName][apiName].response,
+                    serviceList[serviceName][apiName].usageScreenIdList.join(','),
+                    // Entity以外のもの（embeddableなど）は除外する。
+                    serviceList[serviceName][apiName].entityList.filter(entity => entityModel.entityNameList.includes(entity)).map(entity => `${entity}Repository<${entity}, Long>`).join(','),
+                    serviceList[serviceName][apiName].serviceList.join(','),
+                    serviceList[serviceName][apiName].documentList.join(',')
                 ]);
             });
         });
         const apiDataTable = mergedAPIList.map(row => `| ${row.join(' | ')} |`).join('\n');
         // service用にヘッダーを設定する。
         mergedAPIList[0][1] = 'methodName';
-        mergedAPIList[0][5] = 'args';
-        mergedAPIList[0][6] = 'return';
-        // service用にmethodとendpointを削る。
-        const serviceDataTable = mergedAPIList.map(row => `| ${row.slice(0, 3).concat(row.slice(5, 10)).join(' | ')} |`).join('\n');
+        mergedAPIList[0][6] = 'args';
+        mergedAPIList[0][7] = 'return';
+        // service用にmethodとendpointとpathVariableListを削除する。
+        const serviceDataTable = mergedAPIList.map(row => `| ${row.slice(0, 3).concat(row.slice(6, 10)).join(' | ')} |`).join('\n');
 
         // markdownとjsonで出力する。
         fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ApiList.md`, apiDataTable);
         fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.md`, serviceDataTable);
-        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, JSON.stringify(serviceData, null, 2));
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, JSON.stringify(serviceList, null, 2));
         return result;
     }
 }
@@ -1039,14 +1152,13 @@ class Step0095_ApiListJson extends BaseStepDomainModelGenerator {
  * APIドキュメントを作成する。
  * ※要らないかもしれない。
  */
-class Step0100_ApiDocuments extends BaseMultiStepDomainModelGenerator {
-    viewList!: { name: string, destinationList: string[], relatedFeatureList: string[] }[];
+class Step0100_ApiDocuments extends MultiStepDomainModelGenerator {
+    viewList!: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }[];
     constructor() {
         super();
-        // const ENTITY_LIST = Utils.setMarkdownBlock(Utils.mdTrim(new Step0053_EntityAttributesJpa().formed), 'java');
         const ENTITY_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8');
-        const entityData = parseJavaCode(Utils.mdTrim(new Step0050_EntityAttributes().formed), PACKAGE_NAME);
-        const REPOSITORY_LIST = entityData.entityList.map(entityName => `- ${entityName}Repository<${entityName}, Long>`).join('\n');
+        const entityModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, 'utf-8')) as EntityModelClass;
+        const REPOSITORY_LIST = entityModel.entityNameList.map(entityName => `- ${entityName}Repository<${entityName}, Long>`).join('\n');
         const API_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ApiList.md`, 'utf-8');
 
         // 画面一覧から画面と紐づく機能一覧を取得する。
@@ -1217,11 +1329,10 @@ class Step0100_ApiDocuments extends BaseMultiStepDomainModelGenerator {
             return before;
         }, {});
 
-        type MetaServiceData = { [key: string]: { [key: string]: { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] } } };
-        const serviceData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
+        const serviceList = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as { [key: string]: { [key: string]: ServiceMethod } };
 
         // console.log(entityData);
-        this.childStepList = Object.entries(serviceData).map(([serviceName, apiData]) =>
+        this.childStepList = Object.entries(serviceList).map(([serviceName, apiData]) =>
             Object.entries(apiData).map(([apiName, api]) => {
                 // 利用元画面を取得
                 const views = this.viewList.filter(view => api.usageScreenIdList.some(usageScreenId => view.name === usageScreenId));
@@ -1249,17 +1360,16 @@ class Step0100_ApiDocuments extends BaseMultiStepDomainModelGenerator {
     }
 }
 
-class Step0110_ApiSourceReqRes extends BaseMultiStepDomainModelGenerator {
+class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
     constructor() {
         super();
         // const ENTITY_LIST = Utils.setMarkdownBlock(Utils.mdTrim(new Step0053_EntityAttributesJpa().formed), 'java');
         const ENTITY_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8');
 
-        type MetaServiceData = { [key: string]: { [key: string]: { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] } } };
-        const serviceData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
+        const serviceList = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as { [key: string]: { [key: string]: ServiceMethod } };
         class Step0110_ApiSourceReqResChil extends BaseStepDomainModelGenerator {
             // model: GPTModels = 'gpt-3.5-turbo';
-            format: StepOutputFormat = StepOutputFormat.JSON;
+            // format: StepOutputFormat = StepOutputFormat.JSON;
             constructor(
                 public serviceName: string,
                 public apiName: string,
@@ -1283,7 +1393,10 @@ class Step0110_ApiSourceReqRes extends BaseMultiStepDomainModelGenerator {
                             RequestDto/ResponseDtoのクラス名は、以下のルールに則ってください。
                             - RequestDto -> ${Utils.toPascalCase(serviceName)}${Utils.toPascalCase(apiName)}RequestDto
                             - ResponseDto -> ${Utils.toPascalCase(serviceName)}${Utils.toPascalCase(apiName)}ResponseDto
-                            RequestDtoにはバリデーターを付けてください。
+                            RequestDtoには Jakarta Bean Validation API のバリデーターを付けてください。
+                            Lombokの@Dataを使ってください。
+                            階層化されたRequestDtoの内部項目に対してバリデーションを行う場合は、内部クラスとして定義してください。
+                            クラスメンバはフィールドのみとすること（コンストラクタとメソッドは不要）。
                         `),
                     }, {
                         title: '設計書',
@@ -1302,13 +1415,8 @@ class Step0110_ApiSourceReqRes extends BaseMultiStepDomainModelGenerator {
                     }, {
                         title: 'Output Format',
                         content: Utils.trimLines(`
-                            以下のJSON形式で出力してください。補助クラスは必要に応じて適宜追加してください。
-                            出力するのはJSONのみで、Javaのソースコードは出力しなくてよいです。
-                            {
-                                "SomeRequestDto":[{"type":"className","name":"varName","validations":["@NotNull(message = \"some message.\")"]},],
-                                "SomeResponseDto":[{"type":"className","name":"varName"},],
-                                "SubSomeDto":[{"type":"className","name":"varName"},],
-                            }
+                            javaのソースコードのみを出力してください。
+                            説明は不要です。
                         `),
                     }
                 ];
@@ -1323,65 +1431,111 @@ class Step0110_ApiSourceReqRes extends BaseMultiStepDomainModelGenerator {
             before[serviceMethodName] = current.formed;
             return before;
         }, {});
-        this.childStepList = Object.entries(serviceData).map(([serviceName, apiData]) =>
+        this.childStepList = Object.entries(serviceList).map(([serviceName, apiData]) =>
             Object.entries(apiData).map(([apiName, api]) => {
                 return new Step0110_ApiSourceReqResChil(serviceName, apiName, serviceMethodDocMas[Utils.safeFileName(serviceName + "." + apiName)], api.request, api.response);
-            })
+            }) // .filter(step => step.serviceName === 'CustomerInformationService' && step.apiName === 'saveCustomerInformation')
         ).flat();
     }
 
     postProcess(result: string[]): string[] {
+        // javaのソースコードを解析してモデル化してファイルに出力する。
+        const mas: Record<string, DtoClass> = {};
+        result.forEach((dtoString: string, index: number) => {
+            // service->apiの単位でループするので、サービスでまとめる。
+            const { serviceName, apiName } = this.childStepList[index] as any;
+            if (!mas[serviceName]) {
+                mas[serviceName] = new DtoClass(serviceName);
+            } else { }
+            let dto: DtoClass = mas[serviceName];
+            const root = dto;
+            const reqDto = `${Utils.toPascalCase(serviceName)}${Utils.toPascalCase(apiName)}RequestDto`;
+            const resDto = `${Utils.toPascalCase(serviceName)}${Utils.toPascalCase(apiName)}ResponseDto`;;
+            dto.methods.push({ name: apiName, type: resDto, annotations: [], description: '', args: [reqDto], body: '' });
+            const dtoChain: DtoClass[] = [dto];
+            let annotationStock: string[] = [];
+            Utils.mdTrim(dtoString).split('\n').forEach((line, lineIndex) => {
+                const trimed = line.trim();
+                if (!trimed
+                    || trimed.startsWith('package ')
+                    || trimed.startsWith('//')
+                    || trimed.startsWith('*')
+                    || trimed.startsWith('/*')
+                    || trimed.startsWith('@Override')
+                    || trimed.startsWith('@SuppressWarnings')
+                    || trimed.startsWith('@Data')
+                ) {
+                    // skip
+                } else if (line.startsWith('import ')) {
+                    // import文を追加する。（重複は除く）
+                    const importLine = line.replace('import ', '').replace(';', '').trim();
+                    if (!dto.imports.includes(importLine)) dto.imports.push(importLine);
+                } else if (trimed.startsWith('@')) {
+                    annotationStock.push(trimed);
+                } else {
+                    line = line.replace(/^\s*(?:public |private )/g, '');
+                    line = line.replace(/^\s*(?:static )/g, '');
+                    if (line.startsWith('class ')) {
+                        const className = line.split(' ')[1];
+                        dtoChain.push(dto);
+                        dto.innerClasses.push(dto = new DtoClass(className));
+                        dto.name = className;
+                    } else if (trimed.split('//')[0].trim().endsWith(';')) {
+                        const splitted = line.replace(';', '').trim().split(' ');
+                        const type = splitted.slice(0, -1).join(' ');
+                        const name = splitted[splitted.length - 1];
+                        dto.fields.push({ name, type, annotations: annotationStock, description: '' });
+                        annotationStock = [];
+                    } else if (trimed.startsWith('}')) {
+                        dto = dtoChain.pop() as DtoClass;
+                    } else {
+                        console.log(`unknown line ${serviceName}.${apiName} ${lineIndex}: ${line}`);
+                    }
+                }
+            });
+
+            // 後処理
+            // request/responseの型がもしなかったら追加する。(requestは項目なしだとない時があるので。）
+            [reqDto, resDto].forEach(dtoType => {
+                if (root.innerClasses.find(inner => inner.name === dtoType)) {
+                } else {
+                    root.innerClasses.push(new DtoClass(dtoType));
+                }
+            });
+            // なんとなくimport文をソートしておく。
+            root.imports.sort();
+        });
+
         // 全部まとめてファイルに出力する。
-        const keys = this.childStepList.map((step: BaseStep) => Utils.safeFileName(`${(step as any).serviceName}.${(step as any).apiName}`));
-
-        const allObj = result.reduce((prev, objString: string, index: number) => {
-            const obj = Utils.jsonParse<Record<string, any>>(objString);
-            prev[keys[index]] = obj;
-            return prev;
-        }, {} as Record<string, any>);
-
-        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/request-response.json`;
-        fss.writeFileSync(outputFileName, JSON.stringify(allObj, null, 2));
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceModel.json`, JSON.stringify(mas, null, 2));
         return result;
     }
 }
 
-
-class Step0120_ApiSourceJson extends BaseMultiStepDomainModelGenerator {
+class Step0120_ApiSourceJson extends MultiStepDomainModelGenerator {
+    entityModel: EntityModelClass;
+    serviceList: { [key: string]: { [key: string]: ServiceMethod } };
+    serviceModel: Record<string, DtoClass>;
+    serviceDocs: Record<string, string>;
     constructor() {
         super();
+        this.entityModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, 'utf-8')) as EntityModelClass;
+        this.serviceList = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as { [key: string]: { [key: string]: ServiceMethod } };
+        this.serviceModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceModel.json`, 'utf-8')) as Record<string, DtoClass>;
+        this.serviceDocs = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceDocs.json`, 'utf-8')) as Record<string, string>;
+
         const ENTITY_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8');
         const SERVICE_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.md`, 'utf-8');
-        const entityData = parseJavaCode(Utils.mdTrim(new Step0050_EntityAttributes().formed), PACKAGE_NAME);
-        const REPOSITORY_LIST = entityData.entityList.map(entityName => `- ${entityName}Repository<${entityName}, Long>`).join('\n');
+        const REPOSITORY_LIST = this.entityModel.entityNameList.map(entityName => `- ${entityName}Repository<${entityName}, Long>`).join('\n');
 
-        // 画面一覧から画面と紐づく機能一覧を取得する。
-        const viewList = JSON.parse(new Step0060_ViewList().formed).viewList as { name: string, destinationList: string[], relatedFeatureList: string[] }[];
-        const featureMas = new Step0030_DesignSummary().childStepList.reduce((acc: { [key: string]: string }, step: BaseStep) => {
-            const feature = (step as any).feature;
-            acc[feature] = step.formed;
-            // "機能"の有無で取りこぼしを防ぐ。
-            acc[feature.replace(/機能$/g, '')] = step.formed;
-            acc[feature + '機能'] = step.formed;
-            acc[feature.replace(/機能の詳細化$/g, '')] = step.formed;
-            acc[feature + '機能の詳細化'] = step.formed;
-            acc[feature.replace(/の詳細化$/g, '')] = step.formed;
-            acc[feature + 'の詳細化'] = step.formed;
-            return acc;
-        }, {} as { [key: string]: string });
-
-
-        type MetaServiceData = Record<string, Record<string, { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] }>>;
-        const serviceData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
-        const reqResData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/request-response.json`, 'utf-8')) as Record<string, Record<string, { type: string, name: string, validations?: string[] }[]>>;
-        const serviceDocsData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceDocs.json`, 'utf-8')) as Record<string, string>;
-        const serviceTemplateMap = javaServiceTemplateMap(serviceData, reqResData, serviceDocsData, entityData, PACKAGE_NAME);
+        const serviceTemplateMap = javaServiceTemplateMap(this.serviceList, this.serviceModel, this.serviceDocs, this.entityModel, PACKAGE_NAME);
 
         const exceptionSource =
-            Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/ResourceNotFoundException.java`, 'utf-8'), 'java com.example.demo.exception.ResourceNotFoundException') + '\n\n' +
-            Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/CustomException.java`, 'utf-8'), 'java com.example.demo.exception.CustomException')
+            Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/exception/ResourceNotFoundException.java`, 'utf-8'), 'java com.example.demo.exception.ResourceNotFoundException') + '\n\n' +
+            Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/exception/CustomException.java`, 'utf-8'), 'java com.example.demo.exception.CustomException')
 
         // console.log(serviceTemplateMap);
+        const _parent = this;
         class Step0120_ApiSourceJsonChil extends BaseStepDomainModelGenerator {
             // model: GPTModels = 'gpt-3.5-turbo';
             format: StepOutputFormat = StepOutputFormat.JSON;
@@ -1389,8 +1543,6 @@ class Step0120_ApiSourceJson extends BaseMultiStepDomainModelGenerator {
                 public serviceName: string,
                 public apiName: string,
                 public api: { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], serviceList: string[] },
-                public viewDocList: string[],
-                public featureList: string[]
             ) {
                 super();
                 // {"viewList":[{"name": "View name","destinationList":["parts","parts"],"relatedFeatureList":["featureName","featureName"]}]}
@@ -1406,6 +1558,7 @@ class Step0120_ApiSourceJson extends BaseMultiStepDomainModelGenerator {
                         content: Utils.trimLines(`
                             これから提示する設計書をよく読んで、サービス実装のひな型のTODOを実装してください。
                             あなたの担当は「${apiId}」です。担当外のものはやらなくてよいです。
+                            RequestDtoはEntityと似ていても異なるものです。マッピング処理を忘れないように注意してください。
                             また、バリデーションは別のクラスで実装してあるので実装しなくてよいです。
                             Entityの操作は、対応するAPI、もしくはRepositoryインターフェース経由で行ってください。（entityManager.createQueryは禁止です）。
                             追加のインジェクションが必要な場合は「サービス一覧」、「Repository一覧」の中からのみ選択可能です。
@@ -1417,18 +1570,8 @@ class Step0120_ApiSourceJson extends BaseMultiStepDomainModelGenerator {
                             title: `サービス実装のひな型`,
                             content: Utils.setMarkdownBlock(serviceTemplateMap[apiId], 'java'),
                         }, {
-                            content: Utils.addMarkdownDepth(serviceDocsData[apiId], 1),
+                            content: Utils.addMarkdownDepth(_parent.serviceDocs[apiId], 1),
                         }],
-                        // }, {
-                        //     title: '関連設計書',
-                        //     content: `関連設計書はあなたの担当に関係する部分です。`,
-                        //     children: [{
-                        //         title: `機能設計書`,
-                        //         content: Utils.setMarkdownBlock(Utils.mdTrim(featureList.join('\n\n---\n\n')), 'markdown'),
-                        //     }, {
-                        //         title: `画面設計書`,
-                        //         content: Utils.setMarkdownBlock(Utils.mdTrim(viewDocList.join('\n\n---\n\n')), 'markdown'),
-                        //     }],
                     }, {
                         title: '全体設計書',
                         content: `全体設計書はシステム全体について語っています。あなたの担当分が相対的にどのような役割かを理解するのに役立ててください。`,
@@ -1476,30 +1619,20 @@ class Step0120_ApiSourceJson extends BaseMultiStepDomainModelGenerator {
                                 "todos": ["\${メソッドの内部実装で、難しくて実装できないもの}"]
                             }
                         `),
+                        // javaソースコードのみを出力してください。
+                        // 提供されたDto定義は省略してよいです。
+                        // インポート文は省略しないでください。
+                        // コメントは日本語でお願いします。
+                        // メソッドの内容は省略不可です。
+                        // TODOがあればTODOとわかるようにコメントしてください。
+                        // 複雑な仕様は推論して実装してください。ただし、存在しないクラスを使ってはいけません。
                     }
                 ];
             }
         }
-
-        const viewDocMap = new Step0070_ViewDocuments().childStepList.reduce((before: { [key: string]: any }, current: BaseStep) => {
-            const featureName = (current as any).feature.name;
-            if (!before[featureName]) {
-                before[featureName] = [];
-            } else { }
-            before[featureName] = current.formed;
-            return before;
-        }, {});
-
-        // console.log(entityData);
-        this.childStepList = Object.entries(serviceData).map(([serviceName, apiData]) =>
+        this.childStepList = Object.entries(this.serviceList).map(([serviceName, apiData]) =>
             Object.entries(apiData).map(([apiName, api]) => {
-                // 利用元画面を取得
-                const views = viewList.filter(view => api.usageScreenIdList.some(usageScreenId => view.name === usageScreenId));
-                // 利用元画面から機能設計書を取得。重複削除もする。
-                const features = Array.from(new Set(views.map(view => view.relatedFeatureList).flat())).map(featureName => featureMas[featureName]);
-                const viewDocs = views.map(view => viewDocMap[view.name]);
-
-                return new Step0120_ApiSourceJsonChil(serviceName, apiName, api, viewDocs, features);
+                return new Step0120_ApiSourceJsonChil(serviceName, apiName, api);
             })
         ).flat();
     }
@@ -1514,25 +1647,19 @@ class Step0120_ApiSourceJson extends BaseMultiStepDomainModelGenerator {
         }, {} as Record<string, any>);
 
         // TODOをリストアップする
-        // // console.log(allObj);
+        // console.log(allObj);
         // Object.entries(allObj).forEach(([key, value]) => {
         //     console.log(key, value.todos);
         // });
 
-        type MetaServiceData = Record<string, Record<string, { name: string, method: string, endpoint: string, request: string, response: string, usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] }>>;
-        const serviceData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as MetaServiceData;
-        const reqResData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/request-response.json`, 'utf-8')) as Record<string, Record<string, { type: string, name: string, validations?: string[] }[]>>;
-        const serviceDocsData = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceDocs.json`, 'utf-8')) as Record<string, string>;
+        const javaServiceImplementsMapObj = javaServiceImplementsMap(this.serviceList, this.serviceModel, this.serviceDocs, allObj, this.entityModel, PACKAGE_NAME);
 
-        const entityData = parseJavaCode(Utils.mdTrim(new Step0050_EntityAttributes().formed), PACKAGE_NAME);
-        const javaServiceImplementsMapObj = javaServiceImplementsMap(serviceData, reqResData, serviceDocsData, allObj, entityData, PACKAGE_NAME);
-
-        const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/service-data.json`;
-        fss.writeFileSync(outputFileName, JSON.stringify(allObj, null, 2));
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/service-data.json`, JSON.stringify(allObj, null, 2));
         Object.entries(javaServiceImplementsMapObj).forEach(([key, value]) => {
-            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/service/impl/${key}Impl.java`, value.implement);
-            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/service/${key}.java`, value.interface);
-            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/controller/${key}Controller.java`, value.controller);
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/service/impl/${key}Impl.java`, value.implement);
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/service/${key}.java`, value.interface);
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/controller/${key}Controller.java`, value.controller);
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/angular/src/app/service/${Utils.toKebabCase(key)}.service.ts`, value.angularService);
         });
 
         return result;
@@ -1540,7 +1667,7 @@ class Step0120_ApiSourceJson extends BaseMultiStepDomainModelGenerator {
 }
 
 
-class Step0130_RepositoryMethod extends BaseMultiStepDomainModelGenerator {
+class Step0130_RepositoryMethod extends MultiStepDomainModelGenerator {
     constructor() {
         super();
         // const ENTITY_LIST = Utils.setMarkdownBlock(Utils.mdTrim(new Step0053_EntityAttributesJpa().formed), 'java');
@@ -1572,7 +1699,7 @@ class Step0130_RepositoryMethod extends BaseMultiStepDomainModelGenerator {
                         `),
                     }, {
                         title: 'Target Source Code',
-                        content: Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/service/impl/${apiId}Impl.java`, 'utf-8'), 'java'),
+                        content: Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/service/impl/${apiId}Impl.java`, 'utf-8'), 'java'),
                     }, {
                         title: '参考資料',
                         children: [{
@@ -1614,9 +1741,6 @@ class Step0130_RepositoryMethod extends BaseMultiStepDomainModelGenerator {
         fss.writeFileSync(outputFileName, JSON.stringify(allObj, null, 2));
         // console.dir(allObj, { depth: 5 });
 
-        const entityData = parseJavaCode(Utils.mdTrim(new Step0050_EntityAttributes().formed), PACKAGE_NAME).classes;
-        // console.dir(entityData, { depth: 5 });
-
         // RespositoryのJSONベースでメソッドをまとめる。
         const repositoryMethods0: Record<string, Set<string>> = {};
         Object.entries(allObj).forEach(([key, value]) => {
@@ -1627,9 +1751,12 @@ class Step0130_RepositoryMethod extends BaseMultiStepDomainModelGenerator {
         });
         // console.dir(repositoryMethods0, { depth: 5 });
 
+        const entityModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, 'utf-8')) as EntityModelClass;
+        // console.dir(entityModel, { depth: 5 });
+
         // EntityベースでRepositoryのメソッドをまとめる。
         const repositoryMethods: Record<string, Set<string>> = {};
-        Object.keys(entityData).forEach(entityName => {
+        entityModel.entityNameList.forEach(entityName => {
             [repositoryMethods0[entityName], repositoryMethods0[`${entityName}Repository`]].filter(bit => bit).forEach(methods => {
                 if (!repositoryMethods[entityName]) { repositoryMethods[entityName] = new Set(); }
                 methods.forEach(method => repositoryMethods[entityName].add(method));
@@ -1639,17 +1766,25 @@ class Step0130_RepositoryMethod extends BaseMultiStepDomainModelGenerator {
 
         Object.entries(repositoryMethods).forEach(([entityName, methods]) => {
             const methodSet = new Set();
-            methodSet.add('saveAll'); // saveAllは明示的に定義するとエラーになるので、デフォルトで追加しておく。
-            methodSet.add('save'); // saveは明示的に定義するとワーニングになるので、デフォルトで追加しておく。
+            methodSet.add('saveAll'); // saveAllは明示的に定義するとエラーになるので無視させる。
+            methodSet.add('save'); // saveは明示的に定義するとワーニングになるので無視させる。
+            methodSet.add('findById'); // findByIdはOptional無しの定義が入るとエラーになるので無視させる。
+            methodSet.add('findAll'); // findByIdはOptional無しの定義が入るとエラーになるので無視させる。
             const methodList = Array.from(methods).filter(method => {
-                const methodSignature = parseJavaMethodSignatureWithGenerics(method);
-                // console.log(methodSignature);
-                methodSignature.methodName = methodSignature.methodName.replace(/<.*>/g, '');
-                const boolean = !methodSet.has(methodSignature.methodName);
-                methodSet.add(methodSignature.methodName);
-                return boolean;
+                const pattern = /.*\s+(\w+)\s*\((.*?)\)/;
+                const match = method.match(pattern);
+                if (match) {
+                    const methodName = match[1];
+                    const boolean = !methodSet.has(methodName);
+                    methodSet.add(methodName);
+                    // console.log(methodName, boolean);
+                    return boolean;
+                } else {
+                    // メソッドの定義がおかしいので無視する。
+                    return false;
+                }
             });
-            const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/repository/${entityName}Repository.java`;
+            const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/repository/${entityName}Repository.java`;
             const methodsBody = Utils.trimLines(`
                 package ${PACKAGE_NAME}.domain.repository;
 
@@ -1678,7 +1813,7 @@ class Step0130_RepositoryMethod extends BaseMultiStepDomainModelGenerator {
     }
 }
 
-class Step0080_ApiList0 extends BaseMultiStepDomainModelGenerator {
+class Step0080_ApiList0 extends MultiStepDomainModelGenerator {
     viewList!: { name: string, destinationList: string[], relatedFeatureList: string[] }[];
     constructor() {
         super();
@@ -1829,18 +1964,26 @@ class Step0050_ extends BaseStepDomainModelGenerator {
  * 例えば、promptを手修正したかったらinitPromptだけコメントアウトすれば手修正したファイルがそのまま飛ぶ。
  */
 export async function main() {
-    ResourceNotFoundException
-    BaseEntity
-    DemoApplication
-    Utils.replaceTemplateStringDeep
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/ResourceNotFoundException.java`, ResourceNotFoundException.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PACKAGE_DIRE}/exception/CustomException.java`, CustomException.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PACKAGE_DIRE}/domain/entity/BaseEntity.java`, BaseEntity.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${PACKAGE_DIRE}/DemoApplication.java`, DemoApplication.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+
+    // springのテンプレートを作成する。
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/exception/ResourceNotFoundException.java`, spring_ResourceNotFoundException.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/exception/CustomException.java`, spring_CustomException.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/domain/entity/BaseEntity.java`, spring_BaseEntity.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/DemoApplication.java`, spring_DemoApplication.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
     const split0 = PACKAGE_NAME.split('\.');
     const name = split0.pop() || '';
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/spring/pom.xml`, Pom.replace(/\{\{groupId\}\}/g, split0.join('.')).replace(/\{\{artifactId\}\}/g, name).replace(/\{\{name\}\}/g, name));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/spring/src/main/resources/application.yml`, application.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/spring/pom.xml`, spring_Pom.replace(/\{\{groupId\}\}/g, split0.join('.')).replace(/\{\{artifactId\}\}/g, name).replace(/\{\{name\}\}/g, name));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/spring/src/main/resources/application.yml`, spring_application.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+
+    // Angularのテンプレートを作成する。
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/app/api.interceptor.ts`, angular_apiInterceptor.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/app/app.config.ts`, angular_appConfig.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/environments/environment.development.ts`, angular_environmentDevelopment.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/environments/environment.ts`, angular_environment.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/package.json`, angular_package.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/tailwind.config.js`, angular_tailwindConfig.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/proxy.conf.js`, angular_proxyConf.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
+
     let obj;
     return Promise.resolve().then(() => {
         obj = new Step0000_RequirementsToFeatureListSummary();
@@ -1851,9 +1994,9 @@ export async function main() {
         obj.initPrompt();
         return obj.run();
     }).then(() => {
-        obj = new Step0015_EntityList();
-        obj.initPrompt();
-        return obj.run();
+        //     obj = new Step0015_EntityList(); // 使ってない
+        //     obj.initPrompt();
+        //     return obj.run();
     }).then(() => {
         obj = new Step0020_FeatureListDetailToJsonFormat();
         obj.initPrompt();
@@ -1862,6 +2005,7 @@ export async function main() {
         obj = new Step0030_DesignSummary(); // 機能の詳細化
         obj.initPrompt();
         return obj.run();
+        // obj.postProcess(obj.childStepList.map((step) => step.result)); // 後処理デバッグ用
         //-- // ※使ってない
         // }).then(() => {
         //     obj = new Step0031_DesignSummaryReview();
@@ -1884,23 +2028,26 @@ export async function main() {
         obj = new Step0050_EntityAttributes(); // Entityに属性を補充する
         obj.initPrompt();
         return obj.run();
+        // obj.postProcess(obj.result);
     }).then(() => {
-        obj = new Step0053_EntityAttributesJpa(); // ここは並列化可能 Entityに属性を補充する
+        obj = new Step0053_EntityAttributesJpaJson(); // ここは並列化可能 Entityに属性を補充する
         obj.initPrompt();
         return obj.run();
         // obj.postProcess(obj.result);
     }).then(() => {
-        //     obj = new Step0055_EntityAttributesToOpenAPI(); // ※使ってない：ここは並列化可能
-        //     obj.initPrompt();
-        //     return obj.run();
+        //     //     obj = new Step0055_EntityAttributesToOpenAPI(); // ※使ってない：ここは並列化可能
+        //     //     obj.initPrompt();
+        //     //     return obj.run();
     }).then(() => {
         obj = new Step0060_ViewList(); // 画面一覧を作る
         obj.initPrompt();
         return obj.run();
+        // obj.postProcess(obj.result);
     }).then(() => {
         obj = new Step0070_ViewDocuments(); // 画面詳細設計書を作る
         obj.initPrompt();
         return obj.run();
+        // obj.postProcess(obj.childStepList.map((step) => step.result)); // 後処理デバッグ用
     }).then(() => {
         obj = new Step0080_ServiceList(); // サービス一覧を作る
         obj.initPrompt();
@@ -1923,6 +2070,7 @@ export async function main() {
         obj = new Step0110_ApiSourceReqRes();
         obj.initPrompt();
         return obj.run();
+        // obj.postProcess(obj.childStepList.map((step) => step.result)); // 後処理デバッグ用
     }).then(() => {
         obj = new Step0120_ApiSourceJson();
         obj.initPrompt();

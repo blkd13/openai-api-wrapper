@@ -49,7 +49,7 @@ const templateMas: { [key: string]: string } = {
          */
         abstract class BaseStepSample extends BaseStep {
             agentName: string = Utils.basename(Utils.dirname(import.meta.url));
-            model: GPTModels = 'gpt-4-1106-preview';
+            model: GPTModels = 'gpt-4-turbo-preview';
             systemMessage = 'Experts in AI.'; // AI専門家
             temperature: number = 0.0; // ランダム度合い。0に近いほど毎回同じ結果になる。プログラムのようなものは 0 に、文章系は 1 にするのが良い。
             format = StepOutputFormat.MARKDOWN;
