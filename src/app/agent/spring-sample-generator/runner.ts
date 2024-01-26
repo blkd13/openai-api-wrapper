@@ -473,7 +473,7 @@ class Step0050_EntityAttributes extends BaseStepDomainModelGenerator {
     postProcess(result: string): string {
         const models = parseJavaCode(result, PACKAGE_NAME);
         const modelSources = Object.entries(models.classes).map(([className, obj]) => Utils.trimLines(`
-            export class ${className} {
+            export interface ${className} {
             ${obj.props.map(prop => `\t${prop.name}: ${javaTypeToTypescript(prop.type)};`).join('\n')}
             }
         `)).join('\n\n');

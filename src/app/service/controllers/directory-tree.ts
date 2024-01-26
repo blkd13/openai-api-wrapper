@@ -9,12 +9,13 @@ import { validationErrorHandler } from '../middleware/validation.js';
 // ディレクトリまたはファイルの情報を表すインターフェース
 interface DirectoryItem {
     name: string;
+    depth: number;
     type: 'file' | 'directory';
     children?: DirectoryItem[];
 }
 
 // ディレクトリツリーを取得する関数
-function readDirectory(baseDir: string, dir: string): DirectoryItem[] {
+function readDirectory(baseDir: string, dir: string, depth = 1): DirectoryItem[] {
     // 絶対パスから基準パスを超えていないかチェック
     const fullPath = path.resolve(baseDir, dir);
     if (!fullPath.startsWith(path.resolve(baseDir))) {
@@ -31,12 +32,14 @@ function readDirectory(baseDir: string, dir: string): DirectoryItem[] {
         if (stats.isDirectory()) {
             result.push({
                 name: file,
+                depth,
                 type: 'directory',
-                children: readDirectory(baseDir, path.join(dir, file))
+                children: readDirectory(baseDir, path.join(dir, file), depth + 1),
             });
         } else {
             result.push({
                 name: file,
+                depth,
                 type: 'file'
             });
         }
