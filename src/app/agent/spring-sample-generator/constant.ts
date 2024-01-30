@@ -1,7 +1,8 @@
 export function javaTypeToTypescript(type: string): string {
-    return type.split(/([<>,\s])/).map((t) =>
+    // generics内のアノテーションがある場合は除外する
+    return type.split(/([<>,\s])/).filter(t => !t.startsWith('@')).map((t) =>
         javaTypeToTypescriptMap[t.trim()] || t
-    ).join('').trim();
+    ).join('').trim().replace(/<\s+/g, '<');
 }
 
 /**
@@ -11,7 +12,8 @@ export function javaTypeToTypescript(type: string): string {
  */
 export function unmatchedType(type: string): string[] {
     const unmatched: string[] = [];
-    type.split(/([<>,\s])/).forEach((t) => {
+    // generics内のアノテーションがある場合は除外する
+    type.split(/([<>,\s])/).filter(t => !t.startsWith('@')).forEach((t) => {
         if (!javaTypeToTypescriptMap[t.trim()] && !t.match(/[<>,\s]+/) && t.trim()) {
             unmatched.push(t);
         } else { }
@@ -24,8 +26,16 @@ const javaTypeToTypescriptMap: Record<string, string> = {
     Object: 'object',
     String: 'string',
     Character: 'string',
+    char: 'string',
     Boolean: 'boolean',
+    boolean: 'boolean',
     // 数値系 ////////////////////////////
+    int: 'number',
+    float: 'number',
+    double: 'number',
+    long: 'number',
+    short: 'number',
+    byte: 'number',
     Integer: 'number',
     Float: 'number',
     Double: 'number',

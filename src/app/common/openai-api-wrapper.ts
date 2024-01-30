@@ -224,7 +224,7 @@ export class OpenAIApiWrapper {
             args.stream = true;
 
             // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
-            if (args.response_format?.type == 'json_object' && ['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo-1106'].indexOf(args.model) !== -1) {
+            if (args.response_format?.type == 'json_object' && ['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'].indexOf(args.model) !== -1) {
                 const userMessage = args.messages.filter(message => message.role === 'user');
                 const lastUserMessage = args.messages[args.messages.indexOf(userMessage[userMessage.length - 1])];
                 if (!(lastUserMessage.content as string).includes('json')) {

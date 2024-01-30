@@ -92,17 +92,19 @@ export abstract class BaseStep extends BaseStepInterface<string> {
     // model: GPTModels = 'gpt-4';
     model: GPTModels = 'gpt-4-1106-preview';
     systemMessage = 'You are an experienced and talented software engineer.';
-    presetMessage: ChatCompletionMessageParam[] = [];
     assistantMessage = '';
     visionPath = ''; // 画像読み込ませるとき用のパス。現状は1ステップ1画像のみにしておく。
     temperature = 0.0;
     format: StepOutputFormat = StepOutputFormat.MARKDOWN;
+    presetMessages: ChatCompletionMessageParam[] = []; // presetMessagesを使うと、presetMessagesをpromptの前にそのまま付与する。これはセルフリファインのために使う。
+    refineMessages: ChatCompletionMessageParam[] = []; // refineMessages セルフリファイン用のメッセージ。promptの実行後にrefineMessagesを付与して自動実行する。
 
     /** create prompt */
     chapters: StructuredPrompt[] = []; // {title: string, content: string, children: chapters[]}
 
     /** io */
     get promptPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.prompt.md`; }
+    get refinePath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.refine.md`; }
     get resultPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.result.md`; }
     get formedPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.result.${{ markdown: 'md', text: 'txt' }[this.format as any as string] || this.format.toString()}`; }
 
@@ -143,9 +145,9 @@ export abstract class BaseStep extends BaseStepInterface<string> {
                     messages.push({ role: 'system', content: this.systemMessage });
                 } else { }
 
-                // presetMessage
-                if (this.presetMessage.length > 0) {
-                    messages.push(...this.presetMessage);
+                // presetMessages
+                if (this.presetMessages.length > 0) {
+                    messages.push(...this.presetMessages);
                 } else { }
 
                 if (this.visionPath) {

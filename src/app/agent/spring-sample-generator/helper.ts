@@ -37,7 +37,6 @@ export const TIME_TYPE_COLUMN_DEFINITION: { [key: string]: string } = {
 };
 
 type MetaFieldType = { type: string, annotations: string[] };
-type MetaFields = Record<string, MetaFieldType>;
 type MetaModel = { classes: Record<string, { source: string, props: { type: string, name: string, annotations: string[], description: string }[] }>, enums: Record<string, { source: string, values: string[] }> };
 export class EntityClass {
     constructor(
@@ -68,13 +67,12 @@ export interface ServiceMethod {
     documentList: string[],
 }
 
-
 /**
  * JavaのDtoクラス用の簡易パーサー。クラス名とフィールド名とフィールド型のマップを返す。
  * @param code 
  * @returns 
  */
-export function parseJavaCode(code: string, PACKAGE_NAME: string): MetaModel {
+export function parseJavaModelCode(code: string, PACKAGE_NAME: string): MetaModel {
     // クラスを抽出
     const classRegex = /class\s+(\w+)\s*{([\s\S]*?)}/g;
     const fieldWithAnnotationRegex = /((?:\s*@\w+\s*(?:\([\s\S]*?\))?\s*)*)(\w+)\s+(\w+);/g;
@@ -82,7 +80,7 @@ export function parseJavaCode(code: string, PACKAGE_NAME: string): MetaModel {
     let match;
     while ((match = classRegex.exec(code)) !== null) {
 
-        const className = match[1];
+        const className = Utils.toPascalCase(match[1]);
         const classBody = match[2];
         classes[className] = { source: classBody, props: [] };
         JAVA_FQCN_MAP[className] = `${PACKAGE_NAME}.domain.entity.${className}`;
@@ -95,7 +93,7 @@ export function parseJavaCode(code: string, PACKAGE_NAME: string): MetaModel {
                 .filter(a => a.startsWith('@')) // アノテーションのみをフィルタリング
                 .map(a => a.trim()); // トリミングしてきれいにする
             const fieldType = fieldMatch[2];
-            const fieldName = fieldMatch[3];
+            const fieldName = Utils.toCamelCase(fieldMatch[3]);
             classes[className].props.push({
                 type: fieldType,
                 name: fieldName,
@@ -109,7 +107,7 @@ export function parseJavaCode(code: string, PACKAGE_NAME: string): MetaModel {
     const valueRegex = /\s*(\w+)\s*,/g;
     const enums: Record<string, { source: string, values: string[] }> = {};
     while ((match = enumRegex.exec(code)) !== null) {
-        const enumName = match[1];
+        const enumName = Utils.toPascalCase(match[1]);
         const enumBody = match[2];
         enums[enumName] = { source: enumBody, values: [] };
         JAVA_FQCN_MAP[enumName] = `${PACKAGE_NAME}.domain.enums.${enumName}`;
@@ -134,6 +132,211 @@ export class DtoClass {
     ) { }
 }
 
+/**
+ * サービスの型（メソッド名と入出力の型）が決まったら
+ * service interface と controller を生成する。
+ * @param serviceData 
+ * @param serviceModel 
+ * @param serviceDocs 
+ * @param entityData 
+ * @param PACKAGE_NAME 
+ * @returns 
+ */
+export function javaInterfaceMap(
+    serviceData: { [key: string]: { [key: string]: ServiceMethod } },
+    serviceModel: Record<string, DtoClass>,
+    serviceDocs: Record<string, string>,
+    entityData: EntityModelClass,
+    PACKAGE_NAME: string,
+): Record<string, { interface: string, controller: string }> {
+    const javaServiceSourceMap: Record<string, { interface: string, controller: string }> = {};
+    Object.keys(serviceData).forEach(serviceName => {
+        const pascalServiceName = Utils.toPascalCase(serviceName);
+
+        const methodObject: { methodName: string, methodSignature: string, controller: string }[] = [];
+
+        Object.keys(serviceData[serviceName]).forEach(methodName => {
+            const joinKey = Utils.safeFileName(`${serviceName}.${methodName}`);
+
+            // serviceDataから必要な情報を抽出
+            const methodData = serviceData[serviceName][methodName];
+            const pascalMethodName = Utils.toPascalCase(methodName);
+
+            // reqResDataからリクエストとレスポンスの構造体を生成
+            function modelToJava(dtoClass: DtoClass, depth: number = 1): string {
+                const indent = '\t'.repeat(depth);
+                return Utils.trimLines(`
+                    ${indent}@Data
+                    ${indent}${dtoClass.fields && dtoClass.fields.length > 0 ? '@AllArgsConstructor' : Utils.TRIM_LINES_DELETE_LINE}
+                    ${indent}@NoArgsConstructor
+                    ${indent}public static class ${dtoClass.name} {
+                    ${dtoClass.fields.map(field => field.annotations.map(anno => `\n${indent}\t${anno}`).join('') + `\n${indent}\tprivate ${field.type} ${field.name};`).join('') || '\n\t\t// no fields'}
+                    ${dtoClass.innerClasses.map(innerClass => `\n${modelToJava(innerClass, depth + 1)}`).join('\n') || Utils.TRIM_LINES_DELETE_LINE}
+                    ${indent}}
+                `);
+            }
+            const interfaceTypeList = serviceModel[serviceName].innerClasses
+                .filter(innerClass => innerClass.name.startsWith(`${pascalServiceName}${pascalMethodName}`))
+                // .filter(key => Object.keys(entityData.classes).indexOf(key) === -1)
+                .map(innerClass => modelToJava(innerClass)).join('\n\n');
+
+            // serviceDocsDataから処理概要を抽出（インターフェースのコメントに使用）
+            const match0 = serviceDocs[joinKey].match(/## 機能概要([\s\S]*?)## API仕様/);
+            const description = (match0 ? match0[1].trim() : '').split('\n').map(line => `\t * ${line}`).join('\n');
+
+            // serviceDocsDataからバックエンド処理詳細とビジネスロジックを抽出（実装のコメントに使用）
+            const match = serviceDocs[joinKey].match(/## バックエンド処理詳細([\s\S]*?)## ビジネスロジック([\s\S]*?)$/);
+            const backendDetail = (match ? match[1].trim() : '').split('\n').map(line => `\t * ${line}`).join('\n');
+            const businessLogic = (match ? match[2].trim() : '').split('\n').map(line => `\t * ${line}`).join('\n');
+
+            /**
+             * サービスのインターフェースを生成
+             */
+            const methodSignature = Utils.trimLines(`
+                ${interfaceTypeList}
+                \t
+                \t/**
+                \t * ${methodData.name}
+                \t * 
+                ${description}
+                \t * 
+                ${businessLogic}
+                \t *
+                \t * @param request
+                \t * @return 
+                \t */
+                \tpublic ${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(${pascalServiceName}${pascalMethodName}RequestDto request);
+                \t
+            `);
+
+            /**
+             * ControllerはHttpメソッドによって引数の受け取り方が異なるのでちょっと複雑
+             * 
+             * GET, DELETEの場合はpathVariableを受け取ってリクエストボディに変換する
+             * POST, PUT, PATCHの場合はpathVariableが無いように調整済みなのでリクエストボディのみを受け取る
+             */
+            // Controller用のメソッドを生成
+            let controllerMethodSignature;
+            // requestDtoのモデルからフィールドを取得する。
+            const reqDto = serviceModel[serviceName].innerClasses.find(innerClass => innerClass.name === `${pascalServiceName}${pascalMethodName}RequestDto`) || { fields: [] };
+            // console.log(methodData.method + ' '.repeat(4 - methodData.method.length), methodData.endpoint, methodData.pathVariableList, methodData.request);
+            if (['POST', 'PUT', 'PATCH'].includes(methodData.method)) {
+                // POST, PUT, PATCHの場合はpathVariableが無いように調整済みなのでリクエストボディのみを受け取る
+                controllerMethodSignature = Utils.trimLines(`
+                    \tpublic ${pascalServiceName}.${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(@Valid @RequestBody ${pascalServiceName}.${pascalServiceName}${pascalMethodName}RequestDto request) {
+                    \t\treturn ${Utils.toCamelCase(serviceName)}.${Utils.toCamelCase(methodName)}(request);
+                    \t}
+                `);
+            } else {
+                // GET, DELETEの場合はpathVariableを受け取る
+                controllerMethodSignature = Utils.trimLines(`
+                    \tpublic ${pascalServiceName}.${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(${methodData.pathVariableList.map((_, index) => `@PathVariable("${reqDto.fields[index].name}") ${reqDto.fields[index].type} ${reqDto.fields[index].name}`).join(', ')}) {
+                    \t\t${pascalServiceName}.${pascalServiceName}${pascalMethodName}RequestDto request = new ${pascalServiceName}.${pascalServiceName}${pascalMethodName}RequestDto();
+                    ${methodData.pathVariableList.map((_, index) => `\t\trequest.set${Utils.toPascalCase(reqDto.fields[index].name)}(${reqDto.fields[index].name});`).join('\n')}
+                    \t\treturn ${Utils.toCamelCase(serviceName)}.${Utils.toCamelCase(methodName)}(request);
+                    \t}
+                `);
+            }
+            const controller = Utils.trimLines(`
+                \t/**
+                \t * ${methodData.name}
+                \t * 
+                \t * @param request
+                \t * @return 
+                \t */
+                \t@${Utils.toPascalCase(methodData.method)}Mapping("${methodData.endpoint}")
+                \t@ResponseBody
+                ${controllerMethodSignature}
+                \t
+            `);
+
+            methodObject.push({
+                methodName,
+                methodSignature,
+                controller,
+            });
+        });
+
+        const serviceInterfaceTemplate = Utils.trimLines(`
+            package ${PACKAGE_NAME}.domain.service;
+
+            import lombok.Data;
+            import lombok.AllArgsConstructor;
+            import lombok.NoArgsConstructor;
+            import org.springframework.web.multipart.MultipartFile;
+            import java.io.File;
+            import java.math.BigDecimal;
+            import java.math.BigInteger;
+            import java.util.List;
+            import java.util.Map;
+            import java.time.LocalDate;
+            import java.time.LocalDateTime;
+            import java.time.LocalTime;
+            import java.time.Period;
+            import jakarta.validation.constraints.*;
+            import jakarta.validation.Valid;
+
+            import ${PACKAGE_NAME}.domain.entity.*;
+            import ${PACKAGE_NAME}.domain.enums.*;
+
+            /**
+             * ${serviceName}
+             */
+            public interface ${pascalServiceName} {
+            
+            ${methodObject.map(method => method.methodSignature).join('\n')}
+            }
+        `);
+
+        const controller = Utils.trimLines(`
+            package ${PACKAGE_NAME}.domain.controller;
+
+            import lombok.Data;
+            import lombok.extern.slf4j.Slf4j;
+            import java.util.List;
+            import java.time.LocalDate;
+            import java.time.LocalDateTime;
+            import java.time.LocalTime;
+            import org.springframework.beans.factory.annotation.Autowired;
+            import org.springframework.web.bind.annotation.*;
+            import jakarta.validation.Valid;
+            import ${PACKAGE_NAME}.domain.entity.*;
+            import ${PACKAGE_NAME}.domain.service.${pascalServiceName};
+
+            /**
+             * ${serviceName}Controller
+             */
+            @RestController
+            @Slf4j
+            public class ${pascalServiceName}Controller {
+            \t@Autowired
+            \tprivate ${pascalServiceName} ${Utils.toCamelCase(serviceName)};
+            
+            ${methodObject.map(method => method.controller).join('\n')}
+            }
+        `);
+
+        // 生成したテンプレートをキャッシュ
+        javaServiceSourceMap[serviceName] = {
+            interface: serviceInterfaceTemplate.replace(/\t/g, '    '), // タブをスペース4つに変換
+            controller: controller.replace(/\t/g, '    '),              // タブをスペース4つに変換
+        };
+    });
+    // return serviceTemplate.replace('${serviceName}', serviceName).replace('${methods}', methods.join('\n'));
+    return javaServiceSourceMap;
+}
+
+/**
+ * サービスの実装を生成するためのプロンプトに使う用のソース。
+ * 複数メソッドを一気に作らせると出力が安定しないので、
+ * 1メソッドだけ出力させるために1サービス1メソッドのテンプレートを作る。
+ * @param serviceList 
+ * @param serviceModel 
+ * @param serviceDocs 
+ * @param entityData 
+ * @param PACKAGE_NAME 
+ * @returns 
+ */
 export function javaServiceTemplateMap(
     serviceList: { [key: string]: { [key: string]: ServiceMethod } },
     serviceModel: Record<string, DtoClass>,
@@ -229,43 +432,183 @@ export function javaServiceTemplateMap(
             // 生成したテンプレートをキャッシュ
             javaServiceTemplateMap[joinKey] = serviceClassTemplate.replace(/\t/g, '    '); // タブをスペース4つに変換
 
-            methodObject.push({
-                methodSignature: Utils.trimLines(`
-                    ${interfaceTypeList}
-                    \t/**
-                    \t * ${methodData.name}
-                    \t */
-                    \tpublic ${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(${pascalServiceName}${pascalMethodName}RequestDto request);
-                `),
-            });
+            // methodObject.push({
+            //     methodSignature: Utils.trimLines(`
+            //         ${interfaceTypeList}
+            //         \t/**
+            //         \t * ${methodData.name}
+            //         \t */
+            //         \tpublic ${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(${pascalServiceName}${pascalMethodName}RequestDto request);
+            //     `),
+            // });
         });
 
-        // 生成したテンプレートをキャッシュ
-        javaServiceTemplateMap[serviceName] = Utils.trimLines(`
-            package ${PACKAGE_NAME}.domain.service;
-
-            import lombok.Data;
-            import java.util.List;
-            import java.util.Map;
-            import java.time.LocalDate;
-            import java.time.LocalDateTime;
-            import java.time.LocalTime;
-            import ${PACKAGE_NAME}.domain.entity.*;
-            import ${PACKAGE_NAME}.domain.enums.*;
-
-            /**
-             * ${serviceName}
-             */
-            public interface ${Utils.toPascalCase(serviceName)} {
-
-            ${methodObject.map(method => method.methodSignature).join('\n')}
-            }
-        `).replace(/\t/g, '    '); // タブをスペース4つに変換
+        // // serviceのインターフェースを組み立てる。これは参照用に使われるので、全メソッドをひとまとめにしておく。
+        // javaServiceTemplateMap[serviceName] = Utils.trimLines(`
+        //     package ${PACKAGE_NAME}.domain.service;
+        //     import lombok.Data;
+        //     import java.util.List;
+        //     import java.util.Map;
+        //     import java.time.LocalDate;
+        //     import java.time.LocalDateTime;
+        //     import java.time.LocalTime;
+        //     import ${PACKAGE_NAME}.domain.entity.*;
+        //     import ${PACKAGE_NAME}.domain.enums.*;
+        //     /**
+        //      * ${serviceName}
+        //      */
+        //     public interface ${Utils.toPascalCase(serviceName)} {
+        //     ${methodObject.map(method => method.methodSignature).join('\n')}
+        //     }
+        // `).replace(/\t/g, '    '); // タブをスペース4つに変換
     });
     return javaServiceTemplateMap;
 }
+
+/**
+ * サービスの型（メソッド名と入出力の型）が決まったら
+ * Angularのserviceを生成する。
+ * @param serviceList 
+ * @param serviceModel 
+ * @param serviceDocs 
+ * @param entityData 
+ * @returns 
+ */
+export function angularServiceMap(
+    serviceList: { [key: string]: { [key: string]: ServiceMethod } },
+    serviceModel: Record<string, DtoClass>,
+    serviceDocs: Record<string, string>,
+    entityData: EntityModelClass,
+): Record<string, string> {
+
+    // 独自定義の型
+    const models = [...Object.keys(entityData.classes), ...Object.keys(entityData.enums)];
+
+    const angularServiceSourceMap: Record<string, string> = {};
+    Object.keys(serviceList).forEach(serviceName => {
+        const pascalServiceName = Utils.toPascalCase(serviceName);
+
+        const methodObject: { methodName: string, angularServiceInterface: string, angularService: string }[] = [];
+
+        const angularUnmatchedTypeSet = new Set<string>();
+        const angularDefineTypeSet = new Set<string>();
+        Object.keys(serviceList[serviceName]).forEach(methodName => {
+            const joinKey = Utils.safeFileName(`${serviceName}.${methodName}`);
+
+            // serviceDataから必要な情報を抽出
+            const methodData = serviceList[serviceName][methodName];
+            const pascalMethodName = Utils.toPascalCase(methodName);
+
+            // serviceDocsDataから処理概要を抽出（インターフェースのコメントに使用）
+            const match0 = serviceDocs[joinKey].match(/## 機能概要([\s\S]*?)## API仕様/);
+            const description = (match0 ? match0[1].trim() : '').split('\n').map(line => `\t * ${line}`).join('\n');
+
+            // requestDtoのモデルからリクエストとレスポンスの構造体を生成
+            function modelToTypescript(dtoClass: DtoClass): string {
+                // 未対応の型を抽出
+                dtoClass.fields.forEach(field => unmatchedType(field.type).forEach(type => { angularUnmatchedTypeSet.add(type); }));
+                // ここで定義する型を抽出
+                angularDefineTypeSet.add(dtoClass.name);
+                return Utils.trimLines(`
+                    export interface ${dtoClass.name} {
+                    ${dtoClass.fields.map(field => `\n\t${field.name}: ${javaTypeToTypescript(field.type)};`).join('') || '\n\t// no fields'}
+                    }
+                    ${dtoClass.innerClasses.map(innerClass => `\n${modelToTypescript(innerClass)}`).join('\n') || Utils.TRIM_LINES_DELETE_LINE}
+                `);
+            }
+            // Angularの型定義を組み立てる
+            const angularServiceInterface = serviceModel[serviceName].innerClasses
+                .filter(innerClass => innerClass.name.startsWith(`${pascalServiceName}${pascalMethodName}`))
+                // .filter(key => Object.keys(entityData.classes).indexOf(key) === -1)
+                .map(innerClass => modelToTypescript(innerClass)).join('\n\n');
+
+            // メソッドシグネチャを組み立てる
+            let angularServiceMethodSignature;
+            // console.log(methodData.method + ' '.repeat(4 - methodData.method.length), methodData.endpoint, methodData.pathVariableList, methodData.request);
+            if (['POST', 'PUT', 'PATCH'].includes(methodData.method)) {
+                // POST, PUT, PATCHの場合はpathVariableが無いように調整済みなのでリクエストボディのみを受け取る
+                angularServiceMethodSignature = Utils.trimLines(`
+                    \t${Utils.toCamelCase(methodName)}(requestDto: ${pascalServiceName}${pascalMethodName}RequestDto): Observable<${pascalServiceName}${pascalMethodName}ResponseDto> {
+                    \t\treturn this.http.${methodData.method.toLowerCase()}<${pascalServiceName}${pascalMethodName}ResponseDto>(\`\${this.apiUrl}${methodData.endpoint}\`, requestDto, { headers: this.getHeaders() });
+                    \t}
+                `);
+            } else {
+                // GET, DELETEの場合はpathVariableを受け取る
+                const endpoint = methodData.endpoint.replace(/\{(\w+)\}/g, '\${requestDto.$1}');
+                angularServiceMethodSignature = Utils.trimLines(`
+                    \t${Utils.toCamelCase(methodName)}(requestDto: ${pascalServiceName}${pascalMethodName}RequestDto): Observable<${pascalServiceName}${pascalMethodName}ResponseDto> {
+                    \t\treturn this.http.${methodData.method.toLowerCase()}<${pascalServiceName}${pascalMethodName}ResponseDto>(\`\${this.apiUrl}${endpoint}\`, { headers: this.getHeaders() });
+                    \t}
+                `);
+            }
+
+            // メソッドのソースを組み立てる
+            const angularService = Utils.trimLines(`
+                \t/**
+                \t * ${methodData.name}
+                \t *
+                \t * # 処理詳細
+                ${description}
+                \t *
+                \t * @param request
+                \t * @return
+                \t */
+                ${angularServiceMethodSignature}
+                \t
+            `);
+            // console.log(angularService);
+
+            methodObject.push({ methodName, angularServiceInterface, angularService, });
+        });
+
+        // 独自定義のうち、サービス内で定義する型を除外する。
+        Array.from(angularDefineTypeSet).forEach(type => angularUnmatchedTypeSet.delete(type));
+        // サービスのソースを組み立てる
+        const angularService = Utils.trimLines(`
+            import { Injectable } from '@angular/core';
+            import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
+            import { Observable } from 'rxjs';
+            import { environment } from 'src/environments/environment';
+            import { ${Array.from(angularUnmatchedTypeSet).filter(type => models.includes(type)).join(', ')} } from '../models/models';
+
+            @Injectable({ providedIn: 'root' })
+            export class ${pascalServiceName} {
+            
+            \tprivate apiUrl = environment.apiUrl + '/api/v1';
+            \tconstructor(private http: HttpClient) { }
+            
+            \tprivate getHeaders(): HttpHeaders {
+            \t\treturn new HttpHeaders({
+            \t\t\t'Content-Type': 'application/json',
+            \t\t\t'Authorization': 'Bearer ' + localStorage.getItem('token'),
+            \t\t});
+            \t}
+            
+            ${methodObject.map(method => method.angularService).join('\n')}
+            }
+
+            ${methodObject.map(method => method.angularServiceInterface).join('\n')}
+        `);
+        // console.log(angularService);
+
+        // 生成したテンプレートをキャッシュ
+        angularServiceSourceMap[serviceName] = angularService.replace(/\t/g, '    ');      // タブをスペース4つに変換;
+    });
+    return angularServiceSourceMap;
+}
+
+/**
+ * 実装が決まったらテンプレートにはめ込む
+ * @param serviceList 
+ * @param serviceModel 
+ * @param serviceDocs 
+ * @param serviceImplData 
+ * @param entityData 
+ * @param PACKAGE_NAME 
+ * @returns 
+ */
 export function javaServiceImplementsMap(
-    serviceData: { [key: string]: { [key: string]: ServiceMethod } },
+    serviceList: { [key: string]: { [key: string]: ServiceMethod } },
     serviceModel: Record<string, DtoClass>,
     serviceDocs: Record<string, string>,
     serviceImplData: Record<string, {
@@ -276,46 +619,25 @@ export function javaServiceImplementsMap(
     }>,
     entityData: EntityModelClass,
     PACKAGE_NAME: string,
-): Record<string, { implement: string, interface: string, controller: string, angularService: string }> {
-    const javaServiceSourceMap: Record<string, { implement: string, interface: string, controller: string, angularService: string }> = {};
-    Object.keys(serviceData).forEach(serviceName => {
+): Record<string, { implement: string }> {
+    const javaServiceSourceMap: Record<string, { implement: string }> = {};
+    Object.keys(serviceList).forEach(serviceName => {
         const pascalServiceName = Utils.toPascalCase(serviceName);
 
-        const methodObject: { name: string, pascalMethodName: string, interfaceTypeList: string, methodBody: string, methodSignature: string, controller: string, angularServiceInterface: string, angularService: string }[] = [];
+        const methodObject: { methodName: string, methodBody: string, }[] = [];
         const imports = new Set<string>();
         const injections = new Set<string>();
-        
-        const angularUnmatchedTypeSet = new Set<string>();
-        const angularDefineTypeSet = new Set<string>();
-        Object.keys(serviceData[serviceName]).forEach(methodName => {
+
+        Object.keys(serviceList[serviceName]).forEach(methodName => {
             const joinKey = Utils.safeFileName(`${serviceName}.${methodName}`);
 
             // serviceDataから必要な情報を抽出
-            const methodData = serviceData[serviceName][methodName];
+            const methodData = serviceList[serviceName][methodName];
             const pascalMethodName = Utils.toPascalCase(methodName);
-
-            // reqResDataからリクエストとレスポンスの構造体を生成
-            function modelToJava(dtoClass: DtoClass, depth: number = 1): string {
-                const indent = '\t'.repeat(depth);
-                return Utils.trimLines(`
-                    ${indent}@Data
-                    ${indent}${dtoClass.fields && dtoClass.fields.length > 0 ? '@AllArgsConstructor' : Utils.TRIM_LINES_DELETE_LINE}
-                    ${indent}@NoArgsConstructor
-                    ${indent}public static class ${dtoClass.name} {
-                    ${dtoClass.fields.map(field => field.annotations.map(anno => `\n${indent}\t${anno}`).join('') + `\n${indent}\tprivate ${field.type} ${field.name};`).join('') || '\n\t\t// no fields'}
-                    ${dtoClass.innerClasses.map(innerClass => `\n${modelToJava(innerClass, depth + 1)}`).join('\n') || Utils.TRIM_LINES_DELETE_LINE}
-                    ${indent}}
-                `);
-            }
-            const interfaceTypeList = serviceModel[serviceName].innerClasses
-                .filter(innerClass => innerClass.name.startsWith(`${pascalServiceName}${pascalMethodName}`))
-                // .filter(key => Object.keys(entityData.classes).indexOf(key) === -1)
-                .map(innerClass => modelToJava(innerClass)).join('\n\n');
 
             // serviceDocsDataから処理概要を抽出（インターフェースのコメントに使用）
             const match0 = serviceDocs[joinKey].match(/## 機能概要([\s\S]*?)## API仕様/);
             const description = (match0 ? match0[1].trim() : '').split('\n').map(line => `\t * ${line}`).join('\n');
-
 
             // serviceDocsDataからバックエンド処理詳細とビジネスロジックを抽出（実装のコメントに使用）
             const match = serviceDocs[joinKey].match(/## バックエンド処理詳細([\s\S]*?)## ビジネスロジック([\s\S]*?)$/);
@@ -398,120 +720,9 @@ export function javaServiceImplementsMap(
                 \t}
                 \t
             `);
-            // 
-            // console.log(methodBody);
-            const methodSignature = Utils.trimLines(`
-                ${interfaceTypeList}
-                \t
-                \t/**
-                \t * ${methodData.name}
-                \t * 
-                ${description}
-                \t * 
-                \t * @param request
-                \t * @return 
-                \t */
-                \tpublic ${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(${pascalServiceName}${pascalMethodName}RequestDto request);
-                \t
-            `);
-
-
-            // Controller用のメソッドを生成
-            let controllerMethodSignature;
-            // requestDtoのモデルからフィールドを取得する。
-            const reqDto = serviceModel[serviceName].innerClasses.find(innerClass => innerClass.name === `${pascalServiceName}${pascalMethodName}RequestDto`) || { fields: [] };
-            // console.log(methodData.method + ' '.repeat(4 - methodData.method.length), methodData.endpoint, methodData.pathVariableList, methodData.request);
-            if (['POST', 'PUT', 'PATCH'].includes(methodData.method)) {
-                // POST, PUT, PATCHの場合はpathVariableが無いように調整済みなのでリクエストボディのみを受け取る
-                controllerMethodSignature = Utils.trimLines(`
-                    \tpublic ${pascalServiceName}.${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(@Valid @RequestBody ${pascalServiceName}.${pascalServiceName}${pascalMethodName}RequestDto request) {
-                    \t\treturn ${Utils.toCamelCase(serviceName)}.${Utils.toCamelCase(methodName)}(request);
-                    \t}
-                `);
-            } else {
-                // GET, DELETEの場合はpathVariableを受け取る
-                controllerMethodSignature = Utils.trimLines(`
-                    \tpublic ${pascalServiceName}.${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(${methodData.pathVariableList.map((_, index) => `@PathVariable("${reqDto.fields[index].name}") ${reqDto.fields[index].type} ${reqDto.fields[index].name}`).join(', ')}) {
-                    \t\t${pascalServiceName}.${pascalServiceName}${pascalMethodName}RequestDto request = new ${pascalServiceName}.${pascalServiceName}${pascalMethodName}RequestDto();
-                    ${methodData.pathVariableList.map((_, index) => `\t\trequest.set${Utils.toPascalCase(reqDto.fields[index].name)}(${reqDto.fields[index].name});`).join('\n')}
-                    \t\treturn ${Utils.toCamelCase(serviceName)}.${Utils.toCamelCase(methodName)}(request);
-                    \t}
-                `);
-            }
-            const controller = Utils.trimLines(`
-                \t/**
-                \t * ${methodData.name}
-                \t * 
-                \t * @param request
-                \t * @return 
-                \t */
-                \t@${Utils.toPascalCase(methodData.method)}Mapping("${methodData.endpoint}")
-                \t@ResponseBody
-                ${controllerMethodSignature}
-                \t
-            `);
-
-
-            ////////////////////////////////
-            // Angular用のメソッドを生成
-            ////////////////////////////////
-            // reqResDataからリクエストとレスポンスの構造体を生成
-            function modelToTypescript(dtoClass: DtoClass): string {
-                // 未対応の型を抽出
-                dtoClass.fields.forEach(field => unmatchedType(field.type).forEach(type => { angularUnmatchedTypeSet.add(type); }));
-                // ここで定義する型を抽出
-                angularDefineTypeSet.add(dtoClass.name);
-                return Utils.trimLines(`
-                    export interface ${dtoClass.name} {
-                    ${dtoClass.fields.map(field => `\n\t${field.name}: ${javaTypeToTypescript(field.type)};`).join('') || '\n\t\t// no fields'}
-                    }
-                    ${dtoClass.innerClasses.map(innerClass => `\n${modelToTypescript(innerClass)}`).join('\n') || Utils.TRIM_LINES_DELETE_LINE}
-                `);
-            }
-            const angularServiceInterface = serviceModel[serviceName].innerClasses
-                .filter(innerClass => innerClass.name.startsWith(`${pascalServiceName}${pascalMethodName}`))
-                // .filter(key => Object.keys(entityData.classes).indexOf(key) === -1)
-                .map(innerClass => modelToTypescript(innerClass)).join('\n\n');
-
-            let angularServiceMethodSignature;
-            // console.log(methodData.method + ' '.repeat(4 - methodData.method.length), methodData.endpoint, methodData.pathVariableList, methodData.request);
-            if (['POST', 'PUT', 'PATCH'].includes(methodData.method)) {
-                // POST, PUT, PATCHの場合はpathVariableが無いように調整済みなのでリクエストボディのみを受け取る
-                angularServiceMethodSignature = Utils.trimLines(`
-                    \t${Utils.toCamelCase(methodName)}(requestDto: ${pascalServiceName}${pascalMethodName}RequestDto): Observable<${pascalServiceName}${pascalMethodName}ResponseDto> {
-                    \t\treturn this.http.${methodData.method.toLowerCase()}<${pascalServiceName}${pascalMethodName}ResponseDto>(\`\${this.baseUrl}${methodData.endpoint}\`, requestDto, { headers: this.getHeaders() });
-                    \t}
-                `);
-            } else {
-                // GET, DELETEの場合はpathVariableを受け取る
-                const endpoint = methodData.endpoint.replace(/\{(\w+)\}/g, '\${requestDto.$1}');
-                angularServiceMethodSignature = Utils.trimLines(`
-                    \t${Utils.toCamelCase(methodName)}(requestDto: ${pascalServiceName}${pascalMethodName}RequestDto): Observable<${pascalServiceName}${pascalMethodName}ResponseDto> {
-                    \t\treturn this.http.${methodData.method.toLowerCase()}<${pascalServiceName}${pascalMethodName}ResponseDto>(\`\${this.baseUrl}${endpoint}\`, { headers: this.getHeaders() });
-                    \t}
-                `);
-            }
-            const angularService = Utils.trimLines(`
-                \t/**
-                \t * ${methodData.name}
-                \t *
-                \t * @param request
-                \t * @return
-                \t */
-                ${angularServiceMethodSignature}
-                \t
-            `);
-            // console.log(angularService);
-
             methodObject.push({
-                name: methodName,
-                pascalMethodName,
-                interfaceTypeList,
+                methodName,
                 methodBody,
-                methodSignature,
-                controller,
-                angularServiceInterface,
-                angularService,
             });
         });
 
@@ -574,109 +785,12 @@ export function javaServiceImplementsMap(
             }
         `);
 
-        const serviceInterfaceTemplate = Utils.trimLines(`
-            package ${PACKAGE_NAME}.domain.service;
-
-            import lombok.Data;
-            import lombok.AllArgsConstructor;
-            import lombok.NoArgsConstructor;
-            import org.springframework.web.multipart.MultipartFile;
-            import java.io.File;
-            import java.time.Period;
-            import java.math.BigDecimal;
-            import java.math.BigInteger;
-            import java.util.List;
-            import java.util.Map;
-            import java.time.LocalDate;
-            import java.time.LocalDateTime;
-            import java.time.LocalTime;
-            import jakarta.validation.constraints.*;
-            import jakarta.validation.Valid;
-
-            import ${PACKAGE_NAME}.domain.entity.*;
-            import ${PACKAGE_NAME}.domain.enums.*;
-
-            /**
-             * ${serviceName}
-             */
-            public interface ${pascalServiceName} {
-            
-            ${methodObject.map(method => method.methodSignature).join('\n')}
-            }
-        `);
-
-        // import org.springframework.web.bind.annotation.RestController;
-        // import org.springframework.web.bind.annotation.GetMapping;
-        // import org.springframework.web.bind.annotation.PutMapping;
-        // import org.springframework.web.bind.annotation.PostMapping;
-        // import org.springframework.web.bind.annotation.DeleteMapping;
-        // import org.springframework.web.bind.annotation.ResponseBody;
-        // import org.springframework.web.bind.annotation.RequestBody;
-        const controller = Utils.trimLines(`
-            package ${PACKAGE_NAME}.domain.controller;
-
-            import lombok.Data;
-            import lombok.extern.slf4j.Slf4j;
-            import java.util.List;
-            import java.time.LocalDate;
-            import java.time.LocalDateTime;
-            import java.time.LocalTime;
-            import org.springframework.beans.factory.annotation.Autowired;
-            import org.springframework.web.bind.annotation.*;
-            import jakarta.validation.Valid;
-            import ${PACKAGE_NAME}.domain.entity.*;
-            import ${PACKAGE_NAME}.domain.service.${pascalServiceName};
-
-            /**
-             * ${serviceName}Controller
-             */
-            @RestController
-            @Slf4j
-            public class ${pascalServiceName}Controller {
-            \t@Autowired
-            \tprivate ${pascalServiceName} ${Utils.toCamelCase(serviceName)};
-            
-            ${methodObject.map(method => method.controller).join('\n')}
-            }
-        `);
-
-        // 未対応の型を抽出
-        Array.from(angularDefineTypeSet).forEach(type => angularUnmatchedTypeSet.delete(type));
-        const angularService = Utils.trimLines(`
-            import { Injectable } from '@angular/core';
-            import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
-            import { Observable } from 'rxjs';
-            import { environment } from 'src/environments/environment';
-            import { ${Array.from(angularUnmatchedTypeSet).join(', ')} } from '../models/models';
-
-            @Injectable({ providedIn: 'root' })
-            export class ${pascalServiceName} {
-            
-            \tprivate baseUrl = environment.baseUrl + '/api/v1';
-            \tconstructor(private http: HttpClient) { }
-            
-            \tprivate getHeaders(): HttpHeaders {
-            \t\treturn new HttpHeaders({
-            \t\t\t'Content-Type': 'application/json',
-            \t\t\t'Authorization': 'Bearer ' + localStorage.getItem('token'),
-            \t\t});
-            \t}
-            
-            ${methodObject.map(method => method.angularService).join('\n')}
-            }
-
-            ${methodObject.map(method => method.angularServiceInterface).join('\n')}
-        `);
-        // console.log(angularService);
-
         // 生成したテンプレートをキャッシュ
         javaServiceSourceMap[serviceName] = {
             implement: serviceClassImplement.replace(/\t/g, '    '),    // タブをスペース4つに変換
-            interface: serviceInterfaceTemplate.replace(/\t/g, '    '), // タブをスペース4つに変換
-            controller: controller.replace(/\t/g, '    '),              // タブをスペース4つに変換
-            angularService: angularService.replace(/\t/g, '    '),      // タブをスペース4つに変換
         };
     });
     // return serviceTemplate.replace('${serviceName}', serviceName).replace('${methods}', methods.join('\n'));
     return javaServiceSourceMap;
 }
+

@@ -20,13 +20,13 @@ export class ApiInterceptor implements HttpInterceptor {
     intercept(request: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {
         let url;
         // パスだけ取得？
-        // let url = request.url.replace(/https?:\/\/[^/]+/g, '').replace('//', '/').replace(/^\//g, '');
+        // let url = request.url.replace(/https?:\\/\\/[^/]+/g, '').replace('//', '/').replace(/^\\//g, '');
         let method = request.method;
         // console.log(\`\${method} \${url}\`);
         // 開発環境の場合はローカルのjsonファイルに向ける
         // !environment.production ||
         if (this.g.queries['isMock']) {
-            url = request.url.replace(/https?:\/\/[^/]+/g, '').replace('//', '/').replace(/^\//g, '').replace(/\/$/, '');
+            url = request.url.replace(/https?:\\/\\/[^/]+/g, '').replace('//', '/').replace(/^\\//g, '').replace(/\\/$/, '');
             url = \`assets/mock/api/\${url}-\${request.method}.json\`;
             method = 'GET';
         } else {
