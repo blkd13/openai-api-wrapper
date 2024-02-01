@@ -135,7 +135,25 @@ export const JAVA_FQCN_MAP: Record<string, string> = {
     Max: 'jakarta.validation.constraints.Max',
     DecimalMin: 'jakarta.validation.constraints.DecimalMin',
     DecimalMax: 'jakarta.validation.constraints.DecimalMax',
+
+    PastOrPresent: 'jakarta.validation.constraints.PastOrPresent',
+    FutureOrPresent: 'jakarta.validation.constraints.FutureOrPresent',
+    Past: 'jakarta.validation.constraints.Past',
+
+    Email: 'jakarta.validation.constraints.Email',
+    Positive: 'jakarta.validation.constraints.Positive',
+    PositiveOrZero: 'jakarta.validation.constraints.PositiveOrZero',
+    Negative: 'jakarta.validation.constraints.Negative',
+    NegativeOrZero: 'jakarta.validation.constraints.NegativeOrZero',
+    NotEmpty: 'jakarta.validation.constraints.NotEmpty',
+    NotNegative: 'jakarta.validation.constraints.NotNegative',
+    NotPositive: 'jakarta.validation.constraints.NotPositive',
+    Pattern: 'jakarta.validation.constraints.Pattern',
+
     Valid: 'jakarta.validation.Valid',
+    // org.hibernate.validator.constraints: 'org.hibernate.validator.constraints.*',
+    Range: 'org.hibernate.validator.constraints.Range',
+    Length: 'org.hibernate.validator.constraints.Length',
 
 
     // org.springframework.data.jpa.repository: 'org.springframework.data.jpa.repository.*',
@@ -145,6 +163,19 @@ export const JAVA_FQCN_MAP: Record<string, string> = {
     Autowired: 'org.springframework.beans.factory.annotation.Autowired',
     HttpStatus: 'org.springframework.http.HttpStatus',
     Transactional: 'org.springframework.transaction.annotation.Transactional',
+
+    RestController: 'org.springframework.web.bind.annotation.RestController',
+    RequestMapping: 'org.springframework.web.bind.annotation.RequestMapping',
+    GetMapping: 'org.springframework.web.bind.annotation.GetMapping',
+    PostMapping: 'org.springframework.web.bind.annotation.PostMapping',
+    PutMapping: 'org.springframework.web.bind.annotation.PutMapping',
+    DeleteMapping: 'org.springframework.web.bind.annotation.DeleteMapping',
+    PathVariable: 'org.springframework.web.bind.annotation.PathVariable',
+    RequestBody: 'org.springframework.web.bind.annotation.RequestBody',
+    ResponseBody: 'org.springframework.web.bind.annotation.ResponseBody',
+    Validated: 'org.springframework.validation.annotation.Validated',
+    // Valid: 'org.springframework.validation.annotation.Valid',
+    
 
     // lombok: 'lombok.*',
     RequiredArgsConstructor: 'lombok.RequiredArgsConstructor',

@@ -151,26 +151,6 @@ export class Utils {
         }, []);
     }
 
-    // /**
-    //  * Markdownのコードブロックを```を外したものにする。
-    //  * @param {string} text - Markdown形式のテキスト
-    //  * @returns {string} コメント形式に変換されたテキスト
-    //  */
-    // static convertCodeBlocks(text: string): string {
-    //     let split = text.split(/```.*\n|```$/, -1);
-    //     return split.map((code, index) => {
-    //         if (code.length === 0) {
-    //             return code;
-    //         } else {
-    //             if (index % 2 === 1) {
-    //                 return code;
-    //             } else {
-    //                 return code.split('\n').map(line => `// ${line}`).join('\n');
-    //             }
-    //         }
-    //     }).join('');
-    // }
-
     /**
      * JSONを安全にstringifyする関数を生成する
      */
@@ -296,6 +276,25 @@ export class Utils {
             }).join('\n');
         }
     }
+    // /**
+    //  * Markdownのコードブロックを```を外したものにする。
+    //  * @param {string} text - Markdown形式のテキスト
+    //  * @returns {string} コメント形式に変換されたテキスト
+    //  */
+    // static mdCodeBlockToCode(text: string): string {
+    //     let split = text.split(/```.*\n|```$/, -1);
+    //     return split.map((code, index) => {
+    //         if (code.length === 0) {
+    //             return code;
+    //         } else {
+    //             if (index % 2 === 1) {
+    //                 return code;
+    //             } else {
+    //                 return code.split('\n').map(line => `// ${line}`).join('\n');
+    //             }
+    //         }
+    //     }).join('');
+    // }
 
     static fillTemplate(data: { [key: string]: string }, template: string): string {
         return template.replace(/{{(\w+)}}/g, (match, key) => data[key] || "");
@@ -374,34 +373,36 @@ export class Utils {
     }
 
     /**
-     * テンプレート文字列中の ${varName} を変数で置換する。
+     * テンプレート文字列中の {{varName}} を変数で置換する。
+     * ${varName}にしたいときは => \$\{([^}]+)\}
      * @param template 
      * @param variables 
      * @returns 
      */
-    static replaceTemplateString(template: string, variables: { [key: string]: any }): string {
-        return template.replace(/\$\{([^}]+)\}/g, (_, name) => {
+    static replaceTemplateString(template: string, variables: { [key: string]: any }, patternString: string = '\{\{([^}]+)\}\}'): string {
+        return template.replace(new RegExp(patternString, 'g'), (_, name) => {
             // console.log(name, variables);
             // ヒットしなかったら置換しない
-            return variables[name] === null || variables[name] === undefined ? `\${${name}}` : variables[name];
+            return variables[name] === null || variables[name] === undefined ? `{{${name}}}` : variables[name];
         });
     }
 
     /**
-     * テンプレート文字列中の ${varName} を変数で置換する。
+     * テンプレート文字列中の {{varName}} を変数で置換する。
      * ※変数がオブジェクトの場合はドットで区切って再帰的に置換する。
+     * ${varName}にしたいときは => \$\{([^}]+)\}
      * @param template 
      * @param variables 
      * @returns 
      */
-    static replaceTemplateStringDeep(template: string, variables: { [key: string]: any }): string {
-        return template.replace(/\$\{([^}]+)\}/g, (_, name) => {
+    static replaceTemplateStringDeep(template: string, variables: { [key: string]: any }, patternString: string = '\{\{([^}]+)\}\}'): string {
+        return template.replace(new RegExp(patternString, 'g'), (_, name) => {
             const replace = name.split('.').reduce((acc: { [key: string]: any }, key: string) => {
                 if (acc === null || acc === undefined) { return acc; }
                 return acc[key];
             }, variables);
             // ヒットしなかったら置換しない
-            return replace === null || replace === undefined ? `\${${name}}` : replace;
+            return replace === null || replace === undefined ? `{{${name}}}` : replace;
         });
     }
 

@@ -51,3 +51,4 @@ history.log
 /data/
 *.gen.ts
 .env
+/nbproject/private/

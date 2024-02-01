@@ -5,6 +5,8 @@ import jakarta.persistence.Column;
 import jakarta.persistence.MappedSuperclass;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
+import jakarta.persistence.Temporal;
+import jakarta.persistence.TemporalType;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -29,14 +31,14 @@ public class BaseEntity implements Serializable {
 
   @PrePersist
   public void onPrePersist() {
-    this.tsIns = LocalDateTime.now();
-    this.tsUpd = LocalDateTime.now();
+    this.createdAt = LocalDateTime.now();
+    this.updatedAt = LocalDateTime.now();
 //    log.info("INS:" + this.tsIns);
   }
 
   @PreUpdate
   public void onPreUpdate() {
-    this.tsUpd = LocalDateTime.now();
+    this.updatedAt = LocalDateTime.now();
 //    log.info("UPD:" + this.tsUpd);
   }
 }

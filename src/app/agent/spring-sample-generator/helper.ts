@@ -19,6 +19,17 @@ export function structToOpenApiSchema(struct: Record<string, string>): Record<st
     };
 }
 
+export const LITERAL_TYPE_REMAP: { [key: string]: string } = {
+    int: 'Integer',
+    long: 'Long',
+    float: 'Float',
+    double: 'Double',
+    boolean: 'Boolean',
+    char: 'Character',
+    byte: 'Byte',
+    short: 'Short',
+};
+
 // Date, Time, DateTimeの場合は、@Column(columnDefinition)を付与
 export const TIME_TYPE_REMAP: { [key: string]: string } = {
     Date: 'LocalDate',
@@ -36,23 +47,18 @@ export const TIME_TYPE_COLUMN_DEFINITION: { [key: string]: string } = {
     LocalDateTime: 'TIMESTAMP',
 };
 
-type MetaFieldType = { type: string, annotations: string[] };
-type MetaModel = { classes: Record<string, { source: string, props: { type: string, name: string, annotations: string[], description: string }[] }>, enums: Record<string, { source: string, values: string[] }> };
-export class EntityClass {
-    constructor(
-        public type: 'entity' | 'valueObject',
-        public name: string,
-        public imports: Set<string> = new Set(),
-        public fields: { name: string, type: string, annotations: string[], description: string }[] = [],
-        public annotations: string[] = [],
-        public source: string = '',
-    ) { }
-}
-export interface EntityModelClass {
-    entityNameList: string[];
-    classes: Record<string, EntityClass>;
-    enums: Record<string, { source: string, values: string[] }>;
-}
+export type EntityValueObjectType = {
+    type: 'entity' | 'valueObject', imports: string[], annotations: string[], source: string, mdTable: string, relatedClasses: string[],
+    props: { type: string, strippedType: string, name: string, annotations: string[], isOptional: boolean, description: string }[]
+};
+export type EnumType = { type: 'enum', source: string, mdTable: string, values: string[] };
+export type EntityDetailFilledType = {
+    classes: Record<string, EntityValueObjectType>,
+    enums: Record<string, EnumType>,
+    entityNameList: string[], valueObjectNameList: string[], enumNameList: string[],
+};
+
+export type EntityValueObjectEnumSimpleType = { classes: Record<string, { source: string, props: { type: string, name: string, annotations: string[], description: string }[] }>, enums: Record<string, { source: string, values: string[] }> };
 
 export interface ServiceMethod {
     name: string,
@@ -72,7 +78,7 @@ export interface ServiceMethod {
  * @param code 
  * @returns 
  */
-export function parseJavaModelCode(code: string, PACKAGE_NAME: string): MetaModel {
+export function parseJavaModelCode(code: string, PACKAGE_NAME: string): EntityValueObjectEnumSimpleType {
     // クラスを抽出
     const classRegex = /class\s+(\w+)\s*{([\s\S]*?)}/g;
     const fieldWithAnnotationRegex = /((?:\s*@\w+\s*(?:\([\s\S]*?\))?\s*)*)(\w+)\s+(\w+);/g;
@@ -92,8 +98,17 @@ export function parseJavaModelCode(code: string, PACKAGE_NAME: string): MetaMode
                 .split(/\s+/) // アノテーションを分割
                 .filter(a => a.startsWith('@')) // アノテーションのみをフィルタリング
                 .map(a => a.trim()); // トリミングしてきれいにする
-            const fieldType = fieldMatch[2];
+            let fieldType = fieldMatch[2];
             const fieldName = Utils.toCamelCase(fieldMatch[3]);
+
+            // List<>の場合はジェネリクスの中身を取り出す
+            const innerTypeMatch = fieldType.match(/<(.+)>/);
+            if (innerTypeMatch) {
+                fieldType = innerTypeMatch[1];
+            }
+            // リテラルだったらオブジェクト型に変換
+            LITERAL_TYPE_REMAP[fieldType] && (fieldType = fieldType.replace(fieldType, LITERAL_TYPE_REMAP[fieldType]));
+
             classes[className].props.push({
                 type: fieldType,
                 name: fieldName,
@@ -104,7 +119,7 @@ export function parseJavaModelCode(code: string, PACKAGE_NAME: string): MetaMode
     }
 
     const enumRegex = /enum\s+(\w+)\s*{([\s\S]*?)}/g;
-    const valueRegex = /\s*(\w+)\s*,/g;
+    const valueRegex = /\s*(\w+)\s*,?/g;
     const enums: Record<string, { source: string, values: string[] }> = {};
     while ((match = enumRegex.exec(code)) !== null) {
         const enumName = Utils.toPascalCase(match[1]);
@@ -116,6 +131,7 @@ export function parseJavaModelCode(code: string, PACKAGE_NAME: string): MetaMode
         while ((valueMatch = valueRegex.exec(enumBody)) !== null) {
             const value = valueMatch[1];
             enums[enumName].values.push(value);
+            // console.log(enumName, value);
         }
     }
 
@@ -146,14 +162,18 @@ export function javaInterfaceMap(
     serviceData: { [key: string]: { [key: string]: ServiceMethod } },
     serviceModel: Record<string, DtoClass>,
     serviceDocs: Record<string, string>,
-    entityData: EntityModelClass,
+    entityData: EntityDetailFilledType,
     PACKAGE_NAME: string,
 ): Record<string, { interface: string, controller: string }> {
     const javaServiceSourceMap: Record<string, { interface: string, controller: string }> = {};
+    const entityValueObjectNameList = Object.keys(entityData.classes);
     Object.keys(serviceData).forEach(serviceName => {
         const pascalServiceName = Utils.toPascalCase(serviceName);
 
-        const methodObject: { methodName: string, methodSignature: string, controller: string }[] = [];
+        const methodObject: { methodName: string, methodSignature: string, controller: string, }[] = [];
+
+        const serviceImports = new Set<string>();
+        const controllerImports = new Set<string>();
 
         Object.keys(serviceData[serviceName]).forEach(methodName => {
             const joinKey = Utils.safeFileName(`${serviceName}.${methodName}`);
@@ -165,11 +185,37 @@ export function javaInterfaceMap(
             // reqResDataからリクエストとレスポンスの構造体を生成
             function modelToJava(dtoClass: DtoClass, depth: number = 1): string {
                 const indent = '\t'.repeat(depth);
+                // innerClassで、同名のEntity、もしくはValueObjectがある場合はEntity/ValueObjectを継承させる
+                const extendsEntity = entityValueObjectNameList.includes(dtoClass.name) ? `extends ${PACKAGE_NAME}.domain.entity.${dtoClass.name}` : '';
+                serviceImports.add(dtoClass.name);
+                const annos = [];
+                annos.push('Data');
+                annos.push('NoArgsConstructor');
+                if (dtoClass.fields && dtoClass.fields.length > 0) {
+                    annos.push('AllArgsConstructor');
+                }
+                if (extendsEntity) {
+                    annos.push('EqualsAndHashCode(callSuper = false)');
+                }
+                // serviceImportsに追加
+                annos.forEach(anno => serviceImports.add(anno));
+                const annoString = annos.map(anno => `${indent}@${anno}`).join('\n');
+
+
+                // fieldの型をserviceImportsに追加
+                dtoClass.fields.forEach(field => {
+                    if (field.type.includes('<')) {
+                        // ジェネリクスの場合は分解して追加
+                        field.type.split(/[<,>]/).filter(t => t.trim()).forEach(t => serviceImports.add(t.trim()));
+                    } else {
+                        serviceImports.add(field.type);
+                    }
+                    // アノテーションの型をserviceImportsに追加
+                    field.annotations.forEach(anno => serviceImports.add(anno.trim().replace(/^@/g, '').replace(/\(.*/g, '')));
+                });
                 return Utils.trimLines(`
-                    ${indent}@Data
-                    ${indent}${dtoClass.fields && dtoClass.fields.length > 0 ? '@AllArgsConstructor' : Utils.TRIM_LINES_DELETE_LINE}
-                    ${indent}@NoArgsConstructor
-                    ${indent}public static class ${dtoClass.name} {
+                    ${annoString}
+                    ${indent}public static class ${dtoClass.name} ${extendsEntity} {
                     ${dtoClass.fields.map(field => field.annotations.map(anno => `\n${indent}\t${anno}`).join('') + `\n${indent}\tprivate ${field.type} ${field.name};`).join('') || '\n\t\t// no fields'}
                     ${dtoClass.innerClasses.map(innerClass => `\n${modelToJava(innerClass, depth + 1)}`).join('\n') || Utils.TRIM_LINES_DELETE_LINE}
                     ${indent}}
@@ -227,6 +273,8 @@ export function javaInterfaceMap(
                     \t\treturn ${Utils.toCamelCase(serviceName)}.${Utils.toCamelCase(methodName)}(request);
                     \t}
                 `);
+                controllerImports.add('RequestBody');
+                controllerImports.add('Valid');
             } else {
                 // GET, DELETEの場合はpathVariableを受け取る
                 controllerMethodSignature = Utils.trimLines(`
@@ -236,7 +284,9 @@ export function javaInterfaceMap(
                     \t\treturn ${Utils.toCamelCase(serviceName)}.${Utils.toCamelCase(methodName)}(request);
                     \t}
                 `);
+                if (reqDto.fields.length > 0) controllerImports.add('PathVariable');
             }
+
             const controller = Utils.trimLines(`
                 \t/**
                 \t * ${methodData.name}
@@ -249,6 +299,8 @@ export function javaInterfaceMap(
                 ${controllerMethodSignature}
                 \t
             `);
+            controllerImports.add(`${Utils.toPascalCase(methodData.method)}Mapping`);
+            controllerImports.add('ResponseBody');
 
             methodObject.push({
                 methodName,
@@ -257,28 +309,11 @@ export function javaInterfaceMap(
             });
         });
 
+        const serviceImportString = Array.from(serviceImports).map(imp => JAVA_FQCN_MAP[imp]).filter(imp => imp).map(imp => `import ${imp};\n`).join('');
         const serviceInterfaceTemplate = Utils.trimLines(`
             package ${PACKAGE_NAME}.domain.service;
 
-            import lombok.Data;
-            import lombok.AllArgsConstructor;
-            import lombok.NoArgsConstructor;
-            import org.springframework.web.multipart.MultipartFile;
-            import java.io.File;
-            import java.math.BigDecimal;
-            import java.math.BigInteger;
-            import java.util.List;
-            import java.util.Map;
-            import java.time.LocalDate;
-            import java.time.LocalDateTime;
-            import java.time.LocalTime;
-            import java.time.Period;
-            import jakarta.validation.constraints.*;
-            import jakarta.validation.Valid;
-
-            import ${PACKAGE_NAME}.domain.entity.*;
-            import ${PACKAGE_NAME}.domain.enums.*;
-
+            ${serviceImportString || Utils.TRIM_LINES_DELETE_LINE}
             /**
              * ${serviceName}
              */
@@ -288,19 +323,14 @@ export function javaInterfaceMap(
             }
         `);
 
+        controllerImports.add('RestController');
+        controllerImports.add('Slf4j');
+        controllerImports.add('Autowired');
+        const controllerImportString = Array.from(controllerImports).map(imp => JAVA_FQCN_MAP[imp]).filter(imp => imp).map(imp => `import ${imp};\n`).join('');
         const controller = Utils.trimLines(`
             package ${PACKAGE_NAME}.domain.controller;
 
-            import lombok.Data;
-            import lombok.extern.slf4j.Slf4j;
-            import java.util.List;
-            import java.time.LocalDate;
-            import java.time.LocalDateTime;
-            import java.time.LocalTime;
-            import org.springframework.beans.factory.annotation.Autowired;
-            import org.springframework.web.bind.annotation.*;
-            import jakarta.validation.Valid;
-            import ${PACKAGE_NAME}.domain.entity.*;
+            ${controllerImportString || Utils.TRIM_LINES_DELETE_LINE}
             import ${PACKAGE_NAME}.domain.service.${pascalServiceName};
 
             /**
@@ -341,7 +371,7 @@ export function javaServiceTemplateMap(
     serviceList: { [key: string]: { [key: string]: ServiceMethod } },
     serviceModel: Record<string, DtoClass>,
     serviceDocs: Record<string, string>,
-    entityData: EntityModelClass,
+    entityData: EntityDetailFilledType,
     PACKAGE_NAME: string,
 ): Record<string, string> {
     const javaServiceTemplateMap: Record<string, string> = {};
@@ -355,11 +385,29 @@ export function javaServiceTemplateMap(
             const pascalServiceName = Utils.toPascalCase(serviceName);
             const pascalMethodName = Utils.toPascalCase(methodName);
 
+            const serviceImports = new Set<string>();
+
             // reqResDataからリクエストとレスポンスの構造体を生成
             function modelToJava(dtoClass: DtoClass, depth: number = 1): string {
                 const indent = '\t'.repeat(depth);
+                serviceImports.add(dtoClass.name);
+                serviceImports.add('Data');
+                serviceImports.add('NoArgsConstructor');
+                // fieldの型をserviceImportsに追加
+                dtoClass.fields.forEach(field => {
+                    if (field.type.includes('<')) {
+                        // ジェネリクスの場合は分解して追加
+                        field.type.split(/[<,>]/).filter(t => t.trim()).forEach(t => serviceImports.add(t.trim()));
+                    } else {
+                        serviceImports.add(field.type);
+                    }
+                    // アノテーションの型をserviceImportsに追加
+                    field.annotations.forEach(anno => serviceImports.add(anno.trim().replace(/^@/g, '').replace(/\(.*/g, '')));
+                });
+
                 return Utils.trimLines(`
                     ${indent}@Data
+                    ${indent}@NoArgsConstructor
                     ${indent}public static class ${dtoClass.name} {
                     ${dtoClass.fields.map(field => field.annotations.map(anno => `\n${indent}\t${anno}`) + `\n${indent}\tprivate ${field.type} ${field.name};`).join('') || '\n\t\t// no fields'}
                     ${dtoClass.innerClasses.map(innerClass => `\n${modelToJava(innerClass, depth + 1)}`).join('\n') || Utils.TRIM_LINES_DELETE_LINE}
@@ -379,26 +427,26 @@ export function javaServiceTemplateMap(
 
             // 依存するエンティティとサービスをインポート
             const dependsEntityImportList = methodData.entityList.map(entityName => `import ${PACKAGE_NAME}.domain.entity.${Utils.toPascalCase(entityName)};`).join('\n');
+            const dependsRepositoryImportList = methodData.entityList.map(entityName => `import ${PACKAGE_NAME}.domain.repository.${Utils.toPascalCase(entityName)}Repository;`).join('\n');
             const dependsServiceImportList = methodData.serviceList.map(serviceName => `import ${PACKAGE_NAME}.domain.service.${Utils.toPascalCase(serviceName)};`).join('\n');
             const dependsEntityList = methodData.entityList.map(entityName => `\t@Autowired\n\tprivate ${Utils.toPascalCase(entityName)}Repository ${Utils.toCamelCase(entityName)}Repository;`).join('\n')
             const dependsServiceList = methodData.serviceList.map(serviceName => `\t@Autowired\n\tprivate ${Utils.toPascalCase(serviceName)} ${Utils.toCamelCase(serviceName)};`).join('\n')
+            serviceImports.add('Service');
+            serviceImports.add('Slf4j');
+            serviceImports.add('Autowired');
+            serviceImports.add('HttpStatus');
+
+            const serviceImportString = Array.from(serviceImports).map(imp => JAVA_FQCN_MAP[imp]).filter(imp => imp).map(imp => `import ${imp};\n`).join('');
             const serviceClassTemplate = Utils.trimLines(`
                 package ${PACKAGE_NAME}.domain.service;
                 
-                import org.springframework.stereotype.Service;
-                import org.springframework.beans.factory.annotation.Autowired;
-                import org.springframework.http.HttpStatus;
-                import lombok.Data;
-                import lombok.RequiredArgsConstructor;
-                import lombok.extern.slf4j.Slf4j;
-                import com.example.demo.exception.CustomException;
-                import com.example.demo.exception.ResourceNotFoundException;
-                import java.util.List;
-                import java.time.LocalDate;
-                import java.time.LocalDateTime;
+                import ${PACKAGE_NAME}.exception.CustomException;
                 import ${PACKAGE_NAME}.exception.ResourceNotFoundException;
+                import org.springframework.http.HttpStatus;
                 ${dependsEntityImportList}
+                ${dependsRepositoryImportList}
                 ${dependsServiceImportList}
+                ${serviceImportString}
 
                 /**
                  * ${serviceName}
@@ -478,7 +526,7 @@ export function angularServiceMap(
     serviceList: { [key: string]: { [key: string]: ServiceMethod } },
     serviceModel: Record<string, DtoClass>,
     serviceDocs: Record<string, string>,
-    entityData: EntityModelClass,
+    entityData: EntityDetailFilledType,
 ): Record<string, string> {
 
     // 独自定義の型
@@ -617,7 +665,7 @@ export function javaServiceImplementsMap(
         methodAnnotations: string[],
         methodBodyInnerCodes: string[],
     }>,
-    entityData: EntityModelClass,
+    entityData: EntityDetailFilledType,
     PACKAGE_NAME: string,
 ): Record<string, { implement: string }> {
     const javaServiceSourceMap: Record<string, { implement: string }> = {};

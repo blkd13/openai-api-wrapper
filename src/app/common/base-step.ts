@@ -1,5 +1,5 @@
 import * as  fs from 'fs';
-import { finalize, tap } from 'rxjs';
+import { Observable, finalize, map, tap, toArray } from 'rxjs';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 import fss from './fss.js';
@@ -63,6 +63,7 @@ export abstract class BaseStepInterface<T> {
     set label(label) { this._label = label; }
 
     labelPrefix = '';
+    isSkip = false; // ステップ定義側でスキップ指定する場合はこれをtrueにする。
 
     /** プロンプトを組み立ててファイルに書き込む。つまり、initPromptを呼ばなければファイルは上書きされない。 */
     abstract initPrompt(): T;
@@ -104,13 +105,16 @@ export abstract class BaseStep extends BaseStepInterface<string> {
 
     /** io */
     get promptPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.prompt.md`; }
-    get refinePath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.refine.md`; }
     get resultPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.result.md`; }
     get formedPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.result.${{ markdown: 'md', text: 'txt' }[this.format as any as string] || this.format.toString()}`; }
 
     get prompt() { return fs.readFileSync(this.promptPath, 'utf-8'); }
     get result() { return fs.readFileSync(this.resultPath, 'utf-8'); }
     get formed() { return fs.readFileSync(this.formedPath, 'utf-8'); }
+
+    /** refine系 */
+    getRefinePath(index: number) { return this.refineMessages.length === index ? this.resultPath : `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.refine-${index}.md`; }
+    getRefineData(index: number) { return fs.readFileSync(this.getRefinePath(index), 'utf-8'); }
 
     initPrompt(): string {
         // chaptersをMarkdownに変換してpromptに書き込む。
@@ -134,10 +138,13 @@ export abstract class BaseStep extends BaseStepInterface<string> {
      * メイン処理。
      * initPromptで作ったものを手で修正して使うこともあるので、
      * 敢えてファイルからプロンプトを読み込ませるようにしてある。
+     * @param {number} [refineIndex=0] セルフリファインの二周目以降から開始する場合はここで指定する。
      * @returns 
      */
-    async run(): Promise<string> {
-        return new Promise<string>((resolve, reject) => {
+    async run(refineIndex: number = 0): Promise<string> {
+        // スキップ指定されていたら空文字を返す。
+        if (this.isSkip) { return Promise.resolve(''); }
+        return new Promise<string>((resolveRoot, rejectRoot) => {
             fs.readFile(this.promptPath, 'utf-8', (err, prompt: string) => {
                 // messages
                 const messages: ChatCompletionMessageParam[] = [];
@@ -166,83 +173,126 @@ export abstract class BaseStep extends BaseStepInterface<string> {
                     messages.push({ role: 'assistant', content: this.assistantMessage });
                 } else { }
 
-                let content = '';
-                let isInit = false;
-                aiApi.chatCompletionObservableStream({
-                    messages: messages,
-                    model: this.model,
-                    temperature: this.temperature,
-                    response_format: { type: this.format === StepOutputFormat.JSON ? 'json_object' : 'text' },
-                    stream: true,
-                }, {
-                    label: this.label
-                }).pipe( // オペレータじゃなくSubscribeでも良かった。
-                    // ストリームを結合する
-                    tap(data => {
-                        content += data;
-                        (isInit ? fss.appendFile : fss.writeFile)(`${this.resultPath}.tmp`, data, (err: any) => { if (err) console.error(err); });
-                        isInit = true;
-                    }),
-                    // ストリームの終了時に実行する処理
-                    finalize(() => {
-                        fss.waitQ(`${this.resultPath}.tmp`).then(() => {
-                            fs.rename(`${this.resultPath}.tmp`, this.resultPath, () => {
-                                // format
-                                if (StepOutputFormat.JSON === this.format) {
-                                    try {
-                                        content = JSON.stringify(Utils.jsonParse(content, true), null, 2);
-                                        fss.writeFile(this.formedPath, content, (err: any) => {
-                                            if (err) reject(err);
-                                            resolve(this.postProcess(content));
-                                        });
-                                    } catch (e: any) {
-                                        // json整形に失敗する場合は整形用にもう一発。
+                for (let i = 0; i < refineIndex; i++) {
+                    messages.push({ role: 'assistant', content: this.getRefineData(i) });
+                    messages.push(this.refineMessages[i]);
+                }
 
-                                        let correctPrompt = `Please correct the following JSON that is incorrect as JSON and output the correct one.\nPay particular attention to the number of parentheses and commas.\n`;
-                                        correctPrompt += `\`\`\`json\n${content}\n\`\`\``;
-
-                                        isInit = false;
-                                        content = '';
-                                        aiApi.chatCompletionObservableStream({
-                                            messages: [
-                                                { role: 'system', content: `All output is done in JSON.` },
-                                                { role: 'user', content: correctPrompt },
-                                            ],
-                                            model: `gpt-3.5-turbo`, // JSON整形の失敗をやり直すだけなのでgpt-3.5-turboで十分。
-                                            temperature: 0,
-                                            stream: true,
-                                        }, {
-                                            label: `${this.label}JsonCorrect`,
-                                        }).pipe(
-                                            tap(data => {
-                                                content += data;
-                                                (isInit ? fss.appendFile : fss.writeFile)(`${this.resultPath}.tmp`, data, (err: any) => { if (err) console.error(err); });
-                                                isInit = true;
-                                            }),
-                                            finalize(() => {
-                                                fss.waitQ(`${this.resultPath}.tmp`).then(() => {
-                                                    try {
-                                                        content = JSON.stringify(Utils.jsonParse(content), null, 2);
-                                                        fss.writeFile(this.formedPath, content, (err: any) => {
-                                                            if (err) reject(err);
-                                                            fs.unlink(`${this.resultPath}.tmp`, () => { });
-                                                            resolve(this.postProcess(content));
-                                                        });
-                                                    } catch (e: any) {
-                                                        reject(e);
-                                                    }
-                                                });
-                                            }),
-                                        ).subscribe({ error: (err: any) => { reject(err); } });
-                                    }
-                                } else {
-                                    resolve(this.postProcess(content));
-                                }
-                            });
-                        });
-                    }),
-                ).subscribe({ error: (err: any) => { reject(err); } });
+                // refineの回数がrefineMessagesの数より少ない間はrefineを掛ける。
+                const refine = () => {
+                    let outputPath: string;
+                    if (refineIndex < this.refineMessages.length) {
+                        outputPath = `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.refine-${refineIndex}.md`; // refine用のファイルパス
+                    } else {
+                        outputPath = this.resultPath;
+                    }
+                    this.runStream(messages, outputPath).subscribe({
+                        next: (result: string) => {
+                            // refine
+                            if (refineIndex < this.refineMessages.length) {
+                                // 前回結果を追記してrefineを掛ける
+                                messages.push({ role: 'assistant', content: result });
+                                messages.push(this.refineMessages[refineIndex]);
+                                refineIndex++;
+                                refine();
+                            } else {
+                                // no refineMessages
+                                resolveRoot(this.postProcess(result));
+                            }
+                        },
+                        error: (err: any) => {
+                            rejectRoot(err);
+                        },
+                    });
+                };
+                refine();
             });
+        });
+    }
+
+    runStream(messages: ChatCompletionMessageParam[], outputPath: string): Observable<string> {
+        let content = '';
+        let isInit = false;
+        return new Observable<string>(subscriber => {
+            aiApi.chatCompletionObservableStream({
+                messages: messages,
+                model: this.model,
+                temperature: this.temperature,
+                response_format: { type: this.format === StepOutputFormat.JSON ? 'json_object' : 'text' },
+                stream: true,
+            }, {
+                label: this.label
+            }).pipe( // オペレータじゃなくSubscribeでも良かった。
+                // ストリームを結合する
+                tap(data => {
+                    content += data;
+                    (isInit ? fss.appendFile : fss.writeFile)(`${outputPath}.tmp`, data, (err: any) => { if (err) console.error(err); });
+                    isInit = true;
+                }),
+                toArray(), // ストリームを配列に変換する
+                map(data => data.join('')), // 配列を文字列に変換する
+                // ストリームの終了時に実行する処理
+                finalize(() => {
+                    fss.waitQ(`${outputPath}.tmp`).then(() => {
+                        fs.rename(`${outputPath}.tmp`, outputPath, () => {
+                            // format
+                            if (StepOutputFormat.JSON === this.format) {
+                                try {
+                                    content = JSON.stringify(Utils.jsonParse(content, true), null, 2);
+                                    fss.writeFile(this.formedPath, content, (err: any) => {
+                                        if (err) throw err;
+                                        subscriber.next(content);
+                                        subscriber.complete();
+                                    });
+                                } catch (e: any) {
+                                    // json整形に失敗する場合は整形用にもう一発。
+
+                                    let correctPrompt = `Please correct the following JSON that is incorrect as JSON and output the correct one.\nPay particular attention to the number of parentheses and commas.\n`;
+                                    correctPrompt += `\`\`\`json\n${content}\n\`\`\``;
+
+                                    isInit = false;
+                                    content = '';
+                                    aiApi.chatCompletionObservableStream({
+                                        messages: [
+                                            { role: 'system', content: `All output is done in JSON.` },
+                                            { role: 'user', content: correctPrompt },
+                                        ],
+                                        model: `gpt-3.5-turbo`, // JSON整形の失敗をやり直すだけなのでgpt-3.5-turboで十分。
+                                        temperature: 0,
+                                        stream: true,
+                                    }, {
+                                        label: `${this.label}JsonCorrect`,
+                                    }).pipe(
+                                        tap(data => {
+                                            content += data;
+                                            (isInit ? fss.appendFile : fss.writeFile)(`${outputPath}.tmp`, data, (err: any) => { if (err) console.error(err); });
+                                            isInit = true;
+                                        }),
+                                        finalize(() => {
+                                            fss.waitQ(`${outputPath}.tmp`).then(() => {
+                                                try {
+                                                    content = JSON.stringify(Utils.jsonParse(content), null, 2);
+                                                    fss.writeFile(this.formedPath, content, (err: any) => {
+                                                        if (err) throw err;
+                                                        fs.unlink(`${outputPath}.tmp`, () => { });
+                                                        subscriber.next(content);
+                                                        subscriber.complete();
+                                                    });
+                                                } catch (err: any) {
+                                                    throw err;
+                                                }
+                                            });
+                                        }),
+                                    ).subscribe({ error: (err: any) => { throw err; } });
+                                }
+                            } else {
+                                subscriber.next(content);
+                                subscriber.complete();
+                            }
+                        });
+                    });
+                }),
+            ).subscribe({ error: (err: any) => { throw err; } })
         });
     }
 
@@ -254,6 +304,29 @@ export abstract class BaseStep extends BaseStepInterface<string> {
      */
     postProcess(result: string): string {
         return result;
+    }
+
+
+    /**
+     * 別のステップの結果をプリセットプロンプトとして読み込む。
+     * @param step 
+     */
+    loadPresetMessagesFromStep(step: BaseStep) {
+        // stepのpresetMessagesをpromptの前にそのまま付与する。
+        step.presetMessages.forEach(message => {
+            this.presetMessages.push(message);
+        });
+        // stepのpromptをそのまま付与する。
+        this.presetMessages.push({ role: 'user', content: step.prompt });
+        let refineIndex = 0;
+        // stepのrefineMessageがあれば、まずはpromptの結果から追加する
+        step.refineMessages.forEach(message => {
+            this.presetMessages.push({ role: 'assistant', content: step.getRefineData(refineIndex) });
+            this.presetMessages.push(message);
+            refineIndex++;
+        });
+        // 最後の結果を追加する。
+        this.presetMessages.push({ role: 'assistant', content: step.getRefineData(refineIndex) });
     }
 }
 
@@ -284,25 +357,38 @@ export class MultiStep extends BaseStepInterface<string[]> {
     get formed() { return fs.readFileSync(this.formedPath, 'utf-8'); }
 
     async run(): Promise<string[]> {
-        return new Promise<string[]>((resolve, reject) => {
-            Promise.all(this.childStepList.map(step => step.run())).then((resultList: string[]) => {
-                // 全部まとめてファイルに出力する。
-                fss.writeFile(this.resultPath, resultList.join('\n\n---\n\n'), (err: any) => {
-                    if (err) reject(err);
-                    // まとめてJSONにもする。
-                    const summary = this.childStepList.reduce((prev: any, step: BaseStep, index: number) => {
-                        prev[step.label.substring(step.constructor.name.length + 1)] = resultList[index];
-                        return prev;
-                    }, {} as { [key: string]: string });
-                    fss.writeFile(this.formedPath, JSON.stringify(summary), (err: any) => {
-                        if (err) reject(err);
-                        resolve(this.postProcess(resultList));
-                    });
+        if (this.isSkip) {
+            // スキップ指定されていたら空文字を返す。
+            return new Promise<string[]>((resolve, reject) => {
+                // skipの時は子ステップもskipにして一応実行しておく。もしかするとrunの中で微妙に細かいところやっておきたくなるかもしれないので。
+                Promise.all(this.childStepList.map(step => { step.isSkip = this.isSkip; return step.run(); })).then((resultList: string[]) => {
+                    // skipの時はpostProcessも呼ばない。
+                    resolve(resultList);
+                }).catch((err: any) => {
+                    reject(err);
                 });
-            }).catch((err: any) => {
-                reject(err);
             });
-        });
+        } else {
+            return new Promise<string[]>((resolve, reject) => {
+                Promise.all(this.childStepList.map(step => step.run())).then((resultList: string[]) => {
+                    // 全部まとめてファイルに出力する。
+                    fss.writeFile(this.resultPath, resultList.join('\n\n---\n\n'), (err: any) => {
+                        if (err) reject(err);
+                        // まとめてJSONにもする。
+                        const summary = this.childStepList.reduce((prev: any, step: BaseStep, index: number) => {
+                            prev[step.label.substring(step.constructor.name.length + 1)] = resultList[index];
+                            return prev;
+                        }, {} as { [key: string]: string });
+                        fss.writeFile(this.formedPath, JSON.stringify(summary), (err: any) => {
+                            if (err) reject(err);
+                            resolve(this.postProcess(resultList));
+                        });
+                    });
+                }).catch((err: any) => {
+                    reject(err);
+                });
+            });
+        }
     }
 
     postProcess(result: string[]): string[] {

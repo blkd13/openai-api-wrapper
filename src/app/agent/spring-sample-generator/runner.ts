@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { BaseStep, MultiStep, StepOutputFormat } from "../../common/base-step.js";
 import { GPTModels } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
-import { parseJavaModelCode, javaServiceTemplateMap, javaServiceImplementsMap, DtoClass, EntityClass, EntityModelClass, TIME_TYPE_REMAP, TIME_TYPE_COLUMN_DEFINITION, ServiceMethod, angularServiceMap, javaInterfaceMap } from "./helper.js";
+import { parseJavaModelCode, javaServiceTemplateMap, javaServiceImplementsMap, DtoClass, TIME_TYPE_REMAP, TIME_TYPE_COLUMN_DEFINITION, ServiceMethod, angularServiceMap, javaInterfaceMap, EntityValueObjectType, EnumType, EntityDetailFilledType } from "./helper.js";
 import fss from '../../common/fss.js';
 import * as fs from 'fs';
 
@@ -431,50 +431,65 @@ class Step0040_EntityList extends BaseStepDomainModelGenerator {
                 //     content: Utils.addMarkdownDepth(getStepInstance(Step0015_AdvancedExpertiseDetail).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
             }],
         },];
-    }
-}
-class Step0042_ValueObjectEnum extends BaseStepDomainModelGenerator {
-    constructor() {
-        super();
-        this.presetMessages.push({ role: 'user', content: getStepInstance(Step0040_EntityList).prompt });
-        this.presetMessages.push({ role: 'assistant', content: getStepInstance(Step0040_EntityList).result });
-        this.chapters = [{
+
+        this.refineMessages = [{
+            role: 'user',
             content: Utils.trimLines(`
                 ありがとうございます。
-                同様にValueObject、Enumを抽出してください。
-            `),
-        },];
-    }
-}
-class Step0043_EntityListAddittional extends BaseStepDomainModelGenerator {
-    constructor() {
-        super();
-        this.presetMessages.push({ role: 'user', content: getStepInstance(Step0040_EntityList).prompt });
-        this.presetMessages.push({ role: 'assistant', content: getStepInstance(Step0040_EntityList).result });
-        this.chapters = [{
-            content: Utils.trimLines(`
                 Entity一覧に不足が無いか確認し、不足があれば追加してください。
                 出力形式は先程と同様としてください。
             `),
+            // }, {
+            //     role: 'user',
+            //     content: Utils.trimLines(`
+            //         ありがとうございます。
+            //         同様にValueObject、Enumを抽出してください。
+            //     `),
+            // }, {
+            //     role: 'user',
+            //     content: Utils.trimLines(`
+            //         設計書に照らして、ValueObjectsの属性、およびEnumsの抽出が十分かもう一度チェックしてください。
+            //         先程とは別の視点から設計書を読み直すことも重要です。
+            //         不十分であれば、追加分のalueObjects、およびEnumsのみを提示してください。
+            //         形式は先ほどと同じでお願いします。
+            //     `),
+            // }, {
+            //     role: 'user',
+            //     content: Utils.trimLines(`
+            //         Entityごとに、関係する設計書名リストを整理してください。
+            //         関係は1対1ということはないはずであり、関係が薄めのものでもなるべく拾うようにしてください。
+            //         同時に、ValueObject、EnumとEntityの関係も整理してください。
+
+            //         出力フォーマットは以下の通りです。
+            //         \`\`\`json
+            //         {
+            //             "entityFeatureMapping":{"entity1":["機能1","機能2"],"entity2":["機能3","機能4"]},
+            //             "valueObjectEntityMapping":{"valueObject1":["entity1","entity2"],"valueObject2":["entity3","entity4"]},
+            //             "enumEntityMapping":{"enum1":["entity1","entity2"],"enum2":["entity3","entity4"]}
+            //         }
+            //         \`\`\`
+            //     `)
         },];
     }
 
     postProcess(result: string): string {
         const entityObject: Record<string, Record<string, string>> = {};
         let groupName = '';
-        [Step0040_EntityList, Step0043_EntityListAddittional].forEach(stepClass => {
-            getStepInstance(stepClass).result.split('\n').forEach(target => {
+        // refineしたものを結合する。
+        Array.from(Utils.range(this.refineMessages.length)).forEach(index => {
+            this.getRefineData(index).split('\n').forEach(target => {
                 if (target.startsWith('### ') && target.endsWith('のエンティティ:') && target.length > 5) {
-                    groupName = target.replace('### ', '').replace('のエンティティ:', '');
+                    groupName = target.replace('### ', '').replace('のエンティティ:', '').replace(/関連$/g, '').replace(/機能$/g, '') + '機能';
                     if (entityObject[groupName]) {
                     } else {
                         entityObject[groupName] = {};
                     }
                 } else {
-                    const [_, entityName, entityDescription] = target.match(/^(?:[0-9]+\.|-) \*\*(.*)\*\* - (.*)/) || [];
-                    if (entityName && entityDescription) {
-                        // 読み込み時にEntity名を標準化しておく。
-                        entityObject[groupName][Utils.safeFileName(Utils.toPascalCase(entityName))] = entityDescription;
+                    const [_, _entityName, entityDescription] = target.match(/^(?:[0-9]+\.|-) \*\*(.*)\*\* - (.*)/) || [];
+                    if (_entityName && entityDescription) {
+                        // 読み込み時にEntity名を標準化しておく。記号を削除する。PasCalCaseにする。末尾にEntityが付いている場合は削除する。
+                        const entityName = Utils.safeFileName(Utils.toPascalCase(_entityName)).replace(/Entity$/g, '');
+                        entityObject[groupName][entityName] = entityDescription;
                     } else {
                         // skip
                     }
@@ -488,10 +503,213 @@ class Step0043_EntityListAddittional extends BaseStepDomainModelGenerator {
     }
 }
 
+class Step0042_EntityFeatureMapping extends BaseStepDomainModelGenerator {
+    format: StepOutputFormat = StepOutputFormat.JSON;
+
+    constructor() {
+        super();
+        this.loadPresetMessagesFromStep(getStepInstance(Step0040_EntityList));
+        // 
+        this.chapters = [{
+            content: Utils.trimLines(`
+                Entityごとに、関係する設計書名リストを整理してください。
+                関係は1対1ということはないはずであり、関係が薄めのものでもなるべく拾うようにしてください。
+
+                出力フォーマットは以下の通りです。
+                \`\`\`json
+                {
+                    "entityFeatureMapping":{"entity1":["機能1","機能2"],"entity2":["機能3","機能4"]}
+                }
+                \`\`\`
+            `),
+        }];
+    }
+}
+
+// class Step0043_ValueObjectEnumList extends BaseStepDomainModelGenerator {
+//     constructor() {
+//         super();
+//         // Step0040_EntityListのステップをプリセットプロントとして読み込む。
+//         this.loadPresetMessagesFromStep(getStepInstance(Step0040_EntityList));
+
+//         this.chapters = [{
+//             content: Utils.trimLines(`
+//                 ありがとうございます。
+//                 同様に複数のEntityで共通で利用されるValueObject、Enumを抽出してください。
+//             `),
+//         },];
+//         // とりあえず一回セルフリファインを掛けておく。
+//         this.refineMessages = [{
+//             role: 'user',
+//             content: Utils.trimLines(`
+//                 設計書に照らして、共通のValueObjects、Enumsの抽出が十分かもう一度チェックしてください。
+//                 先程とは別の視点から設計書を読み直すことも重要です。
+//                 不十分であれば、追加分のalueObjects、およびEnumsのみを提示してください。
+//                 形式は先ほどと同じでお願いします。
+//             `),
+//         },];
+//     }
+
+//     postProcess(result: string): string {
+//         const entityObject: Record<string, Record<string, string>> = {};
+//         let groupName = '';
+//         // refineしたものを結合する。
+//         Array.from(Utils.range(this.refineMessages.length + 1)).forEach(index => {
+//             this.getRefineData(index).split('\n').forEach(target => {
+//                 // ### 追加のValueObject:
+//                 if (target.startsWith('### ')) {
+//                     groupName = target.endsWith('ValueObject:') ? 'ValueObject' : target.endsWith('Enum:') ? 'Enum' : '';
+//                     if (entityObject[groupName]) {
+//                     } else {
+//                         entityObject[groupName] = {};
+//                     }
+//                 } else {
+//                     const [_, entityName, entityDescription] = target.match(/^(?:[0-9]+\.|-) \*\*(.*)\*\* - (.*)/) || [];
+//                     if (entityName && entityDescription) {
+//                         // 読み込み時にEntity名を標準化しておく。
+//                         const key = Utils.safeFileName(Utils.toPascalCase(entityName));
+//                         if (entityObject[groupName][key]) {
+//                             if (entityObject[groupName][key].length < entityDescription.length) {
+//                                 // 追加済み、かつ前回読み込み分の説明文よりも長かったら更新する。
+//                                 entityObject[groupName][key] = entityDescription;
+//                             } else {
+//                                 // 追加済み、かつ前回読み込み分の説明文の方が長かったら多分「更新無し」的なことが書いてあるだけなのでスキップする。
+//                             }
+//                         } else {
+//                             // 追加済みでなければ追加
+//                             entityObject[groupName][key] = entityDescription;
+//                         }
+//                     } else {
+//                         // skip
+//                     }
+//                 }
+//             });
+//             // console.log(entityObject);
+//         });
+//         // console.log(entityObject);
+//         fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ValueObjectEnumList.json`, JSON.stringify(entityObject, null, 2));
+//         return result;
+//     }
+// }
+
+// class Step0045_EntityFeatureValueObjectMapping extends BaseStepDomainModelGenerator {
+//     format: StepOutputFormat = StepOutputFormat.JSON;
+
+//     constructor() {
+//         super();
+//         this.loadPresetMessagesFromStep(getStepInstance(Step0043_ValueObjectEnumList));
+//         // 
+//         this.chapters = [{
+//             content: Utils.trimLines(`
+//                 Entityごとに、関係する設計書名リストを整理してください。
+//                 関係は1対1ということはないはずであり、関係が薄めのものでもなるべく拾うようにしてください。
+//                 同時に、ValueObject、EnumとEntityの関係も整理してください。
+
+//                 出力フォーマットは以下の通りです。
+//                 \`\`\`json
+//                 {
+//                     "entityFeatureMapping":{"entity1":["機能1","機能2"],"entity2":["機能3","機能4"]},
+//                     "valueObjectEntityMapping":{"valueObject1":["entity1","entity2"],"valueObject2":["entity3","entity4"]},
+//                     "enumEntityMapping":{"enum1":["entity1","entity2"],"enum2":["entity3","entity4"]}
+//                 }
+//                 \`\`\`
+//             `),
+//         }];
+//     }
+// }
+
+// class Step0048_ValuObjectEnumDetail extends MultiStepDomainModelGenerator {
+//     valueObjectEnumMap: string[] = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ValueObjectEnumList.json`, 'utf-8'));
+//     constructor() {
+//         super();
+//         const mas: Record<'entityFeatureMapping' | 'valueObjectEntityMapping' | 'enumEntityMapping', Record<string, string[]>> = JSON.parse(getStepInstance(Step0045_EntityFeatureValueObjectMapping).formed);
+//         const entityFeatureMapping = mas.entityFeatureMapping;
+//         const valueObjectEntityMapping = mas.valueObjectEntityMapping;
+//         const enumEntityMapping = mas.enumEntityMapping;
+//         // const designSummaryMap: Record<string, string> = JSON.parse(getStepInstance(Step0030_DesignSummary).formed);
+//         const designSummaryMap: Record<string, string> = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/FeatureDocs.json`, 'utf-8')) as { [key: string]: string };
+//         class Step0048_ValuObjectEnumDetailChil extends BaseStepDomainModelGenerator {
+//             systemMessage: string = `経験豊富で優秀なビジネスアナリスト。`;
+//             constructor(public groupName: string, public entityName: string, public entityDescription: string) {
+//                 super();
+//                 this.label = `${this.constructor.name}_${Utils.safeFileName(groupName)}_${Utils.safeFileName(entityName)}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+//                 // entityNameから関連する機能名を取得する。
+//                 const featureNameList = Array.from(new Set([...(valueObjectEntityMapping[entityName] || []), ...(enumEntityMapping[entityName] || [])])).map(entityName => entityFeatureMapping[entityName]).flat();
+//                 const childItem = groupName.toLocaleLowerCase().startsWith('enum') ? 'VALUES' : 'attributes';
+//                 this.chapters = [{
+//                     title: `Instructions`,
+//                     content: Utils.trimLines(`
+//                         これから提示する設計書をよく読んでシステム全体像を把握してください。
+//                         そのうえで、Common ValueObject/Enum一覧の${groupName}である「${entityName}」の ${childItem} に不足が無いかをチェックしてください。
+//                         チェックした結果、適切に改善された${childItem}を提示してください。
+//                         担当外のものについては対象外としてください。
+//                     `),
+//                 }, {
+//                     title: '設計書',
+//                     children: [{
+//                         title: `機能設計書（関連するもののみ抜粋）`,
+//                         // content: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
+//                         // 抽出版
+//                         content: Utils.addMarkdownDepth(featureNameList.map(functionName => designSummaryMap[functionName]).join('\n\n'), 2),
+//                     }, {
+//                         title: `Entity一覧`,
+//                         content: Utils.addMarkdownDepth(getStepInstance(Step0040_EntityList).formed, 1),
+//                     }, {
+//                         title: `Common ValueObject/Enum一覧`,
+//                         content: Utils.addMarkdownDepth(getStepInstance(Step0043_ValueObjectEnumList).getRefineData(0), 1),
+//                     }, {
+//                         title: `Common ValueObject/Enum一覧（追加）`,
+//                         content: Utils.addMarkdownDepth(getStepInstance(Step0043_ValueObjectEnumList).getRefineData(1), 1),
+//                     }],
+//                 }, {
+//                     title: 'ネーミングルール',
+//                     content: Utils.trimLines(`
+//                         - Attributesの名前はCamelCase
+//                         - ValueObjects、Enumsの名前はPasCalCase
+//                         - Enumsの値は全て大文字のSNAKE_CASE
+//                     `),
+//                 }, {
+//                     title: 'Output Sample',
+//                     content: Utils.trimLines(`
+//                         出力形式は以下のサンプルを参考にしてください。
+
+//                         ### RiskLevel EnumのVALUES
+
+//                         \`\`\`plaintext
+//                         1. LOW - 低リスク: 顧客の信用スコアが高く、財務状況が安定しており、申請情報に問題がない場合に割り当てられます。
+//                         2. MEDIUM - 中リスク: 顧客の信用スコアが平均的で、財務状況に若干の問題があるか、または申請情報に小さな問題がある場合に割り当てられます。
+//                         3. HIGH - 高リスク: 顧客の信用スコアが低く、財務状況が不安定であるか、申請情報に大きな問題がある場合に割り当てられます。
+//                         \`\`\`
+
+//                         この定義は、設計書の「リスク管理機能」のセクションにおける「UI/UX要件」でのリスク評価結果の表示要件（リスクレベル（低、中、高）とその根拠を明確に表示）に基づいています。
+//                         また、リスク評価アルゴリズムの処理詳細補足にも対応しており、信用スコア、財務状況、申請情報を基にリスクレベルを評価するビジネスルールを反映しています。
+//                     `),
+//                 }];
+
+//                 // // とりあえず一回セルフリファインを掛けておく。
+//                 // this.refineMessages.push({
+//                 //     role: 'user', content: Utils.trimLines(`
+//                 //         設計書に照らして、${entityName}や、ValueObjectsの属性、およびEnumsの値が十分かチェックしてください。
+//                 //         十分であれば特に何もせず、不十分であれば追加設計を提示してください。
+//                 //     `)
+//                 // });
+//             }
+//         }
+//         // childStepListを組み立て。
+//         this.childStepList = Object.entries(this.valueObjectEnumMap).map(([groupName, entityList]) =>
+//             Object.entries(entityList).map(([entityName, entityDescription]) => new Step0048_ValuObjectEnumDetailChil(groupName, entityName, entityDescription))
+//         ).flat();
+//     }
+// }
+
+
 class Step0050_EntityAttributes extends MultiStepDomainModelGenerator {
     entityListGroupMap: string[] = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityList.json`, 'utf-8'));
     constructor() {
         super();
+        const entityFeatureMapping: Record<string, string[]> = JSON.parse(getStepInstance(Step0042_EntityFeatureMapping).formed).entityFeatureMapping;
+        // const designSummaryMap: Record<string, string> = JSON.parse(getStepInstance(Step0030_DesignSummary).formed);
+        const designSummaryMap: Record<string, string> = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/FeatureDocs.json`, 'utf-8')) as { [key: string]: string };
         class Step0050_EntityAttributesChil extends BaseStepDomainModelGenerator {
             systemMessage: string = `経験豊富で優秀なビジネスアナリスト。`;
             constructor(public entityName: string) {
@@ -501,6 +719,8 @@ class Step0050_EntityAttributes extends MultiStepDomainModelGenerator {
                     title: `Instructions`,
                     content: Utils.trimLines(`
                         これから提示する設計書をよく読んで、Entity一覧の「${entityName}」のAttributesを考えてください。
+                        EntityのIdはLong型としてください。関連するEntityのIdもLong型です。
+                        日付型はLocalDate、LocalDateTimeとしてください。
                         ValueObjects、Enumsを含む場合はそれらについても記載してください。
                         Attributesの名前はCamelCaseで記述してください。
                         ValueObjects、Enumsの名前はPasCalCaseで記述してください。
@@ -509,15 +729,26 @@ class Step0050_EntityAttributes extends MultiStepDomainModelGenerator {
                 }, {
                     title: '設計書',
                     children: [{
-                        title: `機能設計書`,
-                        content: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
+                        title: `機能設計書（関連するもののみ抜粋）`,
+                        // content: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
+                        // 抽出版
+                        content: Utils.addMarkdownDepth(entityFeatureMapping[entityName].map(functionName => designSummaryMap[functionName]).join('\n\n'), 2),
                     }, {
                         title: `Entity一覧`,
-                        content: Utils.setMarkdownBlock(getStepInstance(Step0040_EntityList).formed, 'markdown'),
+                        content: Utils.addMarkdownDepth(getStepInstance(Step0040_EntityList).formed, 1),
+                        // }, {
+                        //     title: `Common`,
+                        //     content: Utils.addMarkdownDepth(getStepInstance(Step0043_ValueObjectEnumList).formed, 1),
                     }],
-                }, {
-
                 }];
+
+                // とりあえず一回セルフリファインを掛けておく。
+                this.refineMessages.push({
+                    role: 'user', content: Utils.trimLines(`
+                        設計書に照らして、${entityName}や、ValueObjectsの属性、およびEnumsの値が十分かチェックしてください。
+                        十分であれば特に何もせず、不十分であれば追加設計を提示してください。
+                    `)
+                });
             }
         }
         // childStepListを組み立て。
@@ -527,43 +758,16 @@ class Step0050_EntityAttributes extends MultiStepDomainModelGenerator {
     }
 }
 
-class Step0052_EntityAttributesAdditional extends MultiStepDomainModelGenerator {
+class Step0052_EntityAttributesMerge extends MultiStepDomainModelGenerator {
     constructor() {
         super();
         const step0050_EntityAttributes = getStepInstance(Step0050_EntityAttributes);
-        class Step0052_EntityAttributesAdditionalChil extends BaseStepDomainModelGenerator {
-            systemMessage: string = `経験豊富で優秀なビジネスアナリスト。`;
-            constructor(public index: number) {
-                super();
-                const entityName = (step0050_EntityAttributes.childStepList[index] as any).entityName;
-                this.label = `${this.constructor.name}_${Utils.safeFileName(entityName)}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
-
-                this.presetMessages.push({ role: 'user', content: step0050_EntityAttributes.childStepList[index].prompt });
-                this.presetMessages.push({ role: 'assistant', content: step0050_EntityAttributes.childStepList[index].result });
-
-                this.chapters = [{
-                    content: Utils.trimLines(`
-                        設計書に照らして、${entityName}や、ValueObjectsの属性、およびEnumsの値が十分かチェックしてください。
-                        十分であれば特に何もせず、不十分であれば追加設計を提示してください。
-                    `),
-                }];
-            }
-        }
-        // childStepListを組み立て。
-        this.childStepList = step0050_EntityAttributes.childStepList.map((step: BaseStep, index: number) => new Step0052_EntityAttributesAdditionalChil(index));
-    }
-}
-
-class Step0054_EntityAttributesMerge extends MultiStepDomainModelGenerator {
-    constructor() {
-        super();
-        const step0050_EntityAttributes = getStepInstance(Step0050_EntityAttributes);
-        const step0052_EntityAttributesAdditional = getStepInstance(Step0052_EntityAttributesAdditional);
-        class Step0054_EntityAttributesMergeChil extends BaseStepDomainModelGenerator {
+        class Step0052_EntityAttributesMergeChil extends BaseStepDomainModelGenerator {
             // model: GPTModels = 'gpt-3.5-turbo';
             constructor(public index: number) {
                 super();
-                const entityName = (step0050_EntityAttributes.childStepList[index] as any).entityName;
+                const beforeStep = step0050_EntityAttributes.childStepList[index];
+                const entityName = (beforeStep as any).entityName;
                 this.label = `${this.constructor.name}_${Utils.safeFileName(entityName)}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
                 this.chapters = [{
                     title: `Instructions`,
@@ -572,17 +776,18 @@ class Step0054_EntityAttributesMerge extends MultiStepDomainModelGenerator {
                     content: Utils.trimLines(`
                         以下の設計書を理解して、Credit について、当初設計に追加設計を適用して、統合版のEntity、ValueObjects、Enums定義を作成してください。
                         javaのコードとして出力してください。コード以外は不要です。
-                        EntityのIdは特に指定のない限りLong型としてください。
+                        EntityのIdはLong型としてください。関連するEntityのIdもLong型です。
+                        日付型はLocalDate、LocalDateTimeとしてください。
                         public/privateなどのアクセス修飾子、getter/setter、コンストラクタ、コメント  は不要です。
                         ValueObjects、Enumsの名前はPasCalCaseで記述してください。
                         Enumsの値は全て大文字のSNAKE_CASEで記述してください。
                     `),
                 }, {
                     title: '当初設計',
-                    content: Utils.addMarkdownDepth(step0050_EntityAttributes.childStepList[index].result, 2),
+                    content: Utils.addMarkdownDepth(beforeStep.getRefineData(0), 2),
                 }, {
                     title: '追加設計',
-                    content: Utils.addMarkdownDepth(step0052_EntityAttributesAdditional.childStepList[index].result, 2),
+                    content: Utils.addMarkdownDepth(beforeStep.getRefineData(1), 2),
                 }, {
                     // title: `Output Sample`,
                     // content: Utils.trimLines(`
@@ -661,47 +866,302 @@ class Step0054_EntityAttributesMerge extends MultiStepDomainModelGenerator {
         }
 
         // childStepListを組み立て。
-        this.childStepList = Array.from(Utils.range(step0050_EntityAttributes.childStepList.length)).map(index => new Step0054_EntityAttributesMergeChil(index));
+        this.childStepList = Array.from(Utils.range(step0050_EntityAttributes.childStepList.length)).map(index => new Step0052_EntityAttributesMergeChil(index));
     }
 
     postProcess(result: string[]): string[] {
 
         const modelSources: string[] = [];
         const enumSources: string[] = [];
+        const allModels: Record<string, any> = {};
+
+        const entityNameList: string[] = getStepInstance(Step0050_EntityAttributes).childStepList.map((step: BaseStep) => (step as any).entityName);
+        const valueObjectNameList: string[] = [];
+        const enumNameList: string[] = [];
+
+        const mergedModel: { classes: Record<string, EntityValueObjectType>, enums: Record<string, EnumType> } = { classes: {}, enums: {} };
+
         result.forEach((target, index) => {
             // Angular用のモデルを生成する。
             const models = parseJavaModelCode(target, PACKAGE_NAME);
-            modelSources.push(
-                ...Object.entries(models.classes).map(([className, obj]) => Utils.trimLines(`
-                    export interface ${className} {
-                    ${obj.props.map(prop => `\t${prop.name}: ${javaTypeToTypescript(prop.type)};`).join('\n')}
+            allModels[entityNameList[index]] = models;
+
+
+            // とりあえず同じ名前のものがあればマージする方式。
+            // また、EntityかValueObjectかを判定してValueObjectのリストを作成する。
+            Object.entries(mergedModel).forEach(([key, stockObj]) => {
+                Object.entries(models[key as 'classes' | 'enums']).forEach(([className, baseObj]) => {
+                    //  クラス名を標準化しておく。
+                    className = Utils.safeFileName(Utils.toPascalCase(className)).replace(/(Entity|ValueObject|Enum)$/g, '');
+                    // console.log(className);
+                    if (className in stockObj) {
+                        // 既存のものにマージ
+                        if (key === 'classes') {
+                            const names = (stockObj[className] as { props: any[] }).props.map((prop: any) => prop.name);
+                            baseObj.props.forEach((prop: any) => {
+                                if (!names.includes(prop.name)) {
+                                    (stockObj[className] as { props: any[] }).props.push(prop);
+                                } else { }
+                            });
+                        } else {
+                            const values = (stockObj[className] as { values: string[] }).values;
+                            baseObj.values.forEach((value: any) => {
+                                if (!values.includes(value)) {
+                                    // console.log(className, value);
+                                    (stockObj[className] as { values: any[] }).values.push(value);
+                                } else { }
+                            });
+                        }
+                    } else {
+                        // 新規追加
+                        stockObj[className] = baseObj;
+
+                        if (key === 'classes') {
+                            // valueObjectListに追加
+                            if (!entityNameList.includes(className)) {
+                                // EntityでないものはValueObjectとして扱う。
+                                valueObjectNameList.push(className);
+                                stockObj[className].type = 'valueObject';
+                            } else {
+                                stockObj[className].type = 'entity';
+                            }
+                        } else {
+                            enumNameList.push(className);
+                            stockObj[className].type = 'enum';
+                        }
                     }
-                `))
-            );
-            enumSources.push(
-                ...Object.entries(models.enums).map(([className, obj]) => Utils.trimLines(`
-                    export enum ${className} {
-                    \t${obj.values.join(', ')}
-                    }
-                `))
-            );
+                });
+            });
+        });
+        // console.log(valueObjectNameList);
+        Object.keys(mergedModel.classes).forEach(className => {
+            const obj = mergedModel.classes[className];
+            obj.annotations = obj.annotations || [];
+            // Set型はJSON.stringifyで無視されてしまうので、型としては配列で持ちたいが、重複は削除したいので、
+            // 収集するときはSetで、出力するときはArrayに変換する。
+            const imports = new Set<string>();
+            // クラスアノテーションを追加する。
+            if (entityNameList.includes(className)) {
+                // Entityの場合
+                // 引数無しのアノテーションを追加する。
+                ['Data', 'NoArgsConstructor', 'AllArgsConstructor', 'Entity'].forEach(s => {
+                    obj.annotations.push(`@${s}`);
+                    imports.add(s);
+                });
+                // 末尾の単語を複数形にしたスネークケースにする
+                const pluralized = Utils.toSnakeCase(className).split('_').map((word, index, ary) => index === ary.length - 1 ? Utils.pluralize(word) : word).join('_');
+                obj.annotations.push(`@Table(name = "${pluralized}")`);
+                imports.add('Table');
+                obj.annotations.push(`@EqualsAndHashCode(callSuper=false)`);
+                imports.add('EqualsAndHashCode');
+
+                // BaseEntityを継承する。
+                imports.add('BaseEntity');
+            } else if (valueObjectNameList.includes(className)) {
+                // ValueObjectの場合
+                // 引数無しのアノテーションを追加する。
+                ['Data', 'NoArgsConstructor', 'AllArgsConstructor', 'Embeddable'].forEach(s => {
+                    obj.annotations.push(`@${s}`);
+                    imports.add(s);
+                });
+            } else {
+                // その他の場合
+                // skip
+            }
+
+            // プロパティアノテーションを追加する。
+            obj.props.forEach(prop => {
+                prop.annotations = prop.annotations || [];
+                // List<String>などの場合、Stringの部分だけを抽出する。
+                // TODO 二次元配列は対応していない。
+                prop.strippedType = prop.type.replace(/.*</, '').replace(/>$/, '').replace(/[, ]/, '');
+
+                // 時刻系の場合、LocalDateかLocalDateTimeに統一する。
+                if (TIME_TYPE_REMAP[prop.strippedType]) {
+                    // TIME_TYPE_REMAPにマッチする型名をTIME_TYPE_COLUMN_DEFINITIONに変換する。
+                    prop.type = prop.type.replace(prop.strippedType, TIME_TYPE_REMAP[prop.strippedType]);
+                    prop.strippedType = TIME_TYPE_REMAP[prop.strippedType];
+                } else {
+                    // 時刻系以外は何もしない。
+                }
+
+                // 素の型名をimport文に追加する。
+                imports.add(prop.strippedType);
+                if (prop.type.includes('<')) {
+                    // ジェネリクスを含む場合、import文に追加する。（だいたいList。まれにMap。Mapだと後で壊れる。）
+                    imports.add(prop.type.replace(/<.*$/, ''));
+                }
+
+                // 型名によってアノテーションを追加する。
+                if (valueObjectNameList.includes(prop.strippedType)) {
+                    prop.annotations.push('@Embedded');
+                    imports.add('Embedded');
+                } else if (enumNameList.includes(prop.strippedType)) {
+                    prop.annotations.push('@Enumerated(EnumType.STRING)');
+                    imports.add('Enumerated');
+                    imports.add('EnumType');
+                } else if (prop.strippedType === 'LocalDate') {
+                    prop.annotations.push('@Temporal(TemporalType.DATE)');
+                    imports.add('Temporal');
+                    imports.add('TemporalType');
+                } else if (prop.strippedType === 'LocalDateTime') {
+                    prop.annotations.push('@Temporal(TemporalType.TIMESTAMP)');
+                    imports.add('Temporal');
+                    imports.add('TemporalType');
+                } else { }
+            });
+
+            // importsを設定する。
+            obj.imports = Array.from(imports);
         });
 
-        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/angular/src/app/models/models.ts`, modelSources.join('\n\n') + '\n\n' + enumSources.join('\n\n'));
+        // 関連するクラスを探して纏めておく。設計書の連鎖を辿っていく。
+        function findRelatedClassesAndEnums(classAndEnumChain: string[], className: string, depth: number = 0) {
+            // 既に探索済みの場合はスキップする。
+            if (classAndEnumChain.includes(className)) {
+                return;
+            } else {
+                // skip
+            }
+
+            // 探索済みでなければ、探索済みに追加する。
+            const obj = mergedModel.classes[className];
+            if (obj) {
+                classAndEnumChain.push(className);
+                // さらに探索する。
+                obj.props.forEach(prop => {
+                    findRelatedClassesAndEnums(classAndEnumChain, prop.strippedType, depth + 1);
+                });
+            } else if (mergedModel.enums[className]) {
+                // enumの場合は、探索済みに追加するだけ。
+                classAndEnumChain.push(className);
+            } else {
+                // skip
+            }
+        }
+        Object.entries(mergedModel.classes).forEach(([className, obj]) => {
+            obj.relatedClasses = obj.relatedClasses || [];
+            findRelatedClassesAndEnums(obj.relatedClasses, className);
+        });
+
+
+        // console.log(valueObjectNameList);
+        const javaSources = [
+            // ${obj.annotations.join('\n') || Utils.TRIM_LINES_DELETE_LINE}
+            // \t${prop.annotations.join('\n') || Utils.TRIM_LINES_DELETE_LINE}
+            ...Object.entries(mergedModel.classes).map(([className, obj]) => Utils.trimLines(`
+                class ${className} {
+                ${(obj as { props: any[] }).props.map(prop => Utils.trimLines(`
+                    \t${prop.type} ${prop.name};
+                `)).join('\n')}
+                }
+            `)),
+            ...Object.entries(mergedModel.enums).map(([className, obj]) => Utils.trimLines(`
+                enum ${className} {
+                \t${(obj as { values: string[] }).values.join(', ')}
+                }
+            `))
+        ];
+
+        const tsSources = [
+            ...Object.entries(mergedModel.classes).map(([className, obj]) => Utils.trimLines(`
+                export interface ${className} {
+                ${(obj as { props: any[] }).props.map(prop => `\t${prop.name}: ${javaTypeToTypescript(prop.type)};`).join('\n')}
+                }
+            `)),
+            ...Object.entries(mergedModel.enums).map(([className, obj]) => Utils.trimLines(`
+                export enum ${className} {
+                \t${(obj as { values: string[] }).values.join(', ')}
+                }
+            `))
+        ];
+
+        if (false) {
+            // 全量をちゃんとチェックする方式。やっぱ面倒になったのでやめた。
+            const stock: Record<string, Record<string, string[]>> = { classes: {}, enums: {} };
+            Object.entries(allModels).map(([entityName, entityDetail]) => {
+                Object.entries(stock).forEach(([key, stockObj]) => {
+                    Object.entries((entityDetail as any)[key]).forEach(([className, obj]) => {
+                        stockObj[className] = stockObj[className] || [];
+                        stockObj[className].push(entityName);
+                    });
+                });
+            });
+            // console.log(stock);
+            const mult = Object.keys(stock).reduce((acc, key) => {
+                acc[key] = acc[key] || {};
+                Object.entries(stock[key]).forEach(([className, entityNames]) => {
+                    const set = new Set();
+                    entityNames.map(entityName => {
+                        const bit = (allModels as any)[entityName][key][className];
+                        if (key === 'classes') {
+                            set.add(JSON.stringify((bit.props as any[]).map(prop => prop.name)));
+                        } else {
+                            set.add(JSON.stringify(bit.values));
+                        }
+                    });
+
+                    if (set.size === 1) {
+                        // 1つしかないものはスキップ
+                    } else {
+                        acc[key][className] = entityNames;
+                    }
+                });
+                return acc;
+            }, {} as Record<string, Record<string, string[]>>);
+            // console.log(mult);
+
+            Object.entries(allModels).forEach(([entityName, models]) => {
+                modelSources.push(
+                    ...Object.entries(models.classes).map(([className, obj]) => Utils.trimLines(`
+                export interface ${className} {
+                ${(obj as { props: any[] }).props.map(prop => `\t${prop.name}: ${javaTypeToTypescript(prop.type)};`).join('\n')}
+                }
+            `))
+                );
+                enumSources.push(
+                    ...Object.entries(models.enums).map(([className, obj]) => Utils.trimLines(`
+                export enum ${className} {
+                \t${(obj as any).values.join(', ')}
+                }
+            `))
+                );
+            });
+        }
+
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityPlain.java`, javaSources.join('\n\n'));
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/angular/src/app/models/models.ts`, tsSources.join('\n\n'));
+
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailRaw.json`, JSON.stringify(allModels, null, 2));
+
+        // Entityの詳細を整理する。
+        // const entityDetailFrame = { ...mergedModel.classes, ...mergedModel.enums, entityNameList, valueObjectNameList, enumNameList };
+        const entityDetailFrame = { ...mergedModel, entityNameList, valueObjectNameList, enumNameList };
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFrame.json`, JSON.stringify(entityDetailFrame, null, 2));
 
         return result;
     }
 }
 
-
+/**
+ * 第一段階で必須判定を行う。
+ * 第二段階で関連するEntityを判定する。
+ */
 class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
     format: StepOutputFormat = StepOutputFormat.JSON;
     constructor() {
         super();
+
+        const entityPlain = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityPlain.java`, 'utf-8');
+
+        // 出力量を調整するために二段階に分ける。
+        // 第一段階はEntity単体のアノテーションを考える。
+        // 第二段階はEntity間の関係を考える。
         this.chapters = [{
             title: `Instructions`,
             content: Utils.trimLines(`
-                これから提示する設計書をよく読んで、Entityに対してJPAで使えるようにアノテーションを考えてください。
+                これから提示する設計書をよく読んで、Entity、ValueObjectに対してJPAで使えるようにアノテーションを考えてください。
+                まずはEntity、ValueObject単体に対して、指定されたアノテーションのみを考えてください。
             `),
             children: [
             ],
@@ -712,29 +1172,34 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                 content: Utils.setMarkdownBlock(getStepInstance(Step0030_DesignSummary).result, 'markdown'),
             }, {
                 title: `Entity`,
-                content: Utils.setMarkdownBlock(getStepInstance(Step0050_EntityAttributes).formed, 'markdown'),
+                content: Utils.setMarkdownBlock(entityPlain, 'java'),
             }],
         }, {
             // さぼり防止用にJSON形式で出力させる。Entity全量を一気にjavaに書き換えろというとChatGPT4がさぼるのでJSON形式で出力させる。こうするとさぼらない。
             title: 'Output Format',
             content: Utils.trimLines(`
                 以下のJSONフォーマットで整理してください。
-                アノテーションは必要に応じて追加してもよいです。
                 \`\`\`json
                 {
-                    "classAnnotations": {
-                        "@Entity": ["EntityClassName", "EntityClassName2",],
-                        "@Table": ["TableClassName", "TableClassName2",],
-                        "@Embeddable": ["EmbeddableClassName", "EmbeddableClassName2",],
-                        "@MappedSuperclass": ["MappedSuperclassName", "MappedSuperclassName2",],
-                    },
                     "fieldAnnotations": {
                         "@Id": { "ClassName": ["IdFieldName"], "ClassName2": ["IdFieldName"], },
-                        "@GeneratedValue(strategy = GenerationType.IDENTITY)": { "ClassName": ["IdFieldName"], "ClassName2": ["IdFieldName"], },
                         "@EmbeddedId": { "ClassName": ["IdFieldName", "IdFieldName2"], "ClassName2": ["IdFieldName", "IdFieldName2"], },
-                        "@Embedded": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
                         "@Column(nullable = false)": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
-                        "@Enumerated(EnumType.STRING)": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
+                    },
+                }
+                \`\`\`
+            `),
+        }];
+
+        // 二段階目をセルフリファインで実施する。
+        this.refineMessages.push({
+            role: 'user', content: Utils.trimLines(`
+                ありがとうございます。
+                次はEntity全体を俯瞰して、Entity間の関係について考えてください。
+                そのうえで、以下のフォーマットでアノテーションを出力してください。
+                \`\`\`json
+                {
+                    "fieldAnnotations": {
                         "@ManyToOne": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
                         "@OneToMany": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
                         "@OneToOne(ownside)": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
@@ -743,20 +1208,14 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                     },
                 }
                 \`\`\`
-            `),
-        }];
+            `)
+        });
     }
     postProcess(result: string): string {
         // アノテーションを整理する。
-        const annos = Utils.jsonParse(result) as { classAnnotations: { [key: string]: string[] }, fieldAnnotations: { [key: string]: { [key: string]: string[] } } };
-        // クラスアノテーションをクラスキーで整理する。
-        const classAnnotations = Object.entries(annos.classAnnotations).reduce((acc, [anno, classNames]) => {
-            classNames.forEach(className => {
-                acc[className] = acc[className] || [];
-                acc[className].push(anno);
-            });
-            return acc;
-        }, {} as { [key: string]: string[] });
+        const annos0 = Utils.jsonParse(this.getRefineData(0)) as { fieldAnnotations: { [key: string]: { [key: string]: string[] } } };
+        const annos1 = Utils.jsonParse(result) as { fieldAnnotations: { [key: string]: { [key: string]: string[] } } };
+        const annos = { fieldAnnotations: { ...annos0.fieldAnnotations, ...annos1.fieldAnnotations } };
         // フィールドアノテーションをクラスキーとフィールドキーで整理する。
         const fieldAnnotations = Object.entries(annos.fieldAnnotations).reduce((acc, [anno, classFieldNames]) => {
             Object.entries(classFieldNames).forEach(([className, fieldNames]) => {
@@ -802,43 +1261,37 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
             return acc;
         }, {} as { [key: string]: { [key: string]: string[] } });
 
-        const modelMas: EntityModelClass = { entityNameList: [], classes: {}, enums: {} };
-        const models = parseJavaModelCode(Utils.mdTrim(getStepInstance(Step0050_EntityAttributes).formed), PACKAGE_NAME);
-        Object.entries(models.classes).forEach(([className, classObject]) => {
-            const imports = new Set<string>();
-            imports.add('Data');
+        const entityDetailFrame = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFrame.json`, 'utf-8')) as EntityDetailFilledType;
+        // import文を作成するために、FQCNの逆引きマスタを作っておく。
+        [...entityDetailFrame.entityNameList, ...entityDetailFrame.valueObjectNameList].flat().forEach(className => { JAVA_FQCN_MAP[className] = `${PACKAGE_NAME}.domain.entity.${className}`; });
+        entityDetailFrame.enumNameList.flat().forEach(className => { JAVA_FQCN_MAP[className] = `${PACKAGE_NAME}.domain.enums.${className}`; });
 
-            const entityClass = new EntityClass('entity', className, imports, classObject.props); // typeはentityかvalueObjectかだけど一旦仮置きでentityにしておく。
-            modelMas.classes[className] = entityClass; // マスターに追加する。
 
-            // クラスアノテーションを付与する。
-            let extendsClass = '';
-            // Entityの場合は@Tableアノテーションを付与する。
-            if ((classAnnotations[className] || []).find(anno => anno === '@Entity')) {
-                imports.add('Entity');
-                // 複数形のスネークケースにする
-                const pluralized = Utils.toSnakeCase(className).split('_').map((word, index, ary) => index === ary.length - 1 ? Utils.pluralize(word) : word).join('_');
-                classAnnotations[className].push(`@Table(name = "${pluralized}")`);
-                imports.add('Table');
-                classAnnotations[className].push(`@EqualsAndHashCode(callSuper=false)`);
-                imports.add('EqualsAndHashCode');
-
-                extendsClass = ' extends BaseEntity';
-                modelMas.entityNameList.push(className); // エンティティのリストに追加する。
-            } else {
-                // Entityでない場合は、@Embeddableアノテーションがついているはずなので、Embeddableをimportする。
-                imports.add('Embeddable');
-                entityClass.type = 'valueObject';
-            }
-
+        Object.entries(entityDetailFrame.classes).forEach(([className, classObject]) => {
+            const imports = new Set<string>(classObject.imports);
             // Fieldのアノテーションを付与する。
             const fields = classObject.props.map(field => {
                 const _fieldAnnoMap = fieldAnnotations[className] || fieldAnnotations[`${className}Entity`] || [];
-                entityClass.annotations = _fieldAnnoMap[field.name] || _fieldAnnoMap[field.name.replace(/I[Dd]$/, '')] || _fieldAnnoMap[field.name.replace(/_[Ii][Dd]$/, '')] || [];
-                entityClass.annotations.forEach(anno => {
+                field.annotations = [
+                    ...(_fieldAnnoMap[field.name] || _fieldAnnoMap[field.name.replace(/I[Dd]$/, '')] || _fieldAnnoMap[field.name.replace(/_[Ii][Dd]$/, '')] || []),
+                    ...field.annotations
+                ];
+
+                field.isOptional = true; // 初期値としてフラグを立てておく。
+                field.annotations.forEach(anno => {
                     // import文を作成するために、型名を集める。
                     imports.add(anno.trim().replace('@', '').replace(/\(.*/g, ''));
+                    // nullable = falseの場合は、Optionalではないので、フラグを折る。
+                    if (anno.includes('nullable = false') || anno === '@Id' || anno === '@EmbeddedId') {
+                        field.isOptional = false;
+                    } else { }
                 });
+                // @Idの場合は、@GeneratedValueを追加する。
+                if (field.annotations.find(anno => anno === '@Id')) {
+                    field.annotations.push('@GeneratedValue(strategy = GenerationType.IDENTITY)');
+                    imports.add('GeneratedValue');
+                    imports.add('GenerationType');
+                } else { }
                 field.type.split(/[<>,.?]/).forEach(s => imports.add(s)); // import文を作成するために、型名を集める。
 
                 // TIME_TYPE_REMAPにマッチする型名をTIME_TYPE_COLUMN_DEFINITIONに変換する。
@@ -848,22 +1301,23 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                     if (field.type === from) {
                         field.type = field.type.replace(from, to);
                         // console.log(`TIME_TYPE_REMAP: ${from} => ${to}`);
-                        for (let i = 0; i < entityClass.annotations.length; i++) {
-                            const anno = entityClass.annotations[i];
-                            if (entityClass.annotations[i].startsWith('@Column')) {
+                        for (let i = 0; i < field.annotations.length; i++) {
+                            const anno = field.annotations[i];
+                            if (field.annotations[i].startsWith('@Column')) {
                                 // @Columnが既にあるので、columnDefinitionを追加する。
-                                entityClass.annotations[i] = anno.substring(0, anno.length - 1) + `, columnDefinition = "${TIME_TYPE_COLUMN_DEFINITION[field.type]}")`;
+                                field.annotations[i] = anno.substring(0, anno.length - 1) + `, columnDefinition = "${TIME_TYPE_COLUMN_DEFINITION[field.type]}")`;
                                 break;
-                            } else if (i == entityClass.annotations.length - 1) {
+                            } else if (i == field.annotations.length - 1) {
                                 // 最後の要素なので、@Columnを追加する。
-                                entityClass.annotations.push(`@Column(columnDefinition = "${TIME_TYPE_COLUMN_DEFINITION[field.type]}")`);
+                                field.annotations.push(`@Column(columnDefinition = "${TIME_TYPE_COLUMN_DEFINITION[field.type]}")`);
+                                imports.add('Column'); // Columnをimportにも追加する。
                                 break;
                             } else { }
                         }
                     } else { }
                 });
 
-                const annotations = entityClass.annotations.map(anno => `\t${anno}\n`).join('');
+                const annotations = field.annotations.map(anno => `\t${anno}\n`).join('');
                 return `${annotations}\tprivate ${field.type} ${field.name};\n`;
             }).join('\n');
 
@@ -880,38 +1334,66 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                 .filter(importName => !JAVA_FQCN_MAP[importName].startsWith(`${PACKAGE_NAME}.entity.`)) // 同じパッケージのクラスはimportしない。
                 .map(importName => `import ${JAVA_FQCN_MAP[importName]};\n`).sort().join('');
 
-            entityClass.source = Utils.trimLines(`
+            // Javaソースコードを作成する。
+            classObject.source = Utils.trimLines(`
                 package ${PACKAGE_NAME}.domain.entity;
 
                 ${importList || Utils.TRIM_LINES_DELETE_LINE}
-                ${classAnnotations[className] ? classAnnotations[className].join('\n') : ''}
-                @Data
-                public class ${className}${extendsClass} {
+                ${classObject.annotations.join('\n') || Utils.TRIM_LINES_DELETE_LINE}
+                public class ${className}${classObject.type === 'entity' ? ' extends BaseEntity' : ''} {
                 
                 ${fields}
                 }
             `).replace(/\t/g, '    '); // タブをスペース4つに変換する。
-            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/entity/${className}.java`, entityClass.source);
-        });
-        Object.entries(models.enums).forEach(([className, obj]) => {
-            const enumClass = { source: '', values: obj.values };
-            modelMas.enums[className] = enumClass; // マスターに追加する。
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/entity/${className}.java`, classObject.source);
 
-            enumClass.source = Utils.trimLines(`
+            // マークダウンテーブルを作成する。
+            classObject.mdTable = Utils.trimLines(`
+                ### ${className}
+
+                | Attribute Name | Java Class | Optional |
+                |-|-|-|
+                ${(classObject.props as any[]).map(prop => `| ${prop.name} | ${prop.type} | ${prop.isOptional ? 'Yes' : 'No'} |`).join('\n')}
+            `);
+
+            classObject.imports = Array.from(imports);
+        });
+        Object.entries(entityDetailFrame.enums).forEach(([className, enumObject]) => {
+            // Javaソースコードを作成する。
+            enumObject.source = Utils.trimLines(`
                 package ${PACKAGE_NAME}.domain.enums;
 
                 public enum ${className} {
-                    ${obj.values.join(', ')}
+                    ${enumObject.values.join(', ')}
                 }
             `).replace(/\t/g, '    '); // タブをスペース4つに変換する。
-            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/enums/${className}.java`, enumClass.source);
+            fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/enums/${className}.java`, enumObject.source);
+
+            // マークダウンテーブルを作成する。
+            enumObject.mdTable = Utils.trimLines(`- ${className}: ${enumObject.values.join(', ')}`);
+            // descriptionを追加したらこっちのリッチなテーブルに変更する。
+            // enumObject.mdTable = Utils.trimLines(`
+            //     ### ${className}
+
+            //     ${enumObject.values.join(', ')}
+            // `);
         });
 
         // Entityは良く使うので1ファイルにまとめておく。
-        const entitySource = Utils.setMarkdownBlock(Object.entries(models.classes).map(([className, obj]) => obj.source).join('\n').replace(/^(?:package |import |@Table).*(\r?\n)/gm, ''), `java ${PACKAGE_NAME}.domain.entity`);
-        const enumsSource = Utils.setMarkdownBlock(Object.entries(models.enums).map(([className, obj]) => obj.source).join('\n').replace(/^(?:package ).*(\r?\n)/gm, ''), `java ${PACKAGE_NAME}.domain.enum`);
-        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, (entitySource + '\n\n---\n\n' + enumsSource).replace(/\n\n\n/g, '\n\n'));
-        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, JSON.stringify(modelMas, null, 2));
+        const entitySource = Utils.setMarkdownBlock(Object.entries(entityDetailFrame.classes).map(([className, obj]) => obj.source).join('\n').replace(/^(?:package |import |@Table).*(\r?\n)/gm, ''), `java ${PACKAGE_NAME}.domain.entity`);
+        const enumsSource = Utils.setMarkdownBlock(Object.entries(entityDetailFrame.enums).map(([className, obj]) => obj.source).join('\n').replace(/^(?:package ).*(\r?\n)/gm, ''), `java ${PACKAGE_NAME}.domain.enum`);
+        const entityMdTable = `## Entities\n\n${entityDetailFrame.entityNameList.map(className => entityDetailFrame.classes[className].mdTable).join('\n\n')}`;
+        const valueObjectMdTable = `## ValueObjects\n\n${entityDetailFrame.valueObjectNameList.map(className => entityDetailFrame.classes[className].mdTable).join('\n\n')}`;
+        const enumMdTable = `## Enums\n\n${entityDetailFrame.enumNameList.map(className => entityDetailFrame.enums[className].mdTable).join('\n')}`;
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, (entityMdTable + '\n\n' + valueObjectMdTable + '\n\n' + enumMdTable));
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.java.md`, (entitySource + '\n\n---\n\n' + enumsSource).replace(/\n\n\n/g, '\n\n'));
+
+        const mdTableMas: Record<string, string> = {};
+        Object.entries(entityDetailFrame.classes).forEach(([className, obj]) => mdTableMas[className] = obj.mdTable);
+        Object.entries(entityDetailFrame.enums).forEach(([className, obj]) => mdTableMas[className] = obj.mdTable);
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailDoc.json`, JSON.stringify(mdTableMas, null, 2));
+        fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFilled.json`, JSON.stringify(entityDetailFrame, null, 2));
+
         return result;
     }
 }
@@ -929,7 +1411,7 @@ class Step0055_EntityAttributesToOpenAPI extends BaseStepDomainModelGenerator {
             ],
         }, {
             title: '変換対象のjavaコード',
-            content: Utils.setMarkdownBlock(Utils.mdTrim(getStepInstance(Step0050_EntityAttributes).formed), 'java'),
+            content: fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8'),
         }, {
             title: '変換サンプル',
             children: [{
@@ -997,11 +1479,11 @@ class Step0060_ViewList extends BaseStepDomainModelGenerator {
         }, {
             title: '設計書',
             children: [{
-                title: `機能一覧`,
-                content: Utils.setMarkdownBlock(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n---\n\n'), 'markdown'),
+                title: `機能設計`,
+                content: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
             }, {
-                title: `Entity一覧`,
-                content: Utils.setMarkdownBlock(Utils.mdTrim(getStepInstance(Step0050_EntityAttributes).formed), 'java'),
+                title: `Domain Models`,
+                content: Utils.addMarkdownDepth(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8'), 1),
             }, {
                 title: `フレームワーク`,
                 content: `Angular + Spring Boot + JPA + PostgreSQL`,
@@ -1021,14 +1503,43 @@ class Step0060_ViewList extends BaseStepDomainModelGenerator {
     postProcess(result: string): string {
         // 全量纏めて使いやすい形に整形する。
         const viewList = JSON.parse(result).viewList;
-        const mas = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/FeatureDocs.json`, 'utf-8')) as { [key: string]: string };
+        const featureDocs = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/FeatureDocs.json`, 'utf-8')) as { [key: string]: string };
+        const entityList = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityList.json`, 'utf-8')) as { [key: string]: { [key: string]: string } };
+        const entityDetailFilled = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFilled.json`, 'utf-8')) as EntityDetailFilledType;
+        const entityDetailDoc = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailDoc.json`, 'utf-8')) as { [key: string]: string };
         // console.log(Object.keys(mas));
         // viewListのオブジェクトに関連機能の設計書を埋め込む。
-        viewList.forEach((feature: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }) => {
-            feature.relatedFeatureDocumentList = feature.relatedFeatureDocumentList || [];
-            for (let index = 0; index < feature.relatedFeatureList.length; index++) {
-                feature.relatedFeatureDocumentList.push(mas[feature.relatedFeatureList[index]] || feature.name);
+        const nameListMap: Record<string, string[]> = {
+            'entity': entityDetailFilled.entityNameList,
+            'valueObject': entityDetailFilled.valueObjectNameList,
+            'enum': entityDetailFilled.enumNameList,
+        }
+        viewList.forEach((view: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[], relatedEntityList: string[], relatedEntityDoc: string }) => {
+            view.relatedFeatureList = view.relatedFeatureList || [];
+            view.relatedFeatureDocumentList = view.relatedFeatureDocumentList || [];
+            view.relatedEntityList = view.relatedEntityList || [];
+            for (let index = 0; index < view.relatedFeatureList.length; index++) {
+                view.relatedFeatureDocumentList.push(featureDocs[view.relatedFeatureList[index]] || view.name);
+
+                if (entityList[view.relatedFeatureList[index]]) {
+                    Object.keys(entityList[view.relatedFeatureList[index]]).forEach(entityName => {
+                        entityDetailFilled.classes[entityName].relatedClasses.forEach(relatedClassName => {
+                            view.relatedEntityList.push(relatedClassName);
+                        });
+                    });
+                } else { }
             }
+            view.relatedEntityDoc = '';
+            ['entity', 'valueObject', 'enum'].forEach(type => {
+                const docs = view.relatedEntityList.filter(entityName => nameListMap[type].includes(entityName)).map(entityName => entityDetailDoc[entityName] || '');
+                if (docs.length > 0) {
+                    if (type === 'enum') {
+                        view.relatedEntityDoc += `## ${Utils.toPascalCase(Utils.pluralize(type))}\n\n${docs.join('\n')}\n\n`;
+                    } else {
+                        view.relatedEntityDoc += `## ${Utils.toPascalCase(Utils.pluralize(type))}\n\n${docs.join('\n\n')}\n\n`;
+                    }
+                } else { }
+            });
         });
 
         fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ViewList.json`, JSON.stringify({ viewList }, null, 2));
@@ -1037,39 +1548,44 @@ class Step0060_ViewList extends BaseStepDomainModelGenerator {
 }
 
 class Step0070_ViewDocuments extends MultiStepDomainModelGenerator {
-    viewList!: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }[];
+    viewList!: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[], relatedEntityList: string[], relatedEntityDoc: string }[];
     constructor() {
         super();
 
-        const step0050_EntityAttributes = getStepInstance(Step0050_EntityAttributes);
         class Step0070_ViewDocumentsChil extends BaseStepDomainModelGenerator {
             // model: GPTModels = 'gpt-3.5-turbo';
-            constructor(public feature: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }) {
+            constructor(public view: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[], relatedEntityList: string[], relatedEntityDoc: string }) {
                 super();
+                // const view: any = null;
                 // {"viewList":[{"name": "View name","destinationList":["parts","parts"],"relatedFeatureList":["featureName","featureName"]}]}
 
                 // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
-                this.label = `${this.constructor.name}_${Utils.safeFileName(feature.name)}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                this.label = `${this.constructor.name}_${Utils.safeFileName(view.name)}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
                 // 個別の指示を作成。
                 this.chapters = [
                     {
                         title: `Instructions`,
                         content: Utils.trimLines(`
                             これから提示する設計書をよく読んで、画面の詳細設計書を作成してください。
-                            あなたの担当は「${feature.name}」です。担当外のものはやらなくてよいです。
+                            あなたの担当は「${view.name}」です。担当外のものはやらなくてよいです。
                         `),
                     }, {
                         title: '設計書',
                         children: [{
+                            //     title: `機能設計`,
+                            //     content: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
+                            // }, {
+                            //     title: `Domain Models`,
+                            //     content: Utils.addMarkdownDepth(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8'), 1),
                             title: `機能設計書`,
-                            content: Utils.setMarkdownBlock(feature.relatedFeatureDocumentList.join('\n\n---\n\n'), 'markdown'),
+                            content: Utils.addMarkdownDepth(view.relatedFeatureDocumentList.join('\n\n'), 2),
                             children: [{
                                 title: `画面遷移先`,
-                                content: feature.destinationList.map((destination: string) => `* ${destination}`).join('\n'),
+                                content: view.destinationList.map((destination: string) => `* ${destination}`).join('\n'),
                             },],
                         }, {
-                            title: `Entity`,
-                            content: Utils.setMarkdownBlock(Utils.mdTrim(step0050_EntityAttributes.formed), 'java'),
+                            title: `Domain Models`,
+                            content: Utils.addMarkdownDepth(view.relatedEntityDoc, 1),
                         }],
                     }, {
                         title: 'Output Sample',
@@ -1118,8 +1634,11 @@ class Step0070_ViewDocuments extends MultiStepDomainModelGenerator {
 
                             ## 7. API
 
-                            - パスワードリセットリンクを送信するAPI
-
+                            - **パスワードリセットリンクを送信するAPI**
+                              - 説明: ユーザーがパスワードを忘れた場合に新しいパスワードを設定するためのリンクをメールで送信する。
+                              - 入力: メールアドレス
+                              - 出力: 送信結果
+                                
                             ## 8. 備考
 
                             - パスワードリセットリンクをクリックした後のパスワード変更画面の設計は、この設計書の範囲外である。
@@ -1128,7 +1647,7 @@ class Step0070_ViewDocuments extends MultiStepDomainModelGenerator {
                 ];
             }
         }
-        this.viewList = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ViewList.json`, 'utf-8')).viewList as { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }[];
+        this.viewList = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ViewList.json`, 'utf-8')).viewList as { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[], relatedEntityList: string[], relatedEntityDoc: string }[];
         this.childStepList = this.viewList.map(target => new Step0070_ViewDocumentsChil(target));
     }
 
@@ -1151,105 +1670,62 @@ class Step0080_ServiceList extends BaseStepDomainModelGenerator {
             const match = step.formed.match(/## 7\. API([\s\S]*?)(?=## \d)/);
             if (match) {
                 // console.log(step.formed);
-                const shifted = match[1].trim().split('\n').map(line => `  ${line}`).join('\n');
-                return `- ${(step as any).feature.name}\n${shifted}`;
+                const shifted = match[1].trim().split('\n').filter(s => s.trim()).map(line => `  ${line}`).join('\n');
+                return `- ${(step as any).view.name}\n${shifted}`;
             } else {
+                console.log(`APIが見つかりませんでした。${(step as any).view.name}`);
                 return '';
             }
-        }).join('\n');
+        }).filter(s => s.trim()).join('\n');
+        // console.log(apiList);
         this.chapters = [
             {
                 title: `Instructions`,
                 content: Utils.trimLines(`
                     これから提示する設計書をよく理解して、サービス一覧を作成してください。
-                    まず全量を把握して、サービスごとにグルーピングして考えてください。
+                    まず全量を把握して、関連の強いAPIをサービスとしてグループ化してして考えてください。
                     サービスは、バックエンド側のビジネスルールを実装するものです。
                 `),
             }, {
                 title: '設計書',
                 children: [{
                     title: `画面⇒API呼び出し一覧`,
-                    content: Utils.setMarkdownBlock(apiList, 'markdown'),
+                    content: apiList,
                 }, {
-                    title: `Entity`,
-                    content: Utils.setMarkdownBlock(Utils.mdTrim(getStepInstance(Step0050_EntityAttributes).formed), 'java'),
+                    title: `機能設計`,
+                    content: Utils.addMarkdownDepth([
+                        ...getStepInstance(Step0030_DesignSummary).childStepList,
+                        ...getStepInstance(Step0015_AdvancedExpertiseDetail).childStepList, // 高度な専門知識
+                    ].map((step: BaseStep) => step.formed).join('\n\n'), 2),
                 }, {
-                    title: `機能設計書`,
-                    content: Utils.setMarkdownBlock(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n---\n\n'), 'markdown'),
+                    title: `Domain Models`,
+                    content: Utils.addMarkdownDepth(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8'), 1),
                 }],
             }, {
                 title: 'Output Format',
                 content: `表形式でサービス名（英語名）、名前、利用元画面IDリストを出力してください。`,
             }
         ];
-    }
-}
 
-class Step0090_ServiceMethodList extends BaseStepDomainModelGenerator {
-    // format: StepOutputFormat = StepOutputFormat.JSON;
-    constructor() {
-        super();
-        const apiList = getStepInstance(Step0070_ViewDocuments).childStepList.map(step => {
-            const match = step.formed.match(/## 7\. API([\s\S]*?)(?=## \d)/);
-            if (match) {
-                // console.log(step.formed);
-                const shifted = match[1].trim().split('\n').map(line => `  ${line}`).join('\n');
-                return `- ${(step as any).feature.name}\n${shifted}`;
-            } else {
-                return '';
-            }
-        }).join('\n');
-        this.chapters = [
-            {
-                title: `Instructions`,
-                content: Utils.trimLines(`
-                    これから提示する設計書をよく理解して、サービスメソッド一覧を作成してください。
-                `),
-            }, {
-                title: '設計書',
-                children: [{
-                    title: `画面⇒API呼び出し一覧`,
-                    content: Utils.setMarkdownBlock(apiList, 'markdown'),
-                }, {
-                    title: `サービス一覧`,
-                    content: Utils.setMarkdownBlock(Utils.mdTrim(getStepInstance(Step0080_ServiceList).formed), 'markdown'),
-                }, {
-                    title: `Entity`,
-                    content: Utils.setMarkdownBlock(Utils.mdTrim(getStepInstance(Step0050_EntityAttributes).formed), 'java'),
-                }, {
-                    title: `機能設計書`,
-                    content: Utils.setMarkdownBlock(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n---\n\n'), 'markdown'),
-                }],
-            }, {
-                title: 'Output Format',
-                // content: `表形式でサービス名(英語名)、ID（英語名）、名前、メソッド、エンドポイント、requestの形式、responseの形式、利用元画面IDリストを出力してください。`,
-                content: `表形式でサービス名(英語名)、メソッド名（英語名）、利用元画面ID(複数可)、依存先Entity（複数可）、依存先サービス名（複数可）、関係する機能設計書名(複数可)を出力してください。`,
-            }
-        ];
-    }
-}
+        this.refineMessages.push({
+            role: 'user',
+            content: Utils.trimLines(`
+                ありがとうございます。それでは次にそのサービス一覧を更に詳細化していきましょう。
+                サービスごとにどんなメソッドが必要かを再度設計書全体を見直して考えてみてください。
 
-class Step0092_ServiceMethodListReqRes extends BaseStepDomainModelGenerator {
-    // format: StepOutputFormat = StepOutputFormat.JSON;
-    constructor() {
-        super();
-        const beforeStep = getStepInstance(Step0090_ServiceMethodList);
-        this.presetMessages.push({ role: 'user', content: beforeStep.prompt });
-        this.presetMessages.push({ role: 'assistant', content: beforeStep.result });
-
-        this.chapters = [
-            {
-                title: `Instructions`,
-                content: Utils.trimLines(`
-                    先程のサービスメソッド一覧について、エンドポイントとrequestとresponseの形式を考えてください。
-                    型はjavaの記法で書いてください。
-                `),
-            }, {
-                title: 'Output Format',
-                // content: `表形式でサービス名(英語名)、ID（英語名）、名前、メソッド、エンドポイント利用元画面IDリストを出力してください。`,
-                content: `表形式でサービス名(英語名)、メソッド名（英語名）、日本語名、メソッド、エンドポイント、requestの形式、responseの形式を出力してください。`,
-            }
-        ];
+                表形式でサービス名(英語名)、メソッド名（英語名）、利用元画面ID(複数可)、依存先Entity（複数可）、依存先サービス名（複数可）、関係する機能設計書名(複数可)を出力してください。
+            `),
+        }, {
+            role: 'user',
+            // content: `表形式でサービス名(英語名)、ID（英語名）、名前、メソッド、エンドポイント利用元画面IDリストを出力してください。`,
+            content: Utils.trimLines(`
+                ありがとうございます。次はこれらのサービスをREST APIとして公開するための設計を行います。
+                再度、提示された設計書の要求を確認したうえで、詳細化したサービス一覧にエンドポイントとrequestの型とresponseの型を追記してください。
+                requestの型とresponseの型はDomain Modelsに提示されたものを参考にjavaの記法で書いてください。
+                
+                表形式でサービス名(英語名)、メソッド名（英語名）、日本語名、Httpメソッド、エンドポイント、requestの形式、responseの形式を出力してください。
+            `),
+        });
     }
 
     /**
@@ -1261,7 +1737,7 @@ class Step0092_ServiceMethodListReqRes extends BaseStepDomainModelGenerator {
         const mergedAPIList = [];
 
         // 前回ステップで作成したものをmarkdownテーブルから読み込む。
-        const serviceList = Utils.loadTableDataFromMarkdown(getStepInstance(Step0090_ServiceMethodList).formed).data.reduce((before: { [key: string]: { [key: string]: { usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] } } }, current: string[]) => {
+        const serviceList = Utils.loadTableDataFromMarkdown(this.getRefineData(1)).data.reduce((before: { [key: string]: { [key: string]: { usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] } } }, current: string[]) => {
             const [serviceName, apiName, usageScreenIdListString, entityListString, serviceListString, documentListString] = current;
             if (!before[serviceName]) {
                 before[serviceName] = {};
@@ -1280,26 +1756,34 @@ class Step0092_ServiceMethodListReqRes extends BaseStepDomainModelGenerator {
 
             // endpointとpathVariableを整備する。
             const pathVariableListByEndpoint = Array.from(_endpoint.matchAll(/\{([^}]+)\}/g)).map(match => match[1]);
+            console.log(_endpoint, pathVariableListByEndpoint);
             let pathVariableList = request.split(',').filter((_, index) => index < pathVariableListByEndpoint.length).map(s => s.trim().split(' ')[1]);
             let endpoint = _endpoint;
             if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase())) {
                 // POST, PUT, PATCHの場合は、pathVariableを削除する。
-                endpoint = endpoint.replace(/\{([^}]+)\}/g, '').replace(/\/$/, '');
+                endpoint = endpoint.replace(/\{([^}]+)\}/g, '').replace(/\/\/+/, '/').replace(/\/$/, '');
                 pathVariableList = [];
             } else {
                 // GET, DELETEの場合は、pathVariableを使えるように整備する。
                 pathVariableListByEndpoint.forEach((pathVariable, index) => {
-                    endpoint = endpoint.replace(`{${pathVariable}}`, `{${pathVariableList[index]}}`);
+                    console.log(pathVariable, pathVariableList[index]);
+                    if (pathVariableList[index]) {
+                        // pathVariableList(requestに掛かれている項目名)がある場合は、endpointのpathVariableを置換する。
+                        endpoint = endpoint.replace(`{${pathVariable}}`, `{${pathVariableList[index]}}`);
+                    } else {
+                        // requestからpathVariableが取れない場合は逆にpathVariableをpathVariableListに追加する。
+                        pathVariableList[index] = pathVariable;
+                    }
                 });
             }
             serviceList[serviceName][apiName] = { ...serviceList[serviceName][apiName], name, method, endpoint, pathVariableList, request, response };
         });
 
-        const entityModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, 'utf-8')) as EntityModelClass;
+        const entityModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFilled.json`, 'utf-8')) as EntityDetailFilledType;
         // テーブル形式のデータを作成する。
         const heads = ['serviceName', 'apiName', 'name', 'method', 'endpoint', 'pathVariableList', 'request', 'response', 'usageScreenIdList', 'Dependent Repositories', 'Dependent Services', 'Related Functional Specifications'];
         mergedAPIList.push(heads);
-        mergedAPIList.push(heads.map(() => '---'));
+        mergedAPIList.push(heads.map(() => '-')); // ヘッダーの下線を作成する。
         Object.keys(serviceList).forEach(serviceName => {
             Object.keys(serviceList[serviceName]).forEach(apiName => {
                 // const pathVariableList = (serviceList[serviceName][apiName].endpoint.match(/\{([^}]+)\}/g) || []).map(pathVariable => pathVariable.replace(/^\{/, '').replace(/\}$/, ''));
@@ -1336,50 +1820,214 @@ class Step0092_ServiceMethodListReqRes extends BaseStepDomainModelGenerator {
     }
 }
 
-class Step0095_ApiListJson extends BaseStepDomainModelGenerator {
-    format: StepOutputFormat = StepOutputFormat.JSON;
-    constructor() {
-        super();
-        this.chapters = [
-            {
-                title: `Instructions`,
-                content: Utils.trimLines(`
-                    与えられた表をJSON形式に変換してください。
-                `),
-            }, {
-                content: Utils.setMarkdownBlock(Utils.mdTrim(getStepInstance(Step0090_ServiceMethodList).formed), 'markdown'),
-            }, {
-                title: 'Output Format',
-                // {"serviceName":{"apiName":{"name":"API名","method":"GET","endpoint":"/api/endpoint","request":"{ request }","response":"{ response }","usageScreenIdList":"画面IDリスト"}}}
-                content: Utils.trimLines(`
-                    以下のJSON形式で出力してください。
-                    {"serviceName":{"apiName":{"name":"API名","method":"GET","endpoint":"/api/endpoint","usageScreenIdList":["画面ID",],"entityList":["Entity名",],"documentList":["機能設計書",]}}}
-                `),
-            }
-        ];
-    }
-}
+// class Step0090_ServiceMethodList extends BaseStepDomainModelGenerator {
+//     // format: StepOutputFormat = StepOutputFormat.JSON;
+//     constructor() {
+//         super();
+//         const apiList = getStepInstance(Step0070_ViewDocuments).childStepList.map(step => {
+//             const match = step.formed.match(/## 7\. API([\s\S]*?)(?=## \d)/);
+//             if (match) {
+//                 // console.log(step.formed);
+//                 const shifted = match[1].trim().split('\n').map(line => `  ${line}`).join('\n');
+//                 return `- ${(step as any).feature.name}\n${shifted}`;
+//             } else {
+//                 return '';
+//             }
+//         }).join('\n');
+//         this.chapters = [
+//             {
+//                 title: `Instructions`,
+//                 content: Utils.trimLines(`
+//                     これから提示する設計書をよく理解して、サービスメソッド一覧を作成してください。
+//                 `),
+//             }, {
+//                 title: '設計書',
+//                 children: [{
+//                     title: `画面⇒API呼び出し一覧`,
+//                     content: apiList,
+//                 }, {
+//                     title: `サービス一覧`,
+//                     content: Utils.mdTrim(getStepInstance(Step0080_ServiceList).formed),
+//                 }, {
+//                     title: `機能設計`,
+//                     content: Utils.addMarkdownDepth([
+//                         ...getStepInstance(Step0030_DesignSummary).childStepList,
+//                         ...getStepInstance(Step0015_AdvancedExpertiseDetail).childStepList, // 高度な専門知識
+//                     ].map((step: BaseStep) => step.formed).join('\n\n'), 2),
+//                 }, {
+//                     title: `Domain Models`,
+//                     content: Utils.addMarkdownDepth(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8'), 1),
+//                 }],
+//             }, {
+//                 title: 'Output Format',
+//                 // content: `表形式でサービス名(英語名)、ID（英語名）、名前、メソッド、エンドポイント、requestの形式、responseの形式、利用元画面IDリストを出力してください。`,
+//                 content: `表形式でサービス名(英語名)、メソッド名（英語名）、利用元画面ID(複数可)、依存先Entity（複数可）、依存先サービス名（複数可）、関係する機能設計書名(複数可)を出力してください。`,
+//             }
+//         ];
+//     }
+// }
+
+// class Step0092_ServiceMethodListReqRes extends BaseStepDomainModelGenerator {
+//     // format: StepOutputFormat = StepOutputFormat.JSON;
+//     constructor() {
+//         super();
+//         const beforeStep = getStepInstance(Step0090_ServiceMethodList);
+//         this.presetMessages.push({ role: 'user', content: beforeStep.prompt });
+//         this.presetMessages.push({ role: 'assistant', content: beforeStep.result });
+
+//         this.chapters = [
+//             {
+//                 title: `Instructions`,
+//                 content: Utils.trimLines(`
+//                     先程のサービスメソッド一覧について、エンドポイントとrequestとresponseの形式を考えてください。
+//                     型はjavaの記法で書いてください。
+//                 `),
+//             }, {
+//                 title: 'Output Format',
+//                 // content: `表形式でサービス名(英語名)、ID（英語名）、名前、メソッド、エンドポイント利用元画面IDリストを出力してください。`,
+//                 content: `表形式でサービス名(英語名)、メソッド名（英語名）、日本語名、メソッド、エンドポイント、requestの形式、responseの形式を出力してください。`,
+//             }
+//         ];
+//     }
+
+//     /**
+//      * サービス一覧は大規模リストに対応できるように列を分けて二段階で作っているので、ここでマージ処理を行う。
+//      * @param result 
+//      * @returns 
+//      */
+//     postProcess(result: string): string {
+//         const mergedAPIList = [];
+
+//         // 前回ステップで作成したものをmarkdownテーブルから読み込む。
+//         const serviceList = Utils.loadTableDataFromMarkdown(getStepInstance(Step0090_ServiceMethodList).formed).data.reduce((before: { [key: string]: { [key: string]: { usageScreenIdList: string[], entityList: string[], serviceList: string[], documentList: string[] } } }, current: string[]) => {
+//             const [serviceName, apiName, usageScreenIdListString, entityListString, serviceListString, documentListString] = current;
+//             if (!before[serviceName]) {
+//                 before[serviceName] = {};
+//             } else { }
+//             const usageScreenIdList = usageScreenIdListString.split(',').map(s => s.trim()).filter(s => s);
+//             const entityList = entityListString.split(',').map(s => s.trim()).filter(s => s);
+//             const serviceList = serviceListString.split(',').map(s => s.trim()).filter(s => s);
+//             const documentList = documentListString.split(',').map(s => s.trim()).filter(s => s);
+//             before[serviceName][apiName] = { usageScreenIdList, entityList, serviceList, documentList };
+//             return before;
+//         }, {}) as { [key: string]: { [key: string]: ServiceMethod } };
+
+//         // 今回のステップで作成したものをmarkdownテーブルから読み込む。
+//         Utils.loadTableDataFromMarkdown(result).data.forEach(element => {
+//             const [serviceName, apiName, name, method, _endpoint, request, response] = element;
+
+//             // endpointとpathVariableを整備する。
+//             const pathVariableListByEndpoint = Array.from(_endpoint.matchAll(/\{([^}]+)\}/g)).map(match => match[1]);
+//             let pathVariableList = request.split(',').filter((_, index) => index < pathVariableListByEndpoint.length).map(s => s.trim().split(' ')[1]);
+//             let endpoint = _endpoint;
+//             if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase())) {
+//                 // POST, PUT, PATCHの場合は、pathVariableを削除する。
+//                 endpoint = endpoint.replace(/\{([^}]+)\}/g, '').replace(/\/\/+/, '/').replace(/\/$/, '');
+//                 pathVariableList = [];
+//             } else {
+//                 // GET, DELETEの場合は、pathVariableを使えるように整備する。
+//                 pathVariableListByEndpoint.forEach((pathVariable, index) => {
+//                     endpoint = endpoint.replace(`{${pathVariable}}`, `{${pathVariableList[index]}}`);
+//                 });
+//             }
+//             serviceList[serviceName][apiName] = { ...serviceList[serviceName][apiName], name, method, endpoint, pathVariableList, request, response };
+//         });
+
+//         const entityModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFilled.json`, 'utf-8')) as EntityModelClass;
+//         // テーブル形式のデータを作成する。
+//         const heads = ['serviceName', 'apiName', 'name', 'method', 'endpoint', 'pathVariableList', 'request', 'response', 'usageScreenIdList', 'Dependent Repositories', 'Dependent Services', 'Related Functional Specifications'];
+//         mergedAPIList.push(heads);
+//         mergedAPIList.push(heads.map(() => '---'));
+//         Object.keys(serviceList).forEach(serviceName => {
+//             Object.keys(serviceList[serviceName]).forEach(apiName => {
+//                 // const pathVariableList = (serviceList[serviceName][apiName].endpoint.match(/\{([^}]+)\}/g) || []).map(pathVariable => pathVariable.replace(/^\{/, '').replace(/\}$/, ''));
+//                 mergedAPIList.push([
+//                     Utils.toPascalCase(Utils.safeFileName(serviceName)).replace(/Service$/g, '') + 'Service', // サービス名を標準化 ⇒ PascalCaseService にする。
+//                     Utils.toCamelCase(Utils.safeFileName(apiName)), // メソッド名を標準化 ⇒ camelCase にする。
+//                     serviceList[serviceName][apiName].name,
+//                     serviceList[serviceName][apiName].method.toUpperCase(), // httpメソッドは大文字にする。
+//                     serviceList[serviceName][apiName].endpoint,
+//                     serviceList[serviceName][apiName].pathVariableList.join(','),
+//                     serviceList[serviceName][apiName].request,
+//                     serviceList[serviceName][apiName].response,
+//                     serviceList[serviceName][apiName].usageScreenIdList.join(','),
+//                     // Entity以外のもの（embeddableなど）は除外する。
+//                     serviceList[serviceName][apiName].entityList.filter(entity => entityModel.entityNameList.includes(entity)).map(entity => `${entity}Repository<${entity}, Long>`).join(','),
+//                     serviceList[serviceName][apiName].serviceList.join(','),
+//                     serviceList[serviceName][apiName].documentList.join(',')
+//                 ]);
+//             });
+//         });
+//         const apiDataTable = mergedAPIList.map(row => `| ${row.join(' | ')} |`).join('\n');
+//         // service用にヘッダーを設定する。
+//         mergedAPIList[0][1] = 'methodName';
+//         mergedAPIList[0][6] = 'args';
+//         mergedAPIList[0][7] = 'return';
+//         // service用にmethodとendpointとpathVariableListを削除する。
+//         const serviceDataTable = mergedAPIList.map(row => `| ${row.slice(0, 3).concat(row.slice(6, 10)).join(' | ')} |`).join('\n');
+
+//         // markdownとjsonで出力する。
+//         fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ApiList.md`, apiDataTable);
+//         fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.md`, serviceDataTable);
+//         fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, JSON.stringify(serviceList, null, 2));
+//         return result;
+//     }
+// }
+
+// class Step0095_ApiListJson extends BaseStepDomainModelGenerator {
+//     format: StepOutputFormat = StepOutputFormat.JSON;
+//     constructor() {
+//         super();
+//         this.chapters = [
+//             {
+//                 title: `Instructions`,
+//                 content: Utils.trimLines(`
+//                     与えられた表をJSON形式に変換してください。
+//                 `),
+//             }, {
+//                 content: Utils.setMarkdownBlock(Utils.mdTrim(getStepInstance(Step0090_ServiceMethodList).formed), 'markdown'),
+//             }, {
+//                 title: 'Output Format',
+//                 // {"serviceName":{"apiName":{"name":"API名","method":"GET","endpoint":"/api/endpoint","request":"{ request }","response":"{ response }","usageScreenIdList":"画面IDリスト"}}}
+//                 content: Utils.trimLines(`
+//                     以下のJSON形式で出力してください。
+//                     {"serviceName":{"apiName":{"name":"API名","method":"GET","endpoint":"/api/endpoint","usageScreenIdList":["画面ID",],"entityList":["Entity名",],"documentList":["機能設計書",]}}}
+//                 `),
+//             }
+//         ];
+//     }
+// }
+
+type EntityDetailFilled = {
+    classes: Record<string, {
+        relatedClasses: string[]
+        type: 'entity' | 'valueObject', imports: string[], annotations: string[], source: string, mdTable: string,
+        props: { type: string, strippedType: string, name: string, annotations: string[], isOptional: boolean, description: string }[]
+    }>,
+    enums: Record<string, { type: 'enum', source: string, mdTable: string, values: string[] }>,
+    entityNameList: string[], valueObjectNameList: string[], enumNameList: string[],
+};
 
 /**
  * APIドキュメントを作成する。
  * ※要らないかもしれない。
  */
 class Step0100_ApiDocuments extends MultiStepDomainModelGenerator {
-    viewList!: { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[] }[];
 
+    viewList = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ViewList.json`, 'utf-8')).viewList as { name: string, destinationList: string[], relatedFeatureList: string[], relatedFeatureDocumentList: string[], relatedEntityList: string[], relatedEntityDoc: string }[];
     serviceList = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as { [key: string]: { [key: string]: ServiceMethod } };
-    entityModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, 'utf-8')) as EntityModelClass;
+    entityDetailFilled = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFilled.json`, 'utf-8')) as EntityDetailFilled;
 
     ENTITY_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8');
     API_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ApiList.md`, 'utf-8');
+    SERVICE_LIST = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.md`, 'utf-8');
 
-    REPOSITORY_LIST = this.entityModel.entityNameList.map(entityName => `- ${entityName}Repository<${entityName}, Long>`).join('\n');
+    repositoryDocs = this.entityDetailFilled.entityNameList.map(entityName => `- ${entityName}Repository<${entityName}, Long>`).join('\n');
 
     constructor() {
         super();
 
         // 画面一覧から画面と紐づく機能一覧を取得する。
-        this.viewList = JSON.parse(getStepInstance(Step0060_ViewList).formed).viewList;
         const featureMas = getStepInstance(Step0030_DesignSummary).childStepList.reduce((acc: { [key: string]: string }, step: BaseStep) => {
             const feature = (step as any).feature;
             acc[feature] = step.formed;
@@ -1425,14 +2073,18 @@ class Step0100_ApiDocuments extends MultiStepDomainModelGenerator {
                         title: '全体設計書',
                         content: `全体設計書はシステム全体について語っています。あなたの担当分が相対的にどのような役割かを理解するのに役立ててください。`,
                         children: [{
-                            title: `API一覧`,
-                            content: parentInstance.API_LIST,
+                            // サービス一覧だけの方がいいかもしれないのでAPI一覧を外す。
+                            //     title: `API一覧`,
+                            //     content: parentInstance.API_LIST,
                         }, {
-                            title: `Entity`,
-                            content: parentInstance.ENTITY_LIST,
+                            title: `サービス一覧`,
+                            content: parentInstance.SERVICE_LIST,
+                        }, {
+                            title: `Domain Models`,
+                            content: Utils.addMarkdownDepth(parentInstance.ENTITY_LIST, 1),
                         }, {
                             title: `Repository`,
-                            content: parentInstance.REPOSITORY_LIST,
+                            content: parentInstance.repositoryDocs,
                         }],
                     }, {
                         title: '個別設計書',
@@ -1540,7 +2192,7 @@ class Step0100_ApiDocuments extends MultiStepDomainModelGenerator {
         // console.log(serviceData);
 
         const viewDocMap = getStepInstance(Step0070_ViewDocuments).childStepList.reduce((before: { [key: string]: any }, current: BaseStep) => {
-            const featureName = (current as any).feature.name;
+            const featureName = (current as any).view.name;
             if (!before[featureName]) {
                 before[featureName] = [];
             } else { }
@@ -1578,7 +2230,7 @@ class Step0100_ApiDocuments extends MultiStepDomainModelGenerator {
 }
 
 class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
-    entityList = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8');
+    entityList = fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.java.md`, 'utf-8');
     serviceList = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as { [key: string]: { [key: string]: ServiceMethod } };
     constructor() {
         super();
@@ -1613,16 +2265,17 @@ class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
                             RequestDtoには Jakarta Bean Validation API のバリデーターを付けてください。
                             Lombokの@Dataを使ってください。
                             階層化されたRequestDtoの内部項目に対してバリデーションを行う場合は、内部クラスとして定義してください。
+                            ${PACKAGE_NAME}.domain.entity, ${PACKAGE_NAME}.domain.enumsを有効利用してください。バリデーションを掛けるためにそれらをextendsしてもよいです。
                             クラスメンバはフィールドのみとすること（コンストラクタとメソッドは不要）。
                         `),
                     }, {
                         title: '設計書',
                         children: [{
                             title: `${Utils.toPascalCase(serviceName)}${Utils.toPascalCase(apiName)}RequestDto`,
-                            content: Utils.setMarkdownBlock(request),
+                            content: request,
                         }, {
                             title: `${Utils.toPascalCase(serviceName)}${Utils.toPascalCase(apiName)}ResponseDto`,
-                            content: Utils.setMarkdownBlock(response),
+                            content: response,
                         }, {
                             content: Utils.addMarkdownDepth(detailDocument, 1),
                         }, {
@@ -1685,23 +2338,30 @@ class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
                     // skip
                 } else if (line.startsWith('import ')) {
                     // import文を追加する。（重複は除く）
-                    const importLine = line.replace('import ', '').replace(';', '').trim();
+                    const importLine = line.replace('import ', '').replace(/;.*$/g, '').trim();
                     if (!dto.imports.includes(importLine)) dto.imports.push(importLine);
                 } else if (trimed.startsWith('@')) {
-                    annotationStock.push(trimed);
+                    if (trimed.startsWith('@Length')) {
+                        // @Sizeと@Lengthをミスっていることがあるので@Sizeに統一する。
+                        annotationStock.push('@Size');
+                    } else {
+                        annotationStock.push(trimed);
+                    }
                 } else {
+                    // console.log(`line-bef: ${serviceName} ${line}`);
                     line = line.replace(/^\s*(?:public |private )/g, '');
                     line = line.replace(/^\s*(?:static )/g, '');
+                    // console.log(`line-aft: ${serviceName} ${line}`);
                     if (line.startsWith('class ')) {
                         const className = line.split(' ')[1];
                         dtoChain.push(dto);
                         dto.innerClasses.push(dto = new DtoClass(className));
                         dto.name = className;
                     } else if (trimed.split('//')[0].trim().endsWith(';')) {
-                        const splitted = line.replace(';', '').trim().split(' ');
+                        const splitted = line.trim().split('//')[0].trim().replace(/;.*$/g, '').trim().split(' ');
                         const type = splitted.slice(0, -1).join(' ');
                         const name = splitted[splitted.length - 1];
-                        dto.fields.push({ name, type, annotations: annotationStock, description: '' });
+                        dto.fields.push({ name, type, annotations: annotationStock, description: trimed.split('//')[1] || '' });
                         annotationStock = [];
                     } else if (trimed.startsWith('}')) {
                         dto = dtoChain.pop() as DtoClass;
@@ -1731,7 +2391,7 @@ class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
             JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as { [key: string]: { [key: string]: ServiceMethod } },
             mas, // 今作ったばかりのServiceModel
             JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceDocs.json`, 'utf-8')) as Record<string, string>,
-            JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, 'utf-8')) as EntityModelClass,
+            JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFilled.json`, 'utf-8')) as EntityDetailFilledType,
             PACKAGE_NAME,
         );
         Object.entries(javaInterfaceSourceMap).forEach(([key, value]) => {
@@ -1744,7 +2404,7 @@ class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
             JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as { [key: string]: { [key: string]: ServiceMethod } },
             mas, // 今作ったばかりのServiceModel
             JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceDocs.json`, 'utf-8')) as Record<string, string>,
-            JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, 'utf-8')) as EntityModelClass,
+            JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFilled.json`, 'utf-8')) as EntityDetailFilledType,
         );
         Object.entries(angularServiceSourceMap).forEach(([key, value]) => {
             fss.writeFileSync(`results/${this.agentName}/${PROJECT_NAME}/angular/src/app/service/${Utils.toKebabCase(key)}.service.ts`, value);
@@ -1755,7 +2415,7 @@ class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
 
 class Step0120_ApiSourceJson extends MultiStepDomainModelGenerator {
 
-    entityModel: EntityModelClass = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, 'utf-8')) as EntityModelClass;
+    entityModel: EntityDetailFilledType = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFilled.json`, 'utf-8')) as EntityDetailFilledType;
     serviceList: { [key: string]: { [key: string]: ServiceMethod } } = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceList.json`, 'utf-8')) as { [key: string]: { [key: string]: ServiceMethod } };
     serviceModel: Record<string, DtoClass> = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceModel.json`, 'utf-8')) as Record<string, DtoClass>;
     serviceDocs: Record<string, string> = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ServiceDocs.json`, 'utf-8')) as Record<string, string>;
@@ -1802,6 +2462,7 @@ class Step0120_ApiSourceJson extends MultiStepDomainModelGenerator {
                             これから提示する設計書をよく読んで、サービス実装のひな型のTODOを実装してください。
                             あなたの担当は「${apiId}」です。担当外のものはやらなくてよいです。
                             RequestDtoはEntityと似ていても異なるものです。マッピング処理を忘れないように注意してください。
+                            項目の型には注意しましょう。Entityの型とは異なることがあります。
                             また、バリデーションは別のクラスで実装してあるので実装しなくてよいです。
                             Entityの操作は、対応するAPI、もしくはRepositoryインターフェース経由で行ってください。（entityManager.createQueryは禁止です）。
                             追加のインジェクションが必要な場合は「サービス一覧」、「Repository一覧」の中からのみ選択可能です。
@@ -1844,8 +2505,8 @@ class Step0120_ApiSourceJson extends MultiStepDomainModelGenerator {
                             title: `Repository一覧`,
                             content: parentInstance.REPOSITORY_LIST,
                         }, {
-                            title: `Entity`,
-                            content: parentInstance.ENTITY_LIST,
+                            title: `Domain Models`,
+                            content: Utils.addMarkdownDepth(parentInstance.ENTITY_LIST, 1),
                         }, {
                             title: `Common classes`,
                             content: exceptionSource
@@ -1989,7 +2650,7 @@ class Step0130_RepositoryMethod extends MultiStepDomainModelGenerator {
         });
         // console.dir(repositoryMethods0, { depth: 5 });
 
-        const entityModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.json`, 'utf-8')) as EntityModelClass;
+        const entityModel = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityDetailFilled.json`, 'utf-8')) as EntityDetailFilledType;
         // console.dir(entityModel, { depth: 5 });
 
         // EntityベースでRepositoryのメソッドをまとめる。
@@ -2087,26 +2748,30 @@ class Step0050_EntityListToJson extends BaseStepDomainModelGenerator {
  */
 export async function main() {
 
-    // springのテンプレートを作成する。
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/exception/ResourceNotFoundException.java`, spring_ResourceNotFoundException.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/exception/CustomException.java`, spring_CustomException.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/domain/entity/BaseEntity.java`, spring_BaseEntity.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/DemoApplication.java`, spring_DemoApplication.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+    // POM用の名前
     const split0 = PACKAGE_NAME.split('\.');
     const name = split0.pop() || '';
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/spring/pom.xml`, spring_Pom.replace(/\{\{groupId\}\}/g, split0.join('.')).replace(/\{\{artifactId\}\}/g, name).replace(/\{\{name\}\}/g, name));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/spring/src/main/resources/application.yml`, spring_application.replace(/\{\{packageName\}\}/g, PACKAGE_NAME));
+
+    const vars = { packageName: PACKAGE_NAME, projectName: PROJECT_NAME, name, artifactId: name, groupId: split0.join('.') };
+
+    // springのテンプレートを作成する。
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/exception/ResourceNotFoundException.java`, Utils.replaceTemplateString(spring_ResourceNotFoundException, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/exception/CustomException.java`, Utils.replaceTemplateString(spring_CustomException, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/domain/entity/BaseEntity.java`, Utils.replaceTemplateString(spring_BaseEntity, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/DemoApplication.java`, Utils.replaceTemplateString(spring_DemoApplication, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/spring/pom.xml`, Utils.replaceTemplateString(spring_Pom, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/spring/src/main/resources/application.yml`, Utils.replaceTemplateString(spring_application, vars));
 
     // Angularのテンプレートを作成する。
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/app/api.interceptor.ts`, angular_apiInterceptor.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/app/app.config.ts`, angular_appConfig.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/environments/environment.development.ts`, angular_environmentDevelopment.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/environments/environment.ts`, angular_environment.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/package.json`, angular_package.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/tailwind.config.js`, angular_tailwindConfig.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
-    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/proxy.conf.js`, angular_proxyConf.replace(/\{\{projectName\}\}/g, PROJECT_NAME));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/app/api.interceptor.ts`, Utils.replaceTemplateString(angular_apiInterceptor, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/app/app.config.ts`, Utils.replaceTemplateString(angular_appConfig, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/environments/environment.development.ts`, Utils.replaceTemplateString(angular_environmentDevelopment, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/src/environments/environment.ts`, Utils.replaceTemplateString(angular_environment, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/package.json`, Utils.replaceTemplateString(angular_package, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/tailwind.config.js`, Utils.replaceTemplateString(angular_tailwindConfig, vars));
+    fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/angular/proxy.conf.js`, Utils.replaceTemplateString(angular_proxyConf, vars));
 
-    let obj, step;
+    let obj;
     return Promise.resolve().then(() => {
         obj = getStepInstance(Step0000_RequirementsToFeatureListSummary);
         obj.initPrompt();
@@ -2123,11 +2788,6 @@ export async function main() {
         obj = getStepInstance(Step0015_AdvancedExpertiseDetail);
         obj.initPrompt();
         return obj.run();
-    }).then(() => {
-        // }).then(() => {
-        // //     obj = new Step0015_EntityList(); // 使ってない
-        // //     obj.initPrompt();
-        // //     return obj.run();
     }).then(() => {
         obj = getStepInstance(Step0020_FeatureListDetailToJsonFormat);
         obj.initPrompt();
@@ -2157,26 +2817,30 @@ export async function main() {
         obj.initPrompt();
         return obj.run();
     }).then(() => {
-        obj = getStepInstance(Step0042_ValueObjectEnum); // Enumを作る
+        obj = getStepInstance(Step0042_EntityFeatureMapping); // Entity⇒機能マッピングを作る
         obj.initPrompt();
         return obj.run();
     }).then(() => {
-        obj = getStepInstance(Step0043_EntityListAddittional); // Entity一覧を作る
-        obj.initPrompt();
-        return obj.run();
-        // obj.postProcess(obj.result);
+        // // // Entity一覧を詳細化して、最後に帳尻合わせた方が良さそうな気がしたので一旦廃止
+        // //     obj = getStepInstance(Step0043_ValueObjectEnumList); // ValueObject⇒Enum一覧を作る
+        // //     obj.initPrompt();
+        // //     // return obj.run();
+        // //     obj.postProcess(obj.result);
+        // // }).then(() => {
+        // //     obj = getStepInstance(Step0045_EntityFeatureMapping); // Entity⇒機能マッピングを作る
+        // //     obj.initPrompt();
+        // //     // return obj.run();
+        // // }).then(() => {
+        // //     obj = getStepInstance(Step0048_ValuObjectEnumDetail); // ValueObject、Enum詳細を作る
+        // //     obj.initPrompt();
+        // //     // return obj.run();
     }).then(() => {
-        obj = getStepInstance(Step0050_EntityAttributes); // Entity一覧属性あり版を作る
+        obj = getStepInstance(Step0050_EntityAttributes); // Entity一覧（属性あり版）を作る
         obj.initPrompt();
         return obj.run();
         // obj.postProcess(obj.childStepList.map((step) => step.result));
     }).then(() => {
-        obj = getStepInstance(Step0052_EntityAttributesAdditional); // Entity一覧属性あり版のセルフリファイン
-        obj.initPrompt();
-        return obj.run();
-        // obj.postProcess(obj.childStepList.map((step) => step.result));
-    }).then(() => {
-        obj = getStepInstance(Step0054_EntityAttributesMerge); // Entity一覧属性あり版のセルフリファインのマージ版
+        obj = getStepInstance(Step0052_EntityAttributesMerge); // Entity一覧属性あり版のセルフリファインのマージ版
         obj.initPrompt();
         return obj.run();
         // obj.postProcess(obj.childStepList.map((step) => step.result));
@@ -2203,15 +2867,17 @@ export async function main() {
         obj = getStepInstance(Step0080_ServiceList); // サービス一覧を作る
         obj.initPrompt();
         return obj.run();
+        // obj.postProcess(obj.result);
     }).then(() => {
-        obj = getStepInstance(Step0090_ServiceMethodList); // サービス⇒API一覧を作る
-        obj.initPrompt();
-        return obj.run();
-    }).then(() => {
-        obj = getStepInstance(Step0092_ServiceMethodListReqRes); // サービス⇒API一覧に列追加
-        obj.initPrompt();
-        return obj.run();
-        // obj.postProcess(obj.result); // 後処理デバッグ用
+        // // Step0080_ServiceListのセルフリファインに統合したので廃止
+        //     obj = getStepInstance(Step0090_ServiceMethodList); // サービス⇒API一覧を作る
+        //     obj.initPrompt();
+        //     // return obj.run();
+        // }).then(() => {
+        //     obj = getStepInstance(Step0092_ServiceMethodListReqRes); // サービス⇒API一覧に列追加
+        //     obj.initPrompt();
+        //     // return obj.run();
+        //     // obj.postProcess(obj.result); // 後処理デバッグ用
     }).then(() => {
         obj = getStepInstance(Step0100_ApiDocuments);
         obj.initPrompt();
@@ -2236,12 +2902,29 @@ export async function main() {
     });
 }
 
+process.on('uncaughtException', (error) => {
+    console.error('未捕捉の例外:', error);
+    // 必要なクリーンアップ処理やプロセスの再起動などを行う
+    // ただし、この状態から安全に回復することは難しいので、プロセスを終了させることが一般的
+    // process.exit(1);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('未処理のPromiseの拒否:', promise, '理由:', reason);
+    // 必要なエラーロギングやクリーンアップ処理
+    // Node.jsは将来的に未処理のPromiseの拒否に対してプロセスを終了させる可能性があるため、対処が必要
+});
 
 /**
  * このファイルが直接実行された場合のコード。
  */
 if (fileURLToPath(import.meta.url) === process.argv[1]) {
-    main();
+    try {
+        main();
+        console.log('正常終了しました。');
+    } catch (e) {
+        console.log('最外殻でエラーが発生しました。');
+        console.error(e);
+    }
 } else {
     // main実行じゃなかったら何もしない
 }
