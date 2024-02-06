@@ -193,9 +193,11 @@ export function javaInterfaceMap(
                 annos.push('NoArgsConstructor');
                 if (dtoClass.fields && dtoClass.fields.length > 0) {
                     annos.push('AllArgsConstructor');
+                    serviceImports.add('AllArgsConstructor');
                 }
                 if (extendsEntity) {
                     annos.push('EqualsAndHashCode(callSuper = false)');
+                    serviceImports.add(`EqualsAndHashCode`);
                 }
                 // serviceImportsに追加
                 annos.forEach(anno => serviceImports.add(anno));
@@ -287,6 +289,8 @@ export function javaInterfaceMap(
                     } else {
                         // pathVariableに含まれているので、ここでは何もしない。
                     }
+                    // ジェネリクスの場合は分解して追加
+                    field.type.split(/[<,>]/).filter(t => t.trim()).forEach(t => controllerImports.add(field.type));
                 });
                 controllerMethodSignature = Utils.trimLines(`
                     \tpublic ${pascalServiceName}.${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(${args.map((arg) => arg.argString).join(', ')}) {
@@ -792,6 +796,7 @@ export function javaServiceImplementsMap(
         imports.add(`org.springframework.transaction.annotation.Transactional`);
         imports.add(`org.springframework.web.multipart.MultipartFile`);
         imports.add(`lombok.Data`);
+        imports.add(`lombok.EqualsAndHashCode`);
         imports.add(`lombok.RequiredArgsConstructor`);
         imports.add(`lombok.extern.slf4j.Slf4j`);
         imports.add(`${PACKAGE_NAME}.domain.entity.*`);

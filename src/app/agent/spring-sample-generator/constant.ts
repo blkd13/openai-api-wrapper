@@ -140,6 +140,8 @@ export const JAVA_FQCN_MAP: Record<string, string> = {
 
     PastOrPresent: 'jakarta.validation.constraints.PastOrPresent',
     FutureOrPresent: 'jakarta.validation.constraints.FutureOrPresent',
+    Future: 'jakarta.validation.constraints.Future',
+    Digits: 'jakarta.validation.constraints.Digits',
     Past: 'jakarta.validation.constraints.Past',
 
     Email: 'jakarta.validation.constraints.Email',

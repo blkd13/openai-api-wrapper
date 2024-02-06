@@ -1202,7 +1202,7 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                     return (fieldAnnotations[className][prop.name] || []).includes('@Id') || (prop.annotations || []).includes('@Id');
                 });
                 if (!idProp) {
-                    console.log(className);
+                    // console.log(className);
                     fieldAnnotations[className] = fieldAnnotations[className] || {};
                     fieldAnnotations[className]['id'] = fieldAnnotations[className]['id'] || [];
                     fieldAnnotations[className]['id'].push('@Id');
@@ -1715,7 +1715,7 @@ class Step0080_ServiceList extends BaseStepDomainModelGenerator {
 
             // endpointとpathVariableを整備する。
             const pathVariableListByEndpoint = Array.from(_endpoint.matchAll(/\{([^}]+)\}/g)).map(match => match[1]);
-            console.log(_endpoint, pathVariableListByEndpoint);
+            // console.log(_endpoint, pathVariableListByEndpoint);
             let pathVariableList = request.split(',').filter((_, index) => index < pathVariableListByEndpoint.length).map(s => s.trim().split(' ')[1]);
             let endpoint = _endpoint;
             if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase())) {
@@ -1725,7 +1725,7 @@ class Step0080_ServiceList extends BaseStepDomainModelGenerator {
             } else {
                 // GET, DELETEの場合は、pathVariableを使えるように整備する。
                 pathVariableListByEndpoint.forEach((pathVariable, index) => {
-                    console.log(pathVariable, pathVariableList[index]);
+                    // console.log(pathVariable, pathVariableList[index]);
                     if (pathVariableList[index]) {
                         // pathVariableList(requestに掛かれている項目名)がある場合は、endpointのpathVariableを置換する。
                         endpoint = endpoint.replace(`{${pathVariable}}`, `{${pathVariableList[index]}}`);
