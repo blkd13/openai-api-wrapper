@@ -276,15 +276,26 @@ export function javaInterfaceMap(
                 controllerImports.add('RequestBody');
                 controllerImports.add('Valid');
             } else {
-                // GET, DELETEの場合はpathVariableを受け取る
+                // GET, DELETEの場合はpathVariableかrequestParamを受け取ってリクエストボディに変換する
+                const args = methodData.pathVariableList.map((_, index) => ({ argType: 'path', name: reqDto.fields[index].name, type: reqDto.fields[index].type, argString: `@PathVariable("${reqDto.fields[index].name}") ${reqDto.fields[index].type} ${reqDto.fields[index].name}` }));
+                const pathVariableNames = methodData.pathVariableList.map((_, index) => reqDto.fields[index].name);
+                reqDto.fields.forEach(field => {
+                    if (pathVariableNames.indexOf(field.name) === -1) {
+                        // pathVariableに含まれていない場合はqueryParameterとして受け取る
+                        args.push({ argType: 'query', name: field.name, type: field.type, argString: `@RequestParam("${field.name}") ${field.type} ${field.name}` });
+                        controllerImports.add('RequestParam');
+                    } else {
+                        // pathVariableに含まれているので、ここでは何もしない。
+                    }
+                });
                 controllerMethodSignature = Utils.trimLines(`
-                    \tpublic ${pascalServiceName}.${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(${methodData.pathVariableList.map((_, index) => `@PathVariable("${reqDto.fields[index].name}") ${reqDto.fields[index].type} ${reqDto.fields[index].name}`).join(', ')}) {
+                    \tpublic ${pascalServiceName}.${pascalServiceName}${pascalMethodName}ResponseDto ${Utils.toCamelCase(methodName)}(${args.map((arg) => arg.argString).join(', ')}) {
                     \t\t${pascalServiceName}.${pascalServiceName}${pascalMethodName}RequestDto request = new ${pascalServiceName}.${pascalServiceName}${pascalMethodName}RequestDto();
-                    ${methodData.pathVariableList.map((_, index) => `\t\trequest.set${Utils.toPascalCase(reqDto.fields[index].name)}(${reqDto.fields[index].name});`).join('\n')}
+                    ${args.map((_, index) => `\t\trequest.set${Utils.toPascalCase(reqDto.fields[index].name)}(${reqDto.fields[index].name});`).join('\n')}
                     \t\treturn ${Utils.toCamelCase(serviceName)}.${Utils.toCamelCase(methodName)}(request);
                     \t}
                 `);
-                if (reqDto.fields.length > 0) controllerImports.add('PathVariable');
+                if (methodData.pathVariableList.length > 0) controllerImports.add('PathVariable');
             }
 
             const controller = Utils.trimLines(`
@@ -324,7 +335,7 @@ export function javaInterfaceMap(
         `);
 
         controllerImports.add('RestController');
-        controllerImports.add('Slf4j');
+        // controllerImports.add('Slf4j');
         controllerImports.add('Autowired');
         const controllerImportString = Array.from(controllerImports).map(imp => JAVA_FQCN_MAP[imp]).filter(imp => imp).map(imp => `import ${imp};\n`).join('');
         const controller = Utils.trimLines(`
@@ -337,7 +348,7 @@ export function javaInterfaceMap(
              * ${serviceName}Controller
              */
             @RestController
-            @Slf4j
+            // @Slf4j
             public class ${pascalServiceName}Controller {
             \t@Autowired
             \tprivate ${pascalServiceName} ${Utils.toCamelCase(serviceName)};

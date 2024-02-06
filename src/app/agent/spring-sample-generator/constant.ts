@@ -126,6 +126,8 @@ export const JAVA_FQCN_MAP: Record<string, string> = {
     Embeddable: 'jakarta.persistence.Embeddable',
     Embedded: 'jakarta.persistence.Embedded',
     EmbeddedId: 'jakarta.persistence.EmbeddedId',
+    AttributeOverride: 'jakarta.persistence.AttributeOverride',
+    AttributeOverrides: 'jakarta.persistence.AttributeOverrides',
 
     // jakarta.validation.constraints: 'jakarta.validation.constraints.*',
     NotBlank: 'jakarta.validation.constraints.NotBlank',
@@ -171,11 +173,11 @@ export const JAVA_FQCN_MAP: Record<string, string> = {
     PutMapping: 'org.springframework.web.bind.annotation.PutMapping',
     DeleteMapping: 'org.springframework.web.bind.annotation.DeleteMapping',
     PathVariable: 'org.springframework.web.bind.annotation.PathVariable',
+    RequestParam: 'org.springframework.web.bind.annotation.RequestParam',
     RequestBody: 'org.springframework.web.bind.annotation.RequestBody',
     ResponseBody: 'org.springframework.web.bind.annotation.ResponseBody',
     Validated: 'org.springframework.validation.annotation.Validated',
     // Valid: 'org.springframework.validation.annotation.Valid',
-    
 
     // lombok: 'lombok.*',
     RequiredArgsConstructor: 'lombok.RequiredArgsConstructor',

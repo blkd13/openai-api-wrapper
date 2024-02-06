@@ -789,78 +789,6 @@ class Step0052_EntityAttributesMerge extends MultiStepDomainModelGenerator {
                     title: '追加設計',
                     content: Utils.addMarkdownDepth(beforeStep.getRefineData(1), 2),
                 }, {
-                    // title: `Output Sample`,
-                    // content: Utils.trimLines(`
-                    //     以下のような形式で出力してください。
-                    //     ※あくまで形式のサンプルです。実際の出力内容は、当初設計と追加設計を統合したものとしてください。
-
-                    //     \`\`\`markdown
-
-                    //     ### Credit Entity
-
-                    //     #### Entity
-
-                    //     | Attribute Name | Java Class | Optional | Type | Collection | Description |
-                    //     |-|-|-|-|-|-|
-                    //     | creditId | Long | | | | 債権の一意識別子 |
-                    //     | customerId | Long | | | | 顧客の一意識別子。顧客エンティティへの参照 |
-                    //     | loanConditions | LoanConditions | | ValueObject | | 貸付条件 |
-                    //     | repaymentHistory | RepaymentHistoryItem | | ValueObject | List | 返済履歴 |
-                    //     | delinquencyInformation | DelinquencyInformation | | ValueObject | | 延滞情報 |
-                    //     | loanStatus | LoanStatus | | Enum | | 貸付状態 |
-                    //     | creationDate | DateTime | | | | 債権作成日 |
-                    //     | lastUpdated | DateTime | | | | 最終更新日 |
-
-                    //     #### ValueObjects
-
-                    //     ##### LoanConditions
-
-                    //     | Attribute Name | Java Class | Optional | Type | Collection | Description |
-                    //     |-|-|-|-|-|-|
-                    //     | interestRate | BigDecimal | No | - | - | 利率 |
-                    //     | loanAmount | BigDecimal | No | - | - | 貸付額 |
-                    //     | loanTerm | Integer | No | - | - | 貸付期間 |
-
-                    //     ##### RepaymentHistoryItem
-
-                    //     | Attribute Name | Java Class | Optional | Type | Collection | Description |
-                    //     |-|-|-|-|-|-|
-                    //     | repaymentDate | LocalDate | No | - | - | 返済日 |
-                    //     | repaymentAmount | BigDecimal | No | - | - | 返済額 |
-                    //     | lateInterest | BigDecimal | Yes | - | - | 遅延利息 |
-
-                    //     ##### DelinquencyInformation
-
-                    //     | Attribute Name | Java Class | Optional | Type | Collection | Description |
-                    //     |-|-|-|-|-|-|
-                    //     | daysDelinquent | Integer | No | - | - | 延滞日数 |
-                    //     | delinquentAmount | BigDecimal | No | - | - | 延滞額 |
-                    //     | delinquencyStartDate | LocalDate | Yes | - | - | 延滞開始日 |
-                    //     | delinquencyResolutionDate | LocalDate | Yes | - | - | 延滞解決日 |
-                    //     | resolutionStatus | ResolutionStatus | No | Enum | - | 延滞の解決状態 |
-                    //     | resolutionAmount | BigDecimal | Yes | - | - | 解決時の支払額 |
-
-
-                    //     #### Enums
-
-                    //     ##### LoanStatus
-
-                    //     | Enum Value | Description |
-                    //     |-|-|
-                    //     | Active | アクティブな貸付 |
-                    //     | Completed | 完了した貸付 |
-                    //     | Defaulted | デフォルト状態の貸付 |
-
-                    //     ##### ResolutionStatus
-
-                    //     | Enum Value | Description |
-                    //     |-|-|
-                    //     | PaidInFull | 全額支払いで解決された |
-                    //     | Settled | 和解により解決された |
-                    //     | WrittenOff | 損失処理された |
-
-                    //     \`\`\`
-                    // `),
                 }];
             }
         }
@@ -952,7 +880,7 @@ class Step0052_EntityAttributesMerge extends MultiStepDomainModelGenerator {
                 const pluralized = Utils.toSnakeCase(className).split('_').map((word, index, ary) => index === ary.length - 1 ? Utils.pluralize(word) : word).join('_');
                 obj.annotations.push(`@Table(name = "${pluralized}")`);
                 imports.add('Table');
-                obj.annotations.push(`@EqualsAndHashCode(callSuper=false)`);
+                obj.annotations.push(`@EqualsAndHashCode(callSuper = false)`);
                 imports.add('EqualsAndHashCode');
 
                 // BaseEntityを継承する。
@@ -1228,7 +1156,7 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                         // @JoinColumnは_idがついてしまっているので、_idを削除したフィールド名と同期させておく
                         acc[className][Utils.toCamelCase(fieldName.replace(/_[Ii][Dd]$/, ''))] = acc[className][fieldName];
                     } else if (anno === '@OneToMany') {
-                        // @OneToMayは項目名が複数形になってしまうので単数形に変換したオブジェクトと同期させておく
+                        // @OneToManyは項目名が複数形になってしまうので単数形に変換したオブジェクトと同期させておく
                         acc[className][Utils.singularize(fieldName)] = acc[className][fieldName];
                     } else { }
 
@@ -1266,9 +1194,26 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
         [...entityDetailFrame.entityNameList, ...entityDetailFrame.valueObjectNameList].flat().forEach(className => { JAVA_FQCN_MAP[className] = `${PACKAGE_NAME}.domain.entity.${className}`; });
         entityDetailFrame.enumNameList.flat().forEach(className => { JAVA_FQCN_MAP[className] = `${PACKAGE_NAME}.domain.enums.${className}`; });
 
+        // @Idが無いEntityがあれば、@Idを追加する。
+        Object.entries(entityDetailFrame.classes).forEach(([className, classObject]) => {
+            if (classObject.type === 'entity') {
+                const idProp = classObject.props.find(prop => {
+                    fieldAnnotations[className] = fieldAnnotations[className] || {};
+                    return (fieldAnnotations[className][prop.name] || []).includes('@Id') || (prop.annotations || []).includes('@Id');
+                });
+                if (!idProp) {
+                    console.log(className);
+                    fieldAnnotations[className] = fieldAnnotations[className] || {};
+                    fieldAnnotations[className]['id'] = fieldAnnotations[className]['id'] || [];
+                    fieldAnnotations[className]['id'].push('@Id');
+                } else { }
+            } else { }
+        });
 
         Object.entries(entityDetailFrame.classes).forEach(([className, classObject]) => {
             const imports = new Set<string>(classObject.imports);
+            // テーブル内で同じValueObjectが複数回使われる場合がある。その場合は項目名が重複するので、それを避けるための処理をするためのSet。
+            const usedValueObjectNameSet: Set<string> = new Set<string>();
             // Fieldのアノテーションを付与する。
             const fields = classObject.props.map(field => {
                 const _fieldAnnoMap = fieldAnnotations[className] || fieldAnnotations[`${className}Entity`] || [];
@@ -1276,6 +1221,19 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                     ...(_fieldAnnoMap[field.name] || _fieldAnnoMap[field.name.replace(/I[Dd]$/, '')] || _fieldAnnoMap[field.name.replace(/_[Ii][Dd]$/, '')] || []),
                     ...field.annotations
                 ];
+
+                if (usedValueObjectNameSet.has(field.type) && entityDetailFrame.classes[field.type]) {
+                    // テーブル内で同じValueObjectが複数回使われる場合がある。その場合は項目名が重複するので、それを避けるための処理をする。
+                    // @AttributeOverrides({
+                    //     @AttributeOverride(name = "amount", column = @Column(name = "monthly_repayment_amount_amount")),
+                    //     @AttributeOverride(name = "currency", column = @Column(name = "monthly_repayment_amount_currency"))
+                    // })
+                    const fieldRenamed = entityDetailFrame.classes[field.type].props.map(prop => `\t\t\t@AttributeOverride(name = "${prop.name}", column = @Column(name = "${Utils.toSnakeCase(field.name)}_${prop.name}"))`);
+                    field.annotations.push(`@AttributeOverrides({\n${fieldRenamed.join(',\n')}\n\t})`);
+                    imports.add('AttributeOverrides');
+                    imports.add('AttributeOverride');
+                } else { }
+                usedValueObjectNameSet.add(field.type);
 
                 field.isOptional = true; // 初期値としてフラグを立てておく。
                 field.annotations.forEach(anno => {
@@ -1330,9 +1288,10 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
 
             // import文を作成する。
             const importList = Array.from(imports)
-                .filter(importName => JAVA_FQCN_MAP[importName])
-                .filter(importName => !JAVA_FQCN_MAP[importName].startsWith(`${PACKAGE_NAME}.entity.`)) // 同じパッケージのクラスはimportしない。
-                .map(importName => `import ${JAVA_FQCN_MAP[importName]};\n`).sort().join('');
+                .map(importName => JAVA_FQCN_MAP[importName])
+                .filter(importName => importName)
+                .filter(importName => !importName.startsWith(`${PACKAGE_NAME}.domain.entity.`)) // 同じパッケージのクラスはimportしない。
+                .map(importName => `import ${importName};\n`).sort().join('');
 
             // Javaソースコードを作成する。
             classObject.source = Utils.trimLines(`
@@ -2752,7 +2711,15 @@ export async function main() {
     const split0 = PACKAGE_NAME.split('\.');
     const name = split0.pop() || '';
 
-    const vars = { packageName: PACKAGE_NAME, projectName: PROJECT_NAME, name, artifactId: name, groupId: split0.join('.') };
+    const vars = {
+        packageName: PACKAGE_NAME,
+        projectName: PROJECT_NAME,
+        'project-name': Utils.toKebabCase(PROJECT_NAME),
+        project_name: Utils.toSnakeCase(PROJECT_NAME),
+        name,
+        artifactId: name,
+        groupId: split0.join('.'),
+    };
 
     // springのテンプレートを作成する。
     fss.writeFileSync(`results/${__dirname}/${PROJECT_NAME}/${SPRING_DIRE}/exception/ResourceNotFoundException.java`, Utils.replaceTemplateString(spring_ResourceNotFoundException, vars));
