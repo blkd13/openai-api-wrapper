@@ -27,7 +27,7 @@ import { JAVA_FQCN_MAP, javaTypeToTypescript } from './constant.js';
 const __dirname = Utils.basename(Utils.dirname(import.meta.url));
 const PROJECT_NAME = 'deposit-management-system-01';
 const PACKAGE_NAME = 'com.example.demo';
-const SPRING_DIRE = `spring/src/main/java/com/example/demo`;
+const SPRING_DIRE = `spring/src/main/java/${PACKAGE_NAME.replace(/\./g, '/')}`;
 const INPUT_PROMPT = Utils.trimLines(`
 お題は「貸金業の貸付管理システム」です。
 `);

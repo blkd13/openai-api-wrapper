@@ -2,7 +2,7 @@ const source = `
 server:
     port: 8080
     servlet:
-        context-path: /api
+        context-path: /{{project-name}}/api
         session.cookie.name: MYID
        
 spring:
@@ -15,7 +15,7 @@ spring:
         initialize-schema: always
     datasource:
         driver-class-name: org.postgresql.Driver
-        url: jdbc:postgresql://localhost:5432/postgres
+        url: jdbc:postgresql://localhost:5432/postgres?currentSchema={{project_name}}
         username: postgres
         password: postgres
         hikari:
