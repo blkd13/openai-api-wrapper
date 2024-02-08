@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 
-import { BaseStep, MultiStep, StepOutputFormat } from "../../common/base-step.js";
+import { BaseStep, MultiStep, PromptLang, StepOutputFormat } from "../../common/base-step.js";
 import { GPTModels } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
 import { parseJavaModelCode, javaServiceTemplateMap, javaServiceImplementsMap, DtoClass, TIME_TYPE_REMAP, TIME_TYPE_COLUMN_DEFINITION, ServiceMethod, angularServiceMap, javaInterfaceMap, EntityValueObjectType, EnumType, EntityDetailFilledType } from "./helper.js";
@@ -25,11 +25,14 @@ import { JAVA_FQCN_MAP, javaTypeToTypescript } from './constant.js';
 
 
 const __dirname = Utils.basename(Utils.dirname(import.meta.url));
-const PROJECT_NAME = 'deposit-management-system-01';
-const PACKAGE_NAME = 'com.example.demo';
+const PROJECT_NAME = 'deposit-management-system-02';
+const PACKAGE_NAME = 'com.example.dms02';
 const SPRING_DIRE = `spring/src/main/java/${PACKAGE_NAME.replace(/\./g, '/')}`;
-const INPUT_PROMPT = Utils.trimLines(`
-お題は「貸金業の貸付管理システム」です。
+const INPUT_PROMPT_JA = Utils.trimLines(`
+お題は「貸金業をするために必要なシステム全般」です。
+`);
+const IMPUT_PROMPT_EN = Utils.trimLines(`
+The theme is "System requirements for a lending business".
 `);
 
 /**
@@ -45,6 +48,7 @@ abstract class BaseStepDomainModelGenerator extends BaseStep {
     systemMessage = this.systemMessageJa;
     temperature: number = 0.0; // ランダム度合い。0に近いほど毎回同じ結果になる。プログラムのようなものは 0 に、文章系は 1 にするのが良い。
     format = StepOutputFormat.MARKDOWN;
+    lang: PromptLang = 'ja';
 }
 /**
  * このエージェント用の共通設定。
@@ -71,15 +75,22 @@ class Step0000_RequirementsToFeatureListSummary extends BaseStepDomainModelGener
         super();
         this.chapters = [{
             title: `Instructions`,
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 システム開発のための要件定義を手伝ってください。
                 与えられたお題目に対して、まずは機能の頭出しをしたいです。
                 markdownの番号リスト形式で機能一覧を列挙してください。
                 出力はシステム名と機能一覧のみとし、余計なことは書かないでください。
                 ステップバイステップで考えて結果のみを出力してください。
             `),
+            contentEn: Utils.trimLines(`
+                Please help with system development requirements.
+                First, I would like to brainstorm the functions for the given theme.
+                Please list the functions in a numbered list in markdown format.
+                The output should only include the system name and the list of functions, and nothing else.
+                Please think step by step and output only the results.
+            `),
         }, {
-            content: INPUT_PROMPT,
+            content: this.lang === 'ja' ? INPUT_PROMPT_JA : IMPUT_PROMPT_EN
         }];
     }
 }
@@ -93,10 +104,15 @@ class Step0010_FeatureListSummaryToFeatureListDetail extends BaseStepDomainModel
         this.presetMessages.push({ role: 'assistant', content: featureListSummaryStep.result });
 
         this.chapters = [{
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 ありがとうございます。
                 開発工程に進むために、より細かく具体的な一覧にしてください。
                 また、足りていない機能があるかもチェックして、必要な機能を追加してください。
+            `),
+            contentEn: Utils.trimLines(`
+                Thank you.
+                To proceed with the development process, please make a more detailed and specific list.
+                Also, check for any missing features and add any necessary features.
             `),
         }];
     }
@@ -112,16 +128,26 @@ class Step0013_AdvancedExpertiseListJson extends BaseStepDomainModelGenerator {
         this.presetMessages.push({ role: 'assistant', content: featureListDetailStep.result });
 
         this.chapters = [{
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 ありがとうございます。
                 この設計書を基に開発を進めるに当たって、特に高度な専門性を要求する業務機能を、全て漏れなく提示してください。
             `),
+            contentEn: Utils.trimLines(`
+                Thank you.
+                Based on this design document, please provide all the business functions that require advanced expertise, without exception, for the development process.
+            `),
         }, {
             title: `Output Format`,
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 出力フォーマットは以下の通りです。
                 \`\`\`json
                 {"advancedExpertiseList":[{"title":"機能タイトル","content":"内容",featureName:"機能名"},{"title":"機能タイトル","content":"内容",featureName:"機能名"}]}
+                \`\`\`
+            `),
+            contentEn: Utils.trimLines(`
+                The output format is as follows.
+                \`\`\`json
+                {"advancedExpertiseList":[{"title":"Function Title","content":"Content",featureName:"Feature Name"},{"title":"Function Title","content":"Content",featureName:"Feature Name"}]}
                 \`\`\`
             `),
         }];
@@ -149,10 +175,15 @@ class Step0015_AdvancedExpertiseDetail extends MultiStepDomainModelGenerator {
                 this.presetMessages.push({ role: 'assistant', content: advancedExpertiseListMarkdown });
 
                 this.chapters = [{
-                    content: Utils.trimLines(`
+                    contentJa: Utils.trimLines(`
                         「${advancedExpertise.title}」の詳細設計書を提示してください。
                         章立ては 入力データ、処理フロー、処理詳細補足（具体的なビジネスロジックや計算式など）、出力データ 、運用ルール、備考としてください。
                         曖昧な言い回しは避けて、断定調で仕様を記載してください。
+                    `),
+                    contentEn: Utils.trimLines(`
+                        Please provide a detailed design document for "${advancedExpertise.title}".
+                        The structure should include input data, processing flow, detailed processing details (specific business logic, formulas, etc.), output data, operational rules, and notes.
+                        Avoid ambiguous expressions and describe the specifications in a definitive tone.
                     `),
                 }];
             }
@@ -168,16 +199,25 @@ class Step0020_FeatureListDetailToJsonFormat extends BaseStepDomainModelGenerato
         super();
         this.chapters = [{
             title: `Instructions`,
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 与えられた機能一覧（詳細）をよく理解して、指定されたJson形式を作成してください。
+            `),
+            contentEn: Utils.trimLines(`
+                Please thoroughly understand the given list of functions (details) and create the specified Json format.
             `),
         }, {
             title: 'Input Document',
             content: getStepInstance(Step0010_FeatureListSummaryToFeatureListDetail).formed,
         }, {
             title: 'Output Format',
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 出力フォーマットは以下の通りです。
+                \`\`\`json
+                {"featureList":["feature1","feature2","feature3"]}
+                \`\`\`
+            `),
+            contentEn: Utils.trimLines(`
+                The output format is as follows.
                 \`\`\`json
                 {"featureList":["feature1","feature2","feature3"]}
                 \`\`\`
@@ -221,9 +261,13 @@ class Step0030_DesignSummary extends MultiStepDomainModelGenerator {
                 this.chapters = [
                     {
                         title: `Instructions`,
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             与えられた機能一覧（詳細）をよく理解して、担当機能の詳細化を行ってください。
                             あなたの担当は「${feature}」です。
+                        `),
+                        contentEn: Utils.trimLines(`
+                            Please thoroughly understand the given list of functions (details) and create the specified Json format.
+                            Your responsibility is "${feature}".
                         `),
                     },
                     {
@@ -232,9 +276,13 @@ class Step0030_DesignSummary extends MultiStepDomainModelGenerator {
                     },
                     {
                         title: 'Output Format',
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             概要、UI/UX要件、バックエンド要件、ビジネスルール、処理詳細補足（具体的なビジネスロジックや計算式など）、運用ルール、備考について、具体的かつ詳細に記述してください。
                             機能名をタイトルとするMarkdown形式で記述してください。
+                        `),
+                        contentEn: Utils.trimLines(`
+                            Please describe the overview, UI/UX requirements, backend requirements, business rules, detailed processing details (specific business logic, formulas, etc.), operational rules, and notes in a specific and detailed manner.
+                            Describe in Markdown format with the function name as the title.
                         `),
                     },
                 ];
@@ -277,7 +325,7 @@ class Step0031_DesignSummaryReview extends BaseStepDomainModelGenerator {
 
         this.chapters = [{
             title: `Instructions`,
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 以下の設計書について、設計書間での整合性が取れているかを確認してください。
 
                 - 機能の重複が無いか。
@@ -286,16 +334,31 @@ class Step0031_DesignSummaryReview extends BaseStepDomainModelGenerator {
                 上記のポイントについて確認した結果、修正すべき設計書と修正内容をリストアップしてください。
                 全体の整合性が取れている場合はinstructionsとして空の配列を返してください。
             `),
+            contentEn: Utils.trimLines(`
+                Please check whether the design documents are consistent with each other.
+
+                - Is there any duplication of functions?
+                - Are there any missing functions?
+
+                After checking the above points, list the design documents that need to be modified and the modifications.
+                If the overall consistency is maintained, return an empty array as instructions.
+            `),
         }, {
             title: '設計書',
             content: Utils.setMarkdownBlock(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n---\n\n'), 'markdown'),
         }, {
             title: 'Output Format',
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 出力フォーマットは以下の通りです。
 
                 \`\`\`json
                 {"instructions":[{"title":"設計書名","content":["修正内容",]},{"title":"設計書名","content":["修正内容",]}]}
+                \`\`\`
+            `),
+            contentEn: Utils.trimLines(`
+                The output format is as follows.
+                \`\`\`json
+                {"instructions":[{"title":"Document Name","content":["Modification",]},{"title":"Document Name","content":["Modification",]}]}
                 \`\`\`
             `),
         }];
@@ -317,8 +380,13 @@ class Step0033_DesignSummaryRefine extends MultiStepDomainModelGenerator {
                 this.chapters = [
                     {
                         title: `Instructions`,
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             以下のレビュー指摘に基づいて与えられた設計書を修正してください。
+
+                            ${instruction.content.map(target => ('- ' + target)).join('\n')}
+                        `),
+                        contentEn: Utils.trimLines(`
+                            Please modify the given design document based on the following review comments.
 
                             ${instruction.content.map(target => ('- ' + target)).join('\n')}
                         `),
@@ -359,7 +427,7 @@ class Step0034_DesignSummaryRefineReview extends BaseStepDomainModelGenerator {
 
         this.chapters = [{
             title: `Instructions`,
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 以下の設計書について、設計書間での整合性が取れているかを確認してください。
 
                 - 機能の重複が無いか。⇒機能の重複がある場合は、どちらかを削除するべきか決めてください。
@@ -368,16 +436,31 @@ class Step0034_DesignSummaryRefineReview extends BaseStepDomainModelGenerator {
                 上記のポイントについて確認した結果、修正すべき設計書と修正内容をリストアップしてください。
                 全体の整合性が取れている場合はinstructionsとして空の配列を返してください。
             `),
+            contentEn: Utils.trimLines(`
+                Please check whether the design documents are consistent with each other.
+
+                - Is there any duplication of functions? ⇒ If there is a duplication of functions, decide which one to delete.
+                - Are there any missing functions? ⇒ If a function required in one document is missing in another document, decide which one to add.
+
+                After checking the above points, list the design documents that need to be modified and the modifications.
+                If the overall consistency is maintained, return an empty array as instructions.
+            `),
         }, {
-            title: '設計書',
+            titleJa: '設計書', titleEn: 'Design Document',
             content: Utils.setMarkdownBlock(getStepInstance(Step0033_DesignSummaryRefine).childStepList.map((step: BaseStep) => step.formed).join('\n\n---\n\n'), 'markdown'),
         }, {
             title: 'Output Format',
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 出力フォーマットは以下の通りです。
 
                 \`\`\`json
                 {"instructions":[{"title":"設計書名","content":["修正内容",]},{"title":"設計書名","content":["修正内容",]}]}
+                \`\`\`
+            `),
+            contentEn: Utils.trimLines(`
+                The output format is as follows.
+                \`\`\`json
+                {"instructions":[{"title":"Document Name","content":["Modification",]},{"title":"Document Name","content":["Modification",]}]}
                 \`\`\`
             `),
         }];
@@ -390,22 +473,32 @@ class Step0040_EntityList extends BaseStepDomainModelGenerator {
         super();
         this.chapters = [{
             title: `Instructions`,
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 これから提示する設計書をよく読んで、ドメイン駆動設計の要領でEntityを抽出してください。
                 出力形式は「サンプル出力」を参考にしてください。
                 Enumは不要です。
             `),
+            contentEn: Utils.trimLines(`
+                Please read the following design document carefully and extract the Entity in the manner of domain-driven design.
+                Please refer to the "Sample Output" for the output format.
+                Enum is not required.
+            `),
             // Entityの名前はPasCalCaseで記述してください。(OJTのように、大文字が連続する名前は禁止です。Ojtと書いてください。)
             children: [{
-                title: `評価ポイント`,
-                content: Utils.trimLines(`
+                titleJa: `評価ポイント`, titleEn: `Evaluation Points`,
+                contentJa: Utils.trimLines(`
                     Entity設計の評価ポイントは以下の二点です。
                     - **エンティティの明確さと適切性の評価** : エンティティの明確さと適切性を評価します。DDDでは、エンティティはビジネスドメインの核となる概念であり、その特性や関連を明確に表現する必要があります。
                     - **結合度と凝集度の評価** : エンティティ間の結合度と凝集度を評価します。理想的には、エンティティ間の結合は低く、凝集度は高いほうが望ましいです。過度な結合は、エンティティの再利用性を低下させ、凝集度の低いエンティティは、ビジネスドメインの概念を適切に表現できない可能性があります。
                 `),
+                contentEn: Utils.trimLines(`
+                    The evaluation points for entity design are as follows.
+                    - **Evaluation of clarity and appropriateness of entities**: Evaluate the clarity and appropriateness of entities. In DDD, entities are the core concepts of the business domain and need to clearly express their characteristics and relationships.
+                    - **Evaluation of coupling and cohesion**: Evaluate the coupling and cohesion between entities. Ideally, low coupling and high cohesion between entities are desirable. Excessive coupling reduces the reusability of entities, and entities with low cohesion may not adequately represent the concepts of the business domain.
+                `),
             }, {
-                title: `サンプル出力`,
-                content: Utils.setMarkdownBlock(Utils.trimLines(`
+                titleJa: `サンプル出力`, titleEn: `Sample Output`,
+                contentJa: Utils.setMarkdownBlock(Utils.trimLines(`
                     ### 注文管理関連のエンティティ:
                     1. **Order** - 顧客の注文情報を含むエンティティ。注文ID、注文日、顧客の詳細、注文された商品のリスト、合計金額、支払い状態などの属性を持つ。
                     2. **Product** - 注文で購入される商品を表すエンティティ。商品ID、商品名、価格、在庫状況などの属性を持つ。
@@ -420,25 +513,52 @@ class Step0040_EntityList extends BaseStepDomainModelGenerator {
                     4. **Attendance** - 従業員の出勤状況を記録するエンティティ。出勤記録ID、従業員ID、出勤日、出勤時間、退勤時間、勤務時間などの属性を持つ。
                     5. **PerformanceReview** - 従業員の業績評価を表すエンティティ。評価ID、従業員ID、評価期間、評価者、評価結果、フィードバックコメントなどの属性を持つ。
                 `), 'markdown'),
+                contentEn: Utils.setMarkdownBlock(Utils.trimLines(`
+                    ### Order Management Related Entities:
+                    1. **Order** - An entity that contains customer order information. It has attributes such as order ID, order date, customer details, list of ordered items, total amount, payment status, etc.
+                    2. **Product** - An entity representing the product purchased in an order. It has attributes such as product ID, product name, price, inventory status, etc.
+                    3. **Customer** - An entity representing a customer who places an order. It has attributes such as customer ID, name, contact information, shipping address, order history, etc.
+                    4. **Payment** - An entity representing payment information for an order. It has attributes such as payment ID, order ID, payment method, payment status, payment date and time, etc.
+                    5. **Shipping** - An entity representing shipping information for an order. It has attributes such as shipping ID, order ID, shipping address, shipping status, scheduled delivery date, etc.
+
+                    ### Employee Management Related Entities:
+                    1. **Employee** - An entity that contains personal and job information of employees. It has attributes such as employee ID, name, address, phone number, email address, department, position, date of joining, etc.
+                    2. **Department** - An entity representing the department to which employees belong. It has attributes such as department ID, department name, department head, department function/purpose, etc.
+                    3. **Project** - An entity representing the projects in which employees are involved. It has attributes such as project ID, project name, start date, end date, project purpose, list of employees involved in the project, etc.
+                    4. **Attendance** - An entity that records the attendance status of employees. It has attributes such as attendance record ID, employee ID, date of attendance, time of arrival, time of departure, working hours, etc.
+                    5. **PerformanceReview** - An entity representing the performance evaluation of employees. It has attributes such as evaluation ID, employee ID, evaluation period, evaluator, evaluation result, feedback comments, etc.
+                `), 'markdown'),
             },],
         }, {
-            title: '設計書',
+            titleJa: '設計書', titleEn: 'Design Document',
             children: [{
-                title: `機能設計書`,
+                titleJa: `機能設計書`, titleEn: `Feature Design Document`,
                 content: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
                 // }, { // 何回かやったけど高度な機能からEntityが抽出されるケースは多くはなかったので、なくてもいいのかもしれない。。
                 //     title: `高度な機能の詳細設計書`,
-                //     content: Utils.addMarkdownDepth(getStepInstance(Step0015_AdvancedExpertiseDetail).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
+                //     contentJa: Utils.addMarkdownDepth(getStepInstance(Step0015_AdvancedExpertiseDetail).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
             }],
         },];
 
         this.refineMessages = [{
             role: 'user',
-            content: Utils.trimLines(`
-                ありがとうございます。
-                Entity一覧に不足が無いか確認し、不足があれば追加してください。
-                出力形式は先程と同様としてください。
-            `),
+            content: this.lang == 'ja'
+                ? Utils.trimLines(`
+                    ありがとうございます。
+                    Entity一覧に不足が無いか確認し、不足があれば追加してください。
+                    出力形式は先程と同様としてください。
+                `)
+                : Utils.trimLines(`
+                    Thank you.
+                    Please check if there are any missing entities in the entity list and add them if necessary.
+                    Please use the same output format as before.
+                `),
+            // contentEn: Utils.trimLines(`
+            //     Thank you.
+            //     Please check if there are any missing entities in the entity list and add them if necessary.
+            //     Please use the same output format as before.
+            // `),
+
             // }, {
             //     role: 'user',
             //     content: Utils.trimLines(`
@@ -478,8 +598,8 @@ class Step0040_EntityList extends BaseStepDomainModelGenerator {
         // refineしたものを結合する。
         Array.from(Utils.range(this.refineMessages.length)).forEach(index => {
             this.getRefineData(index).split('\n').forEach(target => {
-                if (target.startsWith('### ') && target.endsWith('のエンティティ:') && target.length > 5) {
-                    groupName = target.replace('### ', '').replace('のエンティティ:', '').replace(/関連$/g, '').replace(/機能$/g, '') + '機能';
+                if (target.startsWith('### ') && (target.endsWith('のエンティティ:') || target.endsWith(' Related Entities:')) && target.length > 5) {
+                    groupName = target.replace('### ', '').replace('のエンティティ:', '').replace(' Related Entities:', '').replace(/関連$/g, '').replace(/機能$/g, '') + '機能';
                     if (entityObject[groupName]) {
                     } else {
                         entityObject[groupName] = {};
@@ -511,7 +631,7 @@ class Step0042_EntityFeatureMapping extends BaseStepDomainModelGenerator {
         this.loadPresetMessagesFromStep(getStepInstance(Step0040_EntityList));
         // 
         this.chapters = [{
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 Entityごとに、関係する設計書名リストを整理してください。
                 関係は1対1ということはないはずであり、関係が薄めのものでもなるべく拾うようにしてください。
 
@@ -522,7 +642,22 @@ class Step0042_EntityFeatureMapping extends BaseStepDomainModelGenerator {
                 }
                 \`\`\`
             `),
+            contentEn: Utils.trimLines(`
+                Please organize a list of related design document names for each entity.
+                There should not be a one-to-one relationship, and you should try to pick up as many relationships as possible, even if they are weak.
+
+                The output format is as follows.
+                \`\`\`json
+                {
+                    "entityFeatureMapping":{"entity1":["機能1","機能2"],"entity2":["機能3","機能4"]}
+                }
+                \`\`\`
+            `),
         }];
+    }
+    postProcess(result: string): string {
+        const entityObject: Record<string, string[]> = {};
+        return result;
     }
 }
 
@@ -533,19 +668,28 @@ class Step0042_EntityFeatureMapping extends BaseStepDomainModelGenerator {
 //         this.loadPresetMessagesFromStep(getStepInstance(Step0040_EntityList));
 
 //         this.chapters = [{
-//             content: Utils.trimLines(`
+//             contentJa: Utils.trimLines(`
 //                 ありがとうございます。
 //                 同様に複数のEntityで共通で利用されるValueObject、Enumを抽出してください。
+//             `),
+//             contentEn: Utils.trimLines(`
+//                 Thank you.
+//                 Similarly, extract ValueObjects and Enums that are commonly used in multiple entities.
 //             `),
 //         },];
 //         // とりあえず一回セルフリファインを掛けておく。
 //         this.refineMessages = [{
 //             role: 'user',
-//             content: Utils.trimLines(`
+//             content: this.lang === 'ja' ? Utils.trimLines(`
 //                 設計書に照らして、共通のValueObjects、Enumsの抽出が十分かもう一度チェックしてください。
 //                 先程とは別の視点から設計書を読み直すことも重要です。
 //                 不十分であれば、追加分のalueObjects、およびEnumsのみを提示してください。
 //                 形式は先ほどと同じでお願いします。
+//             `) : Utils.trimLines(`
+//                 Please check again if the extraction of common ValueObjects and Enums is sufficient based on the design document.
+//                 It is also important to reread the design document from a different perspective than before.
+//                 If it is insufficient, please present only the additional ValueObjects and Enums.
+//                 Please use the same format as before.
 //             `),
 //         },];
 //     }
@@ -600,12 +744,26 @@ class Step0042_EntityFeatureMapping extends BaseStepDomainModelGenerator {
 //         this.loadPresetMessagesFromStep(getStepInstance(Step0043_ValueObjectEnumList));
 //         // 
 //         this.chapters = [{
-//             content: Utils.trimLines(`
+//             contentJa: Utils.trimLines(`
 //                 Entityごとに、関係する設計書名リストを整理してください。
 //                 関係は1対1ということはないはずであり、関係が薄めのものでもなるべく拾うようにしてください。
 //                 同時に、ValueObject、EnumとEntityの関係も整理してください。
 
 //                 出力フォーマットは以下の通りです。
+//                 \`\`\`json
+//                 {
+//                     "entityFeatureMapping":{"entity1":["機能1","機能2"],"entity2":["機能3","機能4"]},
+//                     "valueObjectEntityMapping":{"valueObject1":["entity1","entity2"],"valueObject2":["entity3","entity4"]},
+//                     "enumEntityMapping":{"enum1":["entity1","entity2"],"enum2":["entity3","entity4"]}
+//                 }
+//                 \`\`\`
+//             `),
+//             contentEn: Utils.trimLines(`
+//                 Please organize a list of related design document names for each entity.
+//                 There should not be a one-to-one relationship, and you should try to pick up as many relationships as possible, even if they are weak.
+//                 At the same time, organize the relationship between ValueObjects, Enums, and Entities.
+
+//                 The output format is as follows.
 //                 \`\`\`json
 //                 {
 //                     "entityFeatureMapping":{"entity1":["機能1","機能2"],"entity2":["機能3","機能4"]},
@@ -629,7 +787,8 @@ class Step0042_EntityFeatureMapping extends BaseStepDomainModelGenerator {
 //         // const designSummaryMap: Record<string, string> = JSON.parse(getStepInstance(Step0030_DesignSummary).formed);
 //         const designSummaryMap: Record<string, string> = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/FeatureDocs.json`, 'utf-8')) as { [key: string]: string };
 //         class Step0048_ValuObjectEnumDetailChil extends BaseStepDomainModelGenerator {
-//             systemMessage: string = `経験豊富で優秀なビジネスアナリスト。`;
+//             systemMessageJa: string = `経験豊富で優秀なビジネスアナリスト。`;
+//             systemMessageEn: string = `An experienced and excellent business analyst.`;
 //             constructor(public groupName: string, public entityName: string, public entityDescription: string) {
 //                 super();
 //                 this.label = `${this.constructor.name}_${Utils.safeFileName(groupName)}_${Utils.safeFileName(entityName)}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
@@ -638,39 +797,50 @@ class Step0042_EntityFeatureMapping extends BaseStepDomainModelGenerator {
 //                 const childItem = groupName.toLocaleLowerCase().startsWith('enum') ? 'VALUES' : 'attributes';
 //                 this.chapters = [{
 //                     title: `Instructions`,
-//                     content: Utils.trimLines(`
+//                     contentJa: Utils.trimLines(`
 //                         これから提示する設計書をよく読んでシステム全体像を把握してください。
 //                         そのうえで、Common ValueObject/Enum一覧の${groupName}である「${entityName}」の ${childItem} に不足が無いかをチェックしてください。
 //                         チェックした結果、適切に改善された${childItem}を提示してください。
 //                         担当外のものについては対象外としてください。
 //                     `),
+//                     contentEn: Utils.trimLines(`
+//                         Please read the following design document carefully and understand the overall system.
+//                         Then, check if there are any missing ${childItem} in the Common ValueObject/Enum list for ${groupName}, " ${entityName}".
+//                         After checking, please present the improved ${childItem}.
+//                         Please exclude items that are not relevant.
+//                     `),
 //                 }, {
-//                     title: '設計書',
+//                     titleJa: '設計書', titleEn: 'Design Document',
 //                     children: [{
-//                         title: `機能設計書（関連するもののみ抜粋）`,
+//                         titleJa: `機能設計書（関連するもののみ抜粋）`, titleEn: `Feature Design Document (Extract only related items)`,
 //                         // content: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
 //                         // 抽出版
 //                         content: Utils.addMarkdownDepth(featureNameList.map(functionName => designSummaryMap[functionName]).join('\n\n'), 2),
 //                     }, {
-//                         title: `Entity一覧`,
+//                         titleJa: `Entity一覧`, titleEn: `Entity List`,
 //                         content: Utils.addMarkdownDepth(getStepInstance(Step0040_EntityList).formed, 1),
 //                     }, {
-//                         title: `Common ValueObject/Enum一覧`,
+//                         titleJa: `Common ValueObject/Enum一覧`, titleEn: `Common ValueObject/Enum List`,
 //                         content: Utils.addMarkdownDepth(getStepInstance(Step0043_ValueObjectEnumList).getRefineData(0), 1),
 //                     }, {
-//                         title: `Common ValueObject/Enum一覧（追加）`,
+//                         titleJa: `Common ValueObject/Enum一覧（追加）`, titleEn: `Common ValueObject/Enum List (Additional)`,
 //                         content: Utils.addMarkdownDepth(getStepInstance(Step0043_ValueObjectEnumList).getRefineData(1), 1),
 //                     }],
 //                 }, {
-//                     title: 'ネーミングルール',
-//                     content: Utils.trimLines(`
+//                     titleJa: 'ネーミングルール', titleEn: 'Naming Rules',
+//                     contentJa: Utils.trimLines(`
 //                         - Attributesの名前はCamelCase
 //                         - ValueObjects、Enumsの名前はPasCalCase
 //                         - Enumsの値は全て大文字のSNAKE_CASE
 //                     `),
+//                     contentEn: Utils.trimLines(`
+//                         - The name of the attribute is CamelCase
+//                         - The name of ValueObjects and Enums is PasCalCase
+//                         - The value of Enums is all uppercase SNAKE_CASE
+//                     `),
 //                 }, {
 //                     title: 'Output Sample',
-//                     content: Utils.trimLines(`
+//                     contentJa: Utils.trimLines(`
 //                         出力形式は以下のサンプルを参考にしてください。
 
 //                         ### RiskLevel EnumのVALUES
@@ -684,11 +854,25 @@ class Step0042_EntityFeatureMapping extends BaseStepDomainModelGenerator {
 //                         この定義は、設計書の「リスク管理機能」のセクションにおける「UI/UX要件」でのリスク評価結果の表示要件（リスクレベル（低、中、高）とその根拠を明確に表示）に基づいています。
 //                         また、リスク評価アルゴリズムの処理詳細補足にも対応しており、信用スコア、財務状況、申請情報を基にリスクレベルを評価するビジネスルールを反映しています。
 //                     `),
+//                     contentEn: Utils.trimLines(`
+//                         Please refer to the following sample for the output format.
+
+//                         ### RiskLevel Enum VALUES
+
+//                         \`\`\`plaintext
+//                         1. LOW - Low risk: Assigned when the customer's credit score is high, the financial situation is stable, and there are no issues with the application information.
+//                         2. MEDIUM - Medium risk: Assigned when the customer's credit score is average, there are some issues with the financial situation, or there are minor issues with the application information.
+//                         3. HIGH - High risk: Assigned when the customer's credit score is low, the financial situation is unstable, or there are significant issues with the application information.
+//                         \`\`\`
+
+//                         This definition is based on the display requirements for risk assessment results (display of risk level (low, medium, high) and its basis) in the "UI/UX requirements" section of the "Risk Management" feature in the design document.
+//                         It also reflects the business rules for evaluating risk levels based on credit scores, financial conditions, and application information, which are also detailed in the risk assessment algorithm processing details.
+//                     `),
 //                 }];
 
 //                 // // とりあえず一回セルフリファインを掛けておく。
 //                 // this.refineMessages.push({
-//                 //     role: 'user', content: Utils.trimLines(`
+//                 //     role: 'user', contentJa: Utils.trimLines(`
 //                 //         設計書に照らして、${entityName}や、ValueObjectsの属性、およびEnumsの値が十分かチェックしてください。
 //                 //         十分であれば特に何もせず、不十分であれば追加設計を提示してください。
 //                 //     `)
@@ -708,16 +892,18 @@ class Step0050_EntityAttributes extends MultiStepDomainModelGenerator {
     constructor() {
         super();
         const entityFeatureMapping: Record<string, string[]> = JSON.parse(getStepInstance(Step0042_EntityFeatureMapping).formed).entityFeatureMapping;
+        Object.keys(entityFeatureMapping).forEach(key => { entityFeatureMapping[Utils.toPascalCase(key)] = entityFeatureMapping[key]; });
         // const designSummaryMap: Record<string, string> = JSON.parse(getStepInstance(Step0030_DesignSummary).formed);
         const designSummaryMap: Record<string, string> = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/FeatureDocs.json`, 'utf-8')) as { [key: string]: string };
         class Step0050_EntityAttributesChil extends BaseStepDomainModelGenerator {
-            systemMessage: string = `経験豊富で優秀なビジネスアナリスト。`;
+            systemMessageJa: string = `経験豊富で優秀なビジネスアナリスト。`;
+            systemMessageEn: string = `An experienced and excellent business analyst.`;
             constructor(public entityName: string) {
                 super();
                 this.label = `${this.constructor.name}_${Utils.safeFileName(entityName)}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
                 this.chapters = [{
                     title: `Instructions`,
-                    content: Utils.trimLines(`
+                    contentJa: Utils.trimLines(`
                         これから提示する設計書をよく読んで、Entity一覧の「${entityName}」のAttributesを考えてください。
                         EntityのIdはLong型としてください。関連するEntityのIdもLong型です。
                         日付型はLocalDate、LocalDateTimeとしてください。
@@ -726,27 +912,39 @@ class Step0050_EntityAttributes extends MultiStepDomainModelGenerator {
                         ValueObjects、Enumsの名前はPasCalCaseで記述してください。
                         Enumsの値は全て大文字のSNAKE_CASEで記述してください。
                     `),
+                    contentEn: Utils.trimLines(`
+                        Please read the following design document carefully and consider the Attributes of " ${entityName}" in the Entity list.
+                        The ID of the Entity should be of type Long. The IDs of related Entities should also be of type Long.
+                        Date types should be LocalDate and LocalDateTime.
+                        If there are ValueObjects and Enums, please include them as well.
+                        The name of the attribute should be written in CamelCase.
+                        The name of ValueObjects and Enums should be written in PasCalCase.
+                        The values of Enums should be written in all uppercase SNAKE_CASE.
+                    `),
                 }, {
-                    title: '設計書',
+                    titleJa: '設計書', titleEn: 'Design Document',
                     children: [{
-                        title: `機能設計書（関連するもののみ抜粋）`,
-                        // content: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
+                        titleJa: `機能設計書（関連するもののみ抜粋）`, titleEn: `Feature Design Document (Extract only related items)`,
+                        // contentJa: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
                         // 抽出版
                         content: Utils.addMarkdownDepth(entityFeatureMapping[entityName].map(functionName => designSummaryMap[functionName]).join('\n\n'), 2),
                     }, {
-                        title: `Entity一覧`,
+                        titleJa: `Entity一覧`, titleEn: `Entity List`,
                         content: Utils.addMarkdownDepth(getStepInstance(Step0040_EntityList).formed, 1),
                         // }, {
                         //     title: `Common`,
-                        //     content: Utils.addMarkdownDepth(getStepInstance(Step0043_ValueObjectEnumList).formed, 1),
+                        //     contentJa: Utils.addMarkdownDepth(getStepInstance(Step0043_ValueObjectEnumList).formed, 1),
                     }],
                 }];
 
                 // とりあえず一回セルフリファインを掛けておく。
                 this.refineMessages.push({
-                    role: 'user', content: Utils.trimLines(`
+                    role: 'user', content: this.lang === 'ja' ? Utils.trimLines(`
                         設計書に照らして、${entityName}や、ValueObjectsの属性、およびEnumsの値が十分かチェックしてください。
                         十分であれば特に何もせず、不十分であれば追加設計を提示してください。
+                    `) : Utils.trimLines(`
+                        Please check if the attributes of ${entityName}, ValueObjects, and Enums are sufficient based on the design document.
+                        If they are sufficient, there is no need to do anything special. If they are insufficient, please present additional designs.
                     `)
                 });
             }
@@ -773,7 +971,7 @@ class Step0052_EntityAttributesMerge extends MultiStepDomainModelGenerator {
                     title: `Instructions`,
                     // 表形式でお願いします。余計な説明は不要です。
                     // 列は、 Attribute Name 、Java Class、Optional、Type（ValueObjects/Enum）、Collection（List/Map）、Descriptionでお願いします。
-                    content: Utils.trimLines(`
+                    contentJa: Utils.trimLines(`
                         以下の設計書を理解して、Credit について、当初設計に追加設計を適用して、統合版のEntity、ValueObjects、Enums定義を作成してください。
                         javaのコードとして出力してください。コード以外は不要です。
                         EntityのIdはLong型としてください。関連するEntityのIdもLong型です。
@@ -782,11 +980,20 @@ class Step0052_EntityAttributesMerge extends MultiStepDomainModelGenerator {
                         ValueObjects、Enumsの名前はPasCalCaseで記述してください。
                         Enumsの値は全て大文字のSNAKE_CASEで記述してください。
                     `),
+                    contentEn: Utils.trimLines(`
+                        Please understand the following design document and apply additional designs to Credit to create an integrated version of the Entity, ValueObjects, and Enums definitions.
+                        Please output it as Java code. Anything other than code is not necessary.
+                        The Entity's ID should be of type Long. The IDs of related Entities should also be of type Long.
+                        Date types should be LocalDate and LocalDateTime.
+                        Access modifiers such as public/private, getter/setter, constructors, and comments are not necessary.
+                        Please write the names of ValueObjects and Enums in PasCalCase.
+                        The values of Enums should be written in all uppercase SNAKE_CASE.
+                    `),
                 }, {
-                    title: '当初設計',
+                    titleJa: '当初設計', titleEn: 'Initial Design',
                     content: Utils.addMarkdownDepth(beforeStep.getRefineData(0), 2),
                 }, {
-                    title: '追加設計',
+                    titleJa: '追加設計', titleEn: 'Additional Design',
                     content: Utils.addMarkdownDepth(beforeStep.getRefineData(1), 2),
                 }, {
                 }];
@@ -1087,16 +1294,20 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
         // 第二段階はEntity間の関係を考える。
         this.chapters = [{
             title: `Instructions`,
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 これから提示する設計書をよく読んで、Entity、ValueObjectに対してJPAで使えるようにアノテーションを考えてください。
                 まずはEntity、ValueObject単体に対して、指定されたアノテーションのみを考えてください。
+            `),
+            contentEn: Utils.trimLines(`
+                Please read the following design document carefully and consider the annotations for Entity and ValueObject so that they can be used with JPA.
+                First, consider only the specified annotations for Entity and ValueObject individually.
             `),
             children: [
             ],
         }, {
-            title: '設計書',
+            titleJa: '設計書', titleEn: 'Design Document',
             children: [{
-                title: `機能一覧`,
+                titleJa: `機能一覧`, titleEn: `Feature List`,
                 content: Utils.setMarkdownBlock(getStepInstance(Step0030_DesignSummary).result, 'markdown'),
             }, {
                 title: `Entity`,
@@ -1105,9 +1316,10 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
         }, {
             // さぼり防止用にJSON形式で出力させる。Entity全量を一気にjavaに書き換えろというとChatGPT4がさぼるのでJSON形式で出力させる。こうするとさぼらない。
             title: 'Output Format',
-            content: Utils.trimLines(`
-                以下のJSONフォーマットで整理してください。
-                \`\`\`json
+            contentJa: Utils.trimLines(`以下のJSONフォーマットで整理してください。`),
+            contentEn: Utils.trimLines(`Please organize the following in JSON format.`),
+            children: [{
+                content: Utils.setMarkdownBlock(Utils.trimLines(`
                 {
                     "fieldAnnotations": {
                         "@Id": { "ClassName": ["IdFieldName"], "ClassName2": ["IdFieldName"], },
@@ -1115,17 +1327,20 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                         "@Column(nullable = false)": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
                     },
                 }
-                \`\`\`
-            `),
+            `), 'json'),
+            }],
         }];
 
         // 二段階目をセルフリファインで実施する。
         this.refineMessages.push({
-            role: 'user', content: Utils.trimLines(`
+            role: 'user', content: (this.lang == 'ja' ? Utils.trimLines(`
                 ありがとうございます。
                 次はEntity全体を俯瞰して、Entity間の関係について考えてください。
                 そのうえで、以下のフォーマットでアノテーションを出力してください。
-                \`\`\`json
+            `) : Utils.trimLines(`
+                Thank you.
+                Next, consider the relationship between the entire Entity and then output the annotations in the following format.
+            `)) + Utils.setMarkdownBlock(Utils.trimLines(`
                 {
                     "fieldAnnotations": {
                         "@ManyToOne": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
@@ -1135,8 +1350,7 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                         "@JoinColumn": { "ClassName": ["FieldName", "FieldName2",], "ClassName2": ["FieldName", "FieldName2",], },
                     },
                 }
-                \`\`\`
-            `)
+            `), 'json'),
         });
     }
     postProcess(result: string): string {
@@ -1160,29 +1374,58 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                         acc[className][Utils.singularize(fieldName)] = acc[className][fieldName];
                     } else { }
 
-                    // JOIN系のアノテーションは結合条件を記述する必要があるので、ここで結合条件を記述する。
-                    if (anno === '@ManyToOne') {
-                        // @ManyToOne
-                        // @JoinColumn(name = "customer_id", referencedColumnName = "id")
-                        // private Customer customer;
-                        acc[className][fieldName].push(anno);
-                    } else if (anno === '@OneToMany') {
-                        // @OneToMany(mappedBy = "customer", cascade = CascadeType.ALL)
-                        // private List<TransactionHistory> transactionHistories;
-                        acc[className][fieldName].push(`${anno}(mappedBy = "${Utils.toCamelCase(className)}", cascade = CascadeType.ALL)`);
-                    } else if (anno === '@OneToOne(ownside)') {
-                        // @OneToOne(mappedBy = "customer", cascade = CascadeType.ALL)
-                        // private CreditReport creditReport;
-                        acc[className][fieldName].push(`${anno}(mappedBy = "${Utils.toCamelCase(className)}", cascade = CascadeType.ALL)`);
-                    } else if (anno === '@OneToOne(non-ownside)') {
-                        // @OneToOne
-                        // @JoinColumn(name = "customer_id", referencedColumnName = "id")
-                        // private Customer customer;
-                        acc[className][fieldName].push(`@OneToOne`);
-                    } else if (anno === '@JoinColumn') {
-                        acc[className][fieldName].push(`@JoinColumn(name = "${Utils.toSnakeCase(fieldName)}", referencedColumnName = "id")`);
+
+                    // TODO エンティティの関連を整理するタスクは上手くいっていない。
+                    // Idの関連を消してしまってもうまくいかないし、関連アリにするとIdだとJPAで関連できないので、一旦関連系のアノテーションは削除しているが、本来は何かしらの対処をすべき。
+                    if (fieldName.endsWith('Id')) {
+                        // xxIdは外部結合のためのフィールドだけどIdだとJPAの自動生成が効かないのでアノテーションを無視する。
+                        if (['@ManyToOne', '@OneToMany', '@OneToOne(ownside)', '@OneToOne(non-ownside)', '@JoinColumn'].find(exclude => {
+                            // console.log(`exclude: ${className}.${fieldName} ${anno}`);
+                            return anno.startsWith(exclude);
+                        })) {
+                            // console.log(`exclude: ${className}.${fieldName} ${anno}`);
+                        } else {
+                            acc[className][fieldName].push(anno);
+                        }
                     } else {
-                        acc[className][fieldName].push(anno);
+                        let isJoinColumn = true;
+
+                        // JOIN系のアノテーションは結合条件を記述する必要があるので、ここで結合条件を記述する。
+                        if (anno === '@ManyToOne') {
+                            // @ManyToOne
+                            // @JoinColumn(name = "customer_id", referencedColumnName = "id")
+                            // private Customer customer;
+                            acc[className][fieldName].push(anno);
+                        } else if (anno === '@OneToMany') {
+                            // @OneToMany(mappedBy = "customer", cascade = CascadeType.ALL)
+                            // private List<TransactionHistory> transactionHistories;
+                            acc[className][fieldName].push(`${anno}(mappedBy = "${Utils.toCamelCase(className)}", cascade = CascadeType.ALL)`);
+                        } else if (anno === '@OneToOne(ownside)') {
+                            // @OneToOne(mappedBy = "customer", cascade = CascadeType.ALL)
+                            // private CreditReport creditReport;
+                            acc[className][fieldName].push(`${anno.split('(')[0]}(mappedBy = "${Utils.toCamelCase(className)}", cascade = CascadeType.ALL)`);
+                        } else if (anno === '@OneToOne(non-ownside)') {
+                            // @OneToOne
+                            // @JoinColumn(name = "customer_id", referencedColumnName = "id")
+                            // private Customer customer;
+                            acc[className][fieldName].push(`@OneToOne`);
+                        } else if (anno === '@JoinColumn') {
+                            acc[className][fieldName].push(`@JoinColumn(name = "${Utils.toSnakeCase(fieldName)}", referencedColumnName = "id")`);
+                        } else {
+                            acc[className][fieldName].push(anno);
+                            isJoinColumn = false;
+                        }
+                        // @JOIN系のアノテーション全体に対する処理
+                        if (isJoinColumn) {
+                            // @ColumnとJOIN系のアノテーションは併用できないので、@Column(nullable = false)があれば削除する。
+                            if (acc[className][fieldName].find(s => s === '@Column(nullable = false)')) {
+                                acc[className][fieldName].splice(acc[className][fieldName].findIndex(s => s === '@Column(nullable = false)'), 1);
+                            } else { }
+                            // if (fieldName.endsWith('Id')) {
+                            //     acc[className][fieldName]
+                            //     acc[className][fieldName].splice(acc[className][fieldName].findIndex(s => s === '@Column'), 1);
+                            // }
+                        }
                     }
                 });
             });
@@ -1361,20 +1604,23 @@ class Step0055_EntityAttributesToOpenAPI extends BaseStepDomainModelGenerator {
         super();
         this.chapters = [{
             title: `Instructions`,
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 以下のjavaコードをOpenAPIのschema形式で書いて下さい。
                 出力形式は変換サンプルを参考にしてください。
                 requiredは省略してください。
             `),
-            children: [
-            ],
+            contentEn: Utils.trimLines(`
+                Please write the following java code in OpenAPI schema format.
+                Please refer to the conversion sample for the output format.
+                Please omit the required.
+            `),
         }, {
-            title: '変換対象のjavaコード',
+            titleJa: '変換対象のjavaコード', titleEn: 'Java code to be converted',
             content: fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8'),
         }, {
-            title: '変換サンプル',
+            titleJa: '変換サンプル', titleEn: 'Conversion sample',
             children: [{
-                title: `変換前javaコード`,
+                titleJa: `変換前javaコード`, titleEn: `Java code before conversion`,
                 content: Utils.setMarkdownBlock(Utils.trimLines(`
                     // 予約関連のエンティティ
                     class Appointment {
@@ -1390,7 +1636,7 @@ class Step0055_EntityAttributesToOpenAPI extends BaseStepDomainModelGenerator {
                     }
                 `), 'java'),
             }, {
-                title: `変換後OpenAPIスキーマ`,
+                titleJa: `変換後OpenAPIスキーマ`, titleEn: `OpenAPI schema after conversion`,
                 content: Utils.setMarkdownBlock(Utils.trimLines(`
                     components:
                         schemas:
@@ -1431,28 +1677,32 @@ class Step0060_ViewList extends BaseStepDomainModelGenerator {
         super();
         this.chapters = [{
             title: `Instructions`,
-            content: Utils.trimLines(`
-                これから提示する設計書をよく読んで、要件を満たすように画面一覧を作成してください。
-            `),
-            children: [],
+            contentJa: Utils.trimLines(`これから提示する設計書をよく読んで、要件を満たすように画面一覧を作成してください。`),
+            contentEn: Utils.trimLines(`Please read the following design document carefully and create a list of screens that meets the requirements.`),
         }, {
-            title: '設計書',
+            titleJa: '設計書', titleEn: 'Design Document',
             children: [{
-                title: `機能設計`,
+                titleJa: `機能設計`, titleEn: `Feature Design`,
                 content: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
             }, {
                 title: `Domain Models`,
                 content: Utils.addMarkdownDepth(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8'), 1),
             }, {
-                title: `フレームワーク`,
+                titleJa: `フレームワーク`, titleEn: `Framework`,
                 content: `Angular + Spring Boot + JPA + PostgreSQL`,
             }],
         }, {
             title: 'Output Format',
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 出力フォーマットは以下の通りです。
                 \`\`\`json
                 {"viewList":[{"name": "View name(as varName)","type":"page/dialog/parts","destinationList":["destination view name","destination view name"],"relatedFeatureList":["機能一覧の設計書のタイトル","機能一覧の設計書のタイトル"]}]}
+                \`\`\`
+            `),
+            contentEn: Utils.trimLines(`
+                The output format is as follows.
+                \`\`\`json
+                {"viewList":[{"name": "View name(as varName)","type":"page/dialog/parts","destinationList":["destination view name","destination view name"],"relatedFeatureList":["title of the design document of the feature list","title of the design document of the feature list"]}]}
                 \`\`\`
             `),
             //　"partsList":["parts(as varName)","parts(as varName)"],
@@ -1524,22 +1774,26 @@ class Step0070_ViewDocuments extends MultiStepDomainModelGenerator {
                 this.chapters = [
                     {
                         title: `Instructions`,
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             これから提示する設計書をよく読んで、画面の詳細設計書を作成してください。
                             あなたの担当は「${view.name}」です。担当外のものはやらなくてよいです。
                         `),
+                        contentEn: Utils.trimLines(`
+                            Please read the following design document carefully and create a detailed design document for the screen.
+                            Your responsibility is "${view.name}". You don't have to do anything outside of your responsibility.
+                        `),
                     }, {
-                        title: '設計書',
+                        titleJa: '設計書', titleEn: 'Design Document',
                         children: [{
                             //     title: `機能設計`,
                             //     content: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
                             // }, {
                             //     title: `Domain Models`,
                             //     content: Utils.addMarkdownDepth(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/entities.md`, 'utf-8'), 1),
-                            title: `機能設計書`,
+                            titleJa: `機能設計書`, titleEn: `Feature Design Document`,
                             content: Utils.addMarkdownDepth(view.relatedFeatureDocumentList.join('\n\n'), 2),
                             children: [{
-                                title: `画面遷移先`,
+                                titleJa: `画面遷移先`, titleEn: `Destination View`,
                                 content: view.destinationList.map((destination: string) => `* ${destination}`).join('\n'),
                             },],
                         }, {
@@ -1548,7 +1802,7 @@ class Step0070_ViewDocuments extends MultiStepDomainModelGenerator {
                         }],
                     }, {
                         title: 'Output Sample',
-                        content: `以下のサンプル設計書の書き方に倣ってください。\n\n` +
+                        contentJa: `以下のサンプル設計書の書き方に倣ってください。\n\n` +
                             Utils.setMarkdownBlock(Utils.trimLines(`
                             # 画面詳細設計書: PasswordResetView
 
@@ -1602,6 +1856,60 @@ class Step0070_ViewDocuments extends MultiStepDomainModelGenerator {
 
                             - パスワードリセットリンクをクリックした後のパスワード変更画面の設計は、この設計書の範囲外である。
                         `)),
+                        contentEn: `Please follow the sample design document below.\n\n` +
+                            Utils.setMarkdownBlock(Utils.trimLines(`
+                            # View Detail Design Document: PasswordResetView
+
+                            ## 1. Overview
+
+                            - View Name: Password Reset
+                            - View ID: PasswordResetView
+                            - View Type: Form
+                            - Description: A screen for users to set a new password if they forget their password.
+
+                            ## 2. UI Components
+
+                            - Email Address Input Field
+                            - Attribute: Required
+                            - Validation: Valid email address format
+                            - Send Password Reset Link Button
+                            - Action: Perform validation of the email address input field and if there are no problems, send a password reset link by email.
+
+                            ## 3. Validation Rules
+
+                            - Email Address
+                            - Required input
+                            - Email address format (e.g. user@example.com)
+
+                            ## 4. View Transition
+
+                            - After clicking the Send Password Reset Link button, one of the following actions occurs.
+                            - Success: Display the message "Password reset link sent to email address." to the user and transition to the LoginView.
+                            - Failure (if the email address is not registered): Display the error message "Email address not registered."
+
+                            ## 5. Error Messages
+
+                            - If the email address is not entered: "Please enter your email address."
+                            - If the email address is in an invalid format: "Please enter a valid email address."
+                            - If the email address is not registered: "Email address not registered."
+
+                            ## 6. Business Logic
+
+                            - Before sending the password reset link, check if the entered email address is registered in the system.
+                            - If the email address is registered, generate a PasswordResetToken entity and set the expiration date.
+                            - Send an email with the generated token included in the password reset link.
+
+                            ## 7. API
+
+                            - **API to Send Password Reset Link**
+                              - Description: Send a link by email for users to set a new password if they forget their password.
+                              - Input: Email address
+                              - Output: Send result
+
+                            ## 8. Notes
+
+                            - The design of the password change screen after clicking the password reset link is out of scope of this design document.
+                        `)),
                     }
                 ];
             }
@@ -1618,6 +1926,34 @@ class Step0070_ViewDocuments extends MultiStepDomainModelGenerator {
         const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/ViewDocs.json`;
         fss.writeFileSync(outputFileName, JSON.stringify(allObj, null, 2));
         return result;
+    }
+}
+
+
+class Step0072_ViewComponents extends BaseStepDomainModelGenerator {
+    constructor() {
+        super();
+        this.chapters = [{
+            title: `Instructions`,
+            contentJa: Utils.trimLines(`
+                これから提示する設計書をよく読んで、画面のコンポーネント一覧を作成してください。
+                画面のコンポーネント一覧は、画面の詳細設計書に記載されているUIコンポーネントを抜き出してください。
+            `),
+            contentEn: Utils.trimLines(`
+                Please read the following design document carefully and create a list of screen components.
+                The list of screen components should extract the UI components described in the detailed design document of the screen.
+            `),
+        }, {
+            titleJa: '設計書', titleEn: 'Design Document',
+            children: [{
+                titleJa: `画面詳細設計書`, titleEn: `View Detail Design Document`,
+                content: Utils.addMarkdownDepth(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/ViewDocs.json`, 'utf-8'), 2),
+            }],
+        }, {
+            title: 'Output Format',
+            contentJa: `表形式でコンポーネント名、説明、属性を出力してください。`,
+            contentEn: `Please output the component name, description, and attributes in tabular format.`,
+        },];
     }
 }
 
@@ -1640,18 +1976,23 @@ class Step0080_ServiceList extends BaseStepDomainModelGenerator {
         this.chapters = [
             {
                 title: `Instructions`,
-                content: Utils.trimLines(`
+                contentJa: Utils.trimLines(`
                     これから提示する設計書をよく理解して、サービス一覧を作成してください。
                     まず全量を把握して、関連の強いAPIをサービスとしてグループ化してして考えてください。
                     サービスは、バックエンド側のビジネスルールを実装するものです。
                 `),
+                contentEn: Utils.trimLines(`
+                    Please read the following design document carefully and create a list of services.
+                    First, understand the entire document and group the APIs that are closely related into services.
+                    Services are for implementing backend business rules.
+                `),
             }, {
-                title: '設計書',
+                titleJa: '設計書', titleEn: 'Design Document',
                 children: [{
-                    title: `画面⇒API呼び出し一覧`,
+                    titleJa: `画面⇒API呼び出し一覧`, titleEn: `View ⇒ API Call List`,
                     content: apiList,
                 }, {
-                    title: `機能設計`,
+                    titleJa: `機能設計`, titleEn: `Function Design`,
                     content: Utils.addMarkdownDepth([
                         ...getStepInstance(Step0030_DesignSummary).childStepList,
                         ...getStepInstance(Step0015_AdvancedExpertiseDetail).childStepList, // 高度な専門知識
@@ -1662,27 +2003,39 @@ class Step0080_ServiceList extends BaseStepDomainModelGenerator {
                 }],
             }, {
                 title: 'Output Format',
-                content: `表形式でサービス名（英語名）、名前、利用元画面IDリストを出力してください。`,
+                contentJa: `表形式でサービス名（英語名）、名前、利用元画面IDリストを出力してください。`,
+                contentEn: `Please output the service name (English name), name, and list of source screen IDs in tabular format.`,
             }
         ];
 
         this.refineMessages.push({
             role: 'user',
-            content: Utils.trimLines(`
+            content: this.lang == 'ja' ? Utils.trimLines(`
                 ありがとうございます。それでは次にそのサービス一覧を更に詳細化していきましょう。
                 サービスごとにどんなメソッドが必要かを再度設計書全体を見直して考えてみてください。
 
                 表形式でサービス名(英語名)、メソッド名（英語名）、利用元画面ID(複数可)、依存先Entity（複数可）、依存先サービス名（複数可）、関係する機能設計書名(複数可)を出力してください。
+            `) : Utils.trimLines(`
+                Thank you. Next, let's further refine the list of services.
+                Please reconsider the entire design document to think about what methods are needed for each service.
+
+                Please output the service name (English name), method name (English name), source screen ID (multiple), dependent entity (multiple), dependent service name (multiple), and related function design document name (multiple) in tabular format.
             `),
         }, {
             role: 'user',
             // content: `表形式でサービス名(英語名)、ID（英語名）、名前、メソッド、エンドポイント利用元画面IDリストを出力してください。`,
-            content: Utils.trimLines(`
+            content: this.lang === 'ja' ? Utils.trimLines(`
                 ありがとうございます。次はこれらのサービスをREST APIとして公開するための設計を行います。
                 再度、提示された設計書の要求を確認したうえで、詳細化したサービス一覧にエンドポイントとrequestの型とresponseの型を追記してください。
                 requestの型とresponseの型はDomain Modelsに提示されたものを参考にjavaの記法で書いてください。
                 
                 表形式でサービス名(英語名)、メソッド名（英語名）、日本語名、Httpメソッド、エンドポイント、requestの形式、responseの形式を出力してください。
+            `) : Utils.trimLines(`
+                Thank you. Next, we will design these services to expose them as REST APIs.
+                Please add the endpoint, request type, and response type to the detailed list of services after confirming the requirements of the presented design document.
+                Please write the request type and response type in Java notation based on the Domain Models.
+
+                Please output the service name (English name), method name (English name), Japanese name, HTTP method, endpoint, request format, and response format in tabular format.
             `),
         });
     }
@@ -1796,19 +2149,18 @@ class Step0080_ServiceList extends BaseStepDomainModelGenerator {
 //         this.chapters = [
 //             {
 //                 title: `Instructions`,
-//                 content: Utils.trimLines(`
-//                     これから提示する設計書をよく理解して、サービスメソッド一覧を作成してください。
-//                 `),
+//                 contentJa: Utils.trimLines(`これから提示する設計書をよく理解して、サービスメソッド一覧を作成してください。`),
+//                 contentEn: Utils.trimLines(`Please read the following design document carefully and create a list of service methods.`),
 //             }, {
-//                 title: '設計書',
+//                 titleJa: '設計書', titleEn: 'Design Document',
 //                 children: [{
-//                     title: `画面⇒API呼び出し一覧`,
+//                     titleJa: `画面⇒API呼び出し一覧`, titleEn: `View ⇒ API Call List`,
 //                     content: apiList,
 //                 }, {
-//                     title: `サービス一覧`,
+//                     titleJa: `サービス一覧`, titleEn: `Service List`,
 //                     content: Utils.mdTrim(getStepInstance(Step0080_ServiceList).formed),
 //                 }, {
-//                     title: `機能設計`,
+//                     titleJa: `機能設計`, titleEn: `Function Design`,
 //                     content: Utils.addMarkdownDepth([
 //                         ...getStepInstance(Step0030_DesignSummary).childStepList,
 //                         ...getStepInstance(Step0015_AdvancedExpertiseDetail).childStepList, // 高度な専門知識
@@ -1820,7 +2172,8 @@ class Step0080_ServiceList extends BaseStepDomainModelGenerator {
 //             }, {
 //                 title: 'Output Format',
 //                 // content: `表形式でサービス名(英語名)、ID（英語名）、名前、メソッド、エンドポイント、requestの形式、responseの形式、利用元画面IDリストを出力してください。`,
-//                 content: `表形式でサービス名(英語名)、メソッド名（英語名）、利用元画面ID(複数可)、依存先Entity（複数可）、依存先サービス名（複数可）、関係する機能設計書名(複数可)を出力してください。`,
+//                 contentJa: `表形式でサービス名(英語名)、メソッド名（英語名）、利用元画面ID(複数可)、依存先Entity（複数可）、依存先サービス名（複数可）、関係する機能設計書名(複数可)を出力してください。`,
+//                 contentEn: `Please output the service name (English name), method name (English name), source screen ID (multiple), dependent entity (multiple), dependent service name (multiple), and related function design document name (multiple) in tabular format.`,
 //             }
 //         ];
 //     }
@@ -1837,14 +2190,19 @@ class Step0080_ServiceList extends BaseStepDomainModelGenerator {
 //         this.chapters = [
 //             {
 //                 title: `Instructions`,
-//                 content: Utils.trimLines(`
+//                 contentJa: Utils.trimLines(`
 //                     先程のサービスメソッド一覧について、エンドポイントとrequestとresponseの形式を考えてください。
 //                     型はjavaの記法で書いてください。
+//                 `),
+//                 contentEn: Utils.trimLines(`
+//                     Please consider the endpoint, request type, and response type for the service method list you just created.
+//                     Please write the type in Java notation.
 //                 `),
 //             }, {
 //                 title: 'Output Format',
 //                 // content: `表形式でサービス名(英語名)、ID（英語名）、名前、メソッド、エンドポイント利用元画面IDリストを出力してください。`,
-//                 content: `表形式でサービス名(英語名)、メソッド名（英語名）、日本語名、メソッド、エンドポイント、requestの形式、responseの形式を出力してください。`,
+//                 contentJa: `表形式でサービス名(英語名)、メソッド名（英語名）、日本語名、メソッド、エンドポイント、requestの形式、responseの形式を出力してください。`,
+//                 contentEn: `Please output the service name (English name), method name (English name), Japanese name, method, endpoint, request format, and response format in tabular format.`,
 //             }
 //         ];
 //     }
@@ -1940,17 +2298,20 @@ class Step0080_ServiceList extends BaseStepDomainModelGenerator {
 //         this.chapters = [
 //             {
 //                 title: `Instructions`,
-//                 content: Utils.trimLines(`
-//                     与えられた表をJSON形式に変換してください。
-//                 `),
+//                 contentJa: Utils.trimLines(`与えられた表をJSON形式に変換してください。`),
+//                 contentEn: Utils.trimLines(`Convert the given table to JSON format.`),
 //             }, {
 //                 content: Utils.setMarkdownBlock(Utils.mdTrim(getStepInstance(Step0090_ServiceMethodList).formed), 'markdown'),
 //             }, {
 //                 title: 'Output Format',
 //                 // {"serviceName":{"apiName":{"name":"API名","method":"GET","endpoint":"/api/endpoint","request":"{ request }","response":"{ response }","usageScreenIdList":"画面IDリスト"}}}
-//                 content: Utils.trimLines(`
+//                 contentJa: Utils.trimLines(`
 //                     以下のJSON形式で出力してください。
 //                     {"serviceName":{"apiName":{"name":"API名","method":"GET","endpoint":"/api/endpoint","usageScreenIdList":["画面ID",],"entityList":["Entity名",],"documentList":["機能設計書",]}}}
+//                 `),
+//                 contentEn: Utils.trimLines(`
+//                     Please output in the following JSON format.
+//                     {"serviceName":{"apiName":{"name":"API name","method":"GET","endpoint":"/api/endpoint","usageScreenIdList":["screenID",],"entityList":["Entity name",],"documentList":["function design document",]}}}
 //                 `),
 //             }
 //         ];
@@ -2019,7 +2380,7 @@ class Step0100_ApiDocuments extends MultiStepDomainModelGenerator {
                 this.chapters = [
                     {
                         title: `Instructions`,
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             これから提示する設計書をよく読んで、APIの詳細設計書を作成してください。
                             あなたの担当は「${apiId}」です。担当外のものはやらなくてよいです。
                             特に、「バックエンド処理詳細」については以下のルールに則って考えてください。
@@ -2028,15 +2389,25 @@ class Step0100_ApiDocuments extends MultiStepDomainModelGenerator {
                             - エンティティ、サービスを使う場合は英字名を使うこと
                             - ビジネスロジックの流れを記載すること
                         `),
+                        contentEn: Utils.trimLines(`
+                            Please read the following design document carefully and create a detailed design document for the API.
+                            Your assignment is "${apiId}". You don't have to do anything outside of your assignment.
+                            In particular, consider the following rules for "Backend Processing Details".
+                            - Describe in as much detail and accuracy as possible
+                            - Describe in sufficient detail to draw a flowchart
+                            - Use English names when using entities and services
+                            - Describe the flow of business logic
+                        `),
                     }, {
-                        title: '全体設計書',
-                        content: `全体設計書はシステム全体について語っています。あなたの担当分が相対的にどのような役割かを理解するのに役立ててください。`,
+                        titleJa: '全体設計書', titleEn: 'Overall Design Document',
+                        contentJa: `全体設計書はシステム全体について語っています。あなたの担当分が相対的にどのような役割かを理解するのに役立ててください。`,
+                        contentEn: `The overall design document talks about the entire system. Use it to understand the relative role of your assignment.`,
                         children: [{
                             // サービス一覧だけの方がいいかもしれないのでAPI一覧を外す。
                             //     title: `API一覧`,
                             //     content: parentInstance.API_LIST,
                         }, {
-                            title: `サービス一覧`,
+                            titleJa: `サービス一覧`, titleEn: `Service List`,
                             content: parentInstance.SERVICE_LIST,
                         }, {
                             title: `Domain Models`,
@@ -2046,18 +2417,19 @@ class Step0100_ApiDocuments extends MultiStepDomainModelGenerator {
                             content: parentInstance.repositoryDocs,
                         }],
                     }, {
-                        title: '個別設計書',
-                        content: `個別設計書はあなたの担当に関係する部分です。`,
+                        titleJa: '個別設計書', titleEn: 'Individual Design Document',
+                        contentJa: `個別設計書はあなたの担当に関係する部分です。`,
+                        contentEn: `The individual design document is related to your assignment.`,
                         children: [{
-                            title: `機能設計書`,
+                            titleJa: `機能設計書`, titleEn: `Function Design Document`,
                             content: Utils.setMarkdownBlock(Utils.mdTrim(featureList.join('\n\n---\n\n')), 'markdown'),
                         }, {
-                            title: `画面設計書`,
+                            titleJa: `画面設計書`, titleEn: `View Design Document`,
                             content: Utils.setMarkdownBlock(Utils.mdTrim(viewDocList.join('\n\n---\n\n')), 'markdown'),
                         }],
                     }, {
                         title: 'Output Sample',
-                        content: `以下のサンプル設計書の書き方に倣ってください。ただし「バックエンド処理詳細」についてはサンプルの書き方よりももっと詳細かつ長大な記載になってもよいです。\n\n` +
+                        contentJa: `以下のサンプル設計書の書き方に倣ってください。ただし「バックエンド処理詳細」についてはサンプルの書き方よりももっと詳細かつ長大な記載になってもよいです。\n\n` +
                             Utils.trimLines(`
                                 ---
                                 # 詳細設計書: AppointmentService.getAvailableAppointmentSlots
@@ -2144,6 +2516,94 @@ class Step0100_ApiDocuments extends MultiStepDomainModelGenerator {
                                 - 予約可能時間帯の表示は、システムに登録されている全医師に対してデフォルトで行われるが、患者は特定の医師を選択して表示を絞り込むことができる。
                                 - 予約可能時間帯のデータは、常に最新の情報を反映するようにシステムが更新を行う。
                             `),
+                        contentEn: `Please follow the sample design document. However, for "Backend Processing Details", it may be more detailed and longer than the sample.` + '\n\n' +
+                            Utils.trimLines(`
+                                ---
+                                # Detailed Design Document: AppointmentService.getAvailableAppointmentSlots
+
+                                ## Function Summary
+                                - Function Name: Get Available Appointment Slots
+                                - Function ID: getAvailableAppointmentSlots
+                                - Function Description: Get the available appointment slots at the dental clinic for a specific date.
+
+                                ## API Specification
+
+                                ### Endpoint
+                                - Method: GET
+                                - Path: /api/appointments/slots
+                                - Query Parameters:
+                                  - date: LocalDate (required) - The date for which the user wants to check the available appointment slots.
+
+                                ### Request
+                                \`\`\`json
+                                {
+                                  "date": "2023-04-15"
+                                }
+                                \`\`\`
+
+                                ### Response
+                                - Content-Type: application/json
+                                - Body:
+                                \`\`\`json
+                                {
+                                  "slots": [
+                                    {
+                                      "slotId": 12345,
+                                      "date": "2023-04-15",
+                                      "startTime": "09:00",
+                                      "endTime": "09:30",
+                                      "doctorId": 67890,
+                                      "slotStatus": "AVAILABLE"
+                                    },
+                                    {
+                                      "slotId": 12346,
+                                      "date": "2023-04-15",
+                                      "startTime": "09:30",
+                                      "endTime": "10:00",
+                                      "doctorId": 67891,
+                                      "slotStatus": "BOOKED"
+                                    }
+                                    // ... Other available appointment slots
+                                  ]
+                                }
+                                \`\`\`
+
+                                ### Response Fields
+                                - slots: List<AppointmentSlot> - List of available appointment slots.
+                                  - slotId: Long - Unique identifier for the slot.
+                                  - date: LocalDate - Date of the available appointment slot.
+                                  - startTime: LocalTime - Start time of the available appointment slot.
+                                  - endTime: LocalTime - End time of the available appointment slot.
+                                  - doctorId: Long - ID of the doctor providing the available appointment slot.
+                                  - slotStatus: SlotStatus - Status of the slot (AVAILABLE: Available, BOOKED: Booked).
+
+                                ### Error Responses
+                                - 400 Bad Request: If the date is not specified or in an invalid format.
+                                - 404 Not Found: If no available appointment slots exist for the specified date.
+                                - 500 Internal Server Error: If the server is unable to retrieve the available appointment slots due to a server-side issue.
+                                
+                                ### Error Message Example
+                                \`\`\`json
+                                {
+                                  "message": "Invalid date format. Please use 'YYYY-MM-DD'."
+                                }
+                                \`\`\`
+
+                                ## Backend Processing Details
+                                1. Retrieve the date from the request and perform validation.
+                                2. Retrieve the available appointment slots from the database for the specified date.
+                                3. Check the status of each slot (booked or available) and add to the list.
+                                4. Return the list of available appointment slots as the response.
+
+                                ## Business Logic
+                                - Available appointment slots are only displayed within the clinic's office hours.
+                                - Days when the clinic is closed or when a doctor is on vacation are not displayed as available appointment slots.
+                                - Booked time slots are deactivated to prevent other patients from booking.
+                                - Available appointment slots for each doctor are dynamically generated based on the doctor's schedule.
+                                - The display of available appointment slots is by default for all registered doctors in the system, but patients can narrow down the display by selecting a specific doctor.
+                                - The available appointment slot data is always updated to reflect the latest information.
+                            `),
+
                     }
                 ];
             }
@@ -2215,7 +2675,7 @@ class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
                 this.chapters = [
                     {
                         title: `Instructions`,
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             これから提示する設計書をよく読んで、APIのRequestDto/ResponseDtoを作成してください。
                             あなたの担当は「${apiId}」です。担当外のものはやらなくてよいです。
                             RequestDto/ResponseDtoのクラス名は、以下のルールに則ってください。
@@ -2227,8 +2687,20 @@ class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
                             ${PACKAGE_NAME}.domain.entity, ${PACKAGE_NAME}.domain.enumsを有効利用してください。バリデーションを掛けるためにそれらをextendsしてもよいです。
                             クラスメンバはフィールドのみとすること（コンストラクタとメソッドは不要）。
                         `),
+                        contentEn: Utils.trimLines(`
+                            Please read the following design document carefully and create the RequestDto/ResponseDto for the API.
+                            Your assignment is "${apiId}". You don't have to do anything outside of your assignment.
+                            The class names of RequestDto/ResponseDto should follow the following rules.
+                            - RequestDto -> ${Utils.toPascalCase(serviceName)}${Utils.toPascalCase(apiName)}RequestDto
+                            - ResponseDto -> ${Utils.toPascalCase(serviceName)}${Utils.toPascalCase(apiName)}ResponseDto
+                            Please attach Jakarta Bean Validation API validators to RequestDto.
+                            Use Lombok's @Data.
+                            If you want to validate the internal items of the hierarchical RequestDto, define it as an inner class.
+                            Please make effective use of ${PACKAGE_NAME}.domain.entity, ${PACKAGE_NAME}.domain.enums. You may extend them to apply validation.
+                            Class members should be fields only (constructors and methods are not required).
+                        `),
                     }, {
-                        title: '設計書',
+                        titleJa: '設計書', titleEn: 'Design Document',
                         children: [{
                             title: `${Utils.toPascalCase(serviceName)}${Utils.toPascalCase(apiName)}RequestDto`,
                             content: request,
@@ -2236,16 +2708,20 @@ class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
                             title: `${Utils.toPascalCase(serviceName)}${Utils.toPascalCase(apiName)}ResponseDto`,
                             content: response,
                         }, {
-                            content: Utils.addMarkdownDepth(detailDocument, 1),
+                            contentJa: Utils.addMarkdownDepth(detailDocument, 1),
                         }, {
-                            title: `共通Entity`,
+                            titleJa: `共通Entity`, titleEn: `Common Entity`,
                             content: parentInstance.entityList,
                         }],
                     }, {
                         title: 'Output Format',
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             javaのソースコードのみを出力してください。
                             説明は不要です。
+                        `),
+                        contentEn: Utils.trimLines(`
+                            Please output only the java source code.
+                            No explanation is required.
                         `),
                     }
                 ];
@@ -2417,7 +2893,7 @@ class Step0120_ApiSourceJson extends MultiStepDomainModelGenerator {
                 this.chapters = [
                     {
                         title: `Instructions`,
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             これから提示する設計書をよく読んで、サービス実装のひな型のTODOを実装してください。
                             あなたの担当は「${apiId}」です。担当外のものはやらなくてよいです。
                             RequestDtoはEntityと似ていても異なるものです。マッピング処理を忘れないように注意してください。
@@ -2426,24 +2902,35 @@ class Step0120_ApiSourceJson extends MultiStepDomainModelGenerator {
                             Entityの操作は、対応するAPI、もしくはRepositoryインターフェース経由で行ってください。（entityManager.createQueryは禁止です）。
                             追加のインジェクションが必要な場合は「サービス一覧」、「Repository一覧」の中からのみ選択可能です。
                         `),
+                        contentEn: Utils.trimLines(`
+                            Please read the following design document carefully and implement the TODO of the service implementation.
+                            Your assignment is "${apiId}". You don't have to do anything outside of your assignment.
+                            RequestDto is similar to Entity but different. Be careful not to forget the mapping process.
+                            Pay attention to the type of the item. It may be different from the type of the Entity.
+                            Also, the validation is implemented in another class, so you don't have to implement it.
+                            Entity operations should be performed through the corresponding API or Repository interface. (entityManager.createQuery is prohibited).
+                            If additional injection is required, it can only be selected from the "Service List" and "Repository List".
+                        `),
                     }, {
-                        title: '個別設計書',
-                        content: `個別設計書はあなたが実装すべき設計書です`,
+                        titleJa: '個別設計書', titleEn: 'Individual Design Document',
+                        contentJa: `個別設計書はあなたが実装すべき設計書です`,
+                        contentEn: `The individual design document is the design document you should implement`,
                         children: [{
-                            title: `サービス実装のひな型`,
+                            titleJa: `サービス実装のひな型`, titleEn: `Service Implementation Template`,
                             content: Utils.setMarkdownBlock(serviceTemplateMap[apiId], 'java'),
                         }, {
                             content: Utils.addMarkdownDepth(parentInstance.serviceDocs[apiId], 1),
                         }],
                     }, {
-                        title: '全体設計書',
-                        content: `全体設計書はシステム全体について語っています。あなたの担当分が相対的にどのような役割かを理解するのに役立ててください。`,
+                        titleJa: '全体設計書', titleEn: 'Overall Design Document',
+                        contentJa: `全体設計書はシステム全体について語っています。あなたの担当分が相対的にどのような役割かを理解するのに役立ててください。`,
+                        contentEn: `The overall design document speaks about the entire system. Use it to understand the relative role of your assignment.`,
                         children: [{
-                            title: `フレームワーク`,
+                            titleJa: `フレームワーク`, titleEn: `Framework`,
                             content: `SpringBoot + JPA`,
                         }, {
-                            title: `ディレクトリ構成`,
-                            content: Utils.trimLines(`
+                            titleJa: `ディレクトリ構成`, titleEn: `Directory Structure`,
+                            contentJa: Utils.trimLines(`
                                 - ${PACKAGE_NAME}
                                   - domain: domain層のパッケージ
                                     - controller: controllerのパッケージ
@@ -2454,14 +2941,25 @@ class Step0120_ApiSourceJson extends MultiStepDomainModelGenerator {
                                     - enums: enumのパッケージ
                                   - exception: Exceptionクラスのパッケージ
                             `),
+                            contentEn: Utils.trimLines(`
+                                - ${PACKAGE_NAME}
+                                  - domain: Package for the domain layer
+                                    - controller: Package for the controller
+                                    - service: Package for the service interface class
+                                      - impl: Package for the service implementation class
+                                    - repository: Package for the repository interface class
+                                    - entity: Package for the entity
+                                    - enums: Package for the enum
+                                  - exception: Package for the Exception class
+                            `),
                         }, {
-                            title: `サービス一覧`,
+                            titleJa: `サービス一覧`, titleEn: `Service List`,
                             content: parentInstance.SERVICE_LIST,
                         }, {
-                            title: `利用サービス`,
+                            titleJa: `利用サービス`, titleEn: `Used Services`,
                             content: api.serviceList.map(serviceName => Utils.setMarkdownBlock(serviceInterfaceMap[serviceName], 'java')).join('\n') || 'なし',
                         }, {
-                            title: `Repository一覧`,
+                            titleJa: `Repository一覧`, titleEn: `Repository List`,
                             content: parentInstance.REPOSITORY_LIST,
                         }, {
                             title: `Domain Models`,
@@ -2472,7 +2970,7 @@ class Step0120_ApiSourceJson extends MultiStepDomainModelGenerator {
                         }],
                     }, {
                         title: 'Output Format',
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             以下のJSON形式で出力してください。
                             {
                                 "additionalImports": ["\${必要な追加のインポートのJava code}"],
@@ -2480,6 +2978,16 @@ class Step0120_ApiSourceJson extends MultiStepDomainModelGenerator {
                                 "methodAnnotations": ["\${メソッドに適用されるアノテーションのJava code}"],
                                 "methodBodyInnerCodes": ["\${メソッドの内部実装のJava code with Japanese comment}"],
                                 "todos": ["\${メソッドの内部実装で、難しくて実装できないもの}"]
+                            }
+                        `),
+                        contentEn: Utils.trimLines(`
+                            Please output in the following JSON format.
+                            {
+                                "additionalImports": ["\${Additional import Java code}"],
+                                "additionalInjections": ["\${Additional injection Java code}"],
+                                "methodAnnotations": ["\${Method annotation Java code}"],
+                                "methodBodyInnerCodes": ["\${Method body inner Java code with Japanese comment}"],
+                                "todos": ["\${Things that are difficult to implement in the method body}"]
                             }
                         `),
                         // javaソースコードのみを出力してください。
@@ -2552,28 +3060,40 @@ class Step0130_RepositoryMethod extends MultiStepDomainModelGenerator {
                 this.chapters = [
                     {
                         title: `Instructions`,
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             これから提示するソースコードをよく理解して、Repositoryインターフェースで実装されるべきメソッドを抽出してください。
+                        `),
+                        contentEn: Utils.trimLines(`
+                            Please understand the following source code well and extract the methods that should be implemented in the Repository interface.
                         `),
                     }, {
                         title: 'Target Source Code',
-                        content: Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/service/impl/${apiId}Impl.java`, 'utf-8'), 'java'),
+                        contentJa: Utils.setMarkdownBlock(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/${SPRING_DIRE}/domain/service/impl/${apiId}Impl.java`, 'utf-8'), 'java'),
                     }, {
-                        title: '参考資料',
+                        titleJa: '参考資料', titleEn: 'Reference Documents',
                         children: [{
-                            title: `フレームワーク`,
+                            titleJa: `フレームワーク`, titleEn: `Framework`,
                             content: `SpringBoot + JPA`,
                         }, {
                             title: `Entity`,
-                            content: '以下のentityには、対応するRepositoryインターフェースが存在します。\n\n' + ENTITY_LIST,
+                            contentJa: '以下のentityには、対応するRepositoryインターフェースが存在します。\n\n' + ENTITY_LIST,
+                            contentEn: 'The following entity has a corresponding Repository interface.\n\n' + ENTITY_LIST,
                         }],
                     }, {
                         title: 'Output Format',
-                        content: Utils.trimLines(`
+                        contentJa: Utils.trimLines(`
                             以下のJSON形式で出力してください。
                             {
                                 "jpaMethods": {
                                     "EntityName": ["\${JPAメソッドのJava code}"]
+                                },
+                            }
+                        `),
+                        contentEn: Utils.trimLines(`
+                            Please output in the following JSON format.
+                            {
+                                "jpaMethods": {
+                                    "EntityName": ["\${JPA method Java code}"]
                                 },
                             }
                         `),
@@ -2677,10 +3197,15 @@ class Step0050_EntityListToJson extends BaseStepDomainModelGenerator {
         super();
         this.chapters = [{
             title: `Instructions`,
-            content: Utils.trimLines(`
+            contentJa: Utils.trimLines(`
                 これから提示する設計書をよく読んで、ER図を作成してください。
                 抽出にあたってアクター／リソースの両方について、抜け漏れの無いように気を付けてください。
                 まずはEntityの名前と役割を一覧化してください。EnumはEntityとは分けて記載してください。
+            `),
+            contentEn: Utils.trimLines(`
+                Please read the following design document carefully and create an ER diagram.
+                Be careful not to miss any actors or resources when extracting.
+                First, list the names and roles of the entities. Enum should be listed separately from the entity.
             `),
         }, {
             title: 'Input Document',

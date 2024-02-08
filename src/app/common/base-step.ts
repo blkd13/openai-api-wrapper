@@ -14,10 +14,13 @@ export interface StructuredPrompt {
     content?: string;
     children?: StructuredPrompt[];
 
-    // copilotに翻訳させるためにJp/Enという項目名も用意した。実際にはcontentを使うのでこれらは使われない。
-    contentJp?: string;
+    // copilotに翻訳させるためにJa/Enという項目名も用意した。
+    titleJa?: string;
+    titleEn?: string;
+    contentJa?: string;
     contentEn?: string;
 }
+export type PromptLang = 'ja' | 'en';
 
 /**
  * [{title: 'hoge', content: 'fuga', children: [{title: 'hoge', content: 'fuga'}]}]のようなオブジェクトをMarkdownに変換する
@@ -25,21 +28,22 @@ export interface StructuredPrompt {
  * @param {number} layer
  * @returns {string}
  */
-function toMarkdown(chapter: StructuredPrompt, layer: number = 1) {
+function toMarkdown(chapter: StructuredPrompt, lang: PromptLang, layer: number = 1) {
     let sb = '';
-    if (chapter.title) {
+    let title;
+    title = (lang === 'ja' ? chapter.titleJa : chapter.titleEn) || chapter.title || '';
+    if (title) {
         sb += `${'#'.repeat(layer)} ${chapter.title}\n\n`;
     } else { }
     let content;
-    content = chapter.contentJp || chapter.contentEn;
-    content = chapter.content;
+    content = (lang === 'ja' ? chapter.contentJa : chapter.contentEn) || chapter.content || '';
     if (content) {
         sb += `${content}\n\n`;
     } else { }
     if (chapter.children) {
         chapter.children.forEach(child => {
             // console.log(child);
-            sb += toMarkdown(child, layer + 1);
+            sb += toMarkdown(child, lang, layer + 1);
         });
     } else { }
     return sb;
@@ -55,6 +59,8 @@ function toMarkdown(chapter: StructuredPrompt, layer: number = 1) {
 export abstract class BaseStepInterface<T> {
     /** エージェントの名前。通常はrunnuerの置いてあるディレクトリ名にする。prompts_and_responsesのディレクトリ分けるのに使うだけ。 */
     abstract agentName: string;
+
+    lang: PromptLang = 'ja';
 
     /** label */
     _label: string = '';
@@ -118,7 +124,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
 
     initPrompt(): string {
         // chaptersをMarkdownに変換してpromptに書き込む。
-        let prompt = this.chapters.map(chapter => toMarkdown(chapter)).join('\n');
+        let prompt = this.chapters.map(chapter => toMarkdown(chapter, this.lang)).join('\n');
         prompt = this.preProcess(prompt);
         fss.writeFileSync(this.promptPath, prompt);
         return prompt;
