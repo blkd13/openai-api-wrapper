@@ -7,7 +7,7 @@ import { GPTModels, OpenAIApiWrapper } from "./openai-api-wrapper.js";
 import { Utils } from './utils.js';
 
 // aiApi as singleton (for queing requests)
-export const aiApi = new OpenAIApiWrapper();
+export const aiApi = new OpenAIApiWrapper({ allowLocalFiles: true, useAzure: false });
 
 export interface StructuredPrompt {
     title?: string;
