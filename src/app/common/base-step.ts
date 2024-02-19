@@ -7,7 +7,7 @@ import { GPTModels, OpenAIApiWrapper } from "./openai-api-wrapper.js";
 import { Utils } from './utils.js';
 
 // aiApi as singleton (for queing requests)
-export const aiApi = new OpenAIApiWrapper({ allowLocalFiles: true, useAzure: false });
+const aiApi = new OpenAIApiWrapper({ allowLocalFiles: true, useAzure: false });
 
 export interface StructuredPrompt {
     title?: string;
@@ -399,5 +399,15 @@ export class MultiStep extends BaseStepInterface<string[]> {
 
     postProcess(result: string[]): string[] {
         return result;
+    }
+}
+
+const CONTAINER: Record<string, BaseStep | MultiStep> = {};
+
+export function getStepInstance<T extends BaseStep | MultiStep>(stepClass: { new(): T }): T {
+    if (CONTAINER[stepClass.name]) {
+        return CONTAINER[stepClass.name] as T;
+    } else {
+        return CONTAINER[stepClass.name] = new stepClass();
     }
 }
