@@ -8,7 +8,7 @@ import OpenAI from 'openai';
 import { APIPromise, RequestOptions } from 'openai/core';
 import { ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionCreateParamsStreaming } from 'openai/resources/chat/completions';
 import { Stream } from 'openai/streaming';
-import { TiktokenModel, encoding_for_model } from 'tiktoken';
+import { Tiktoken, TiktokenModel, encoding_for_model } from 'tiktoken';
 
 import fss from './fss.js';
 import { Utils } from "./utils.js";
@@ -29,6 +29,18 @@ export const azureDeployNameMap: Record<string, string> = {
     'gpt-4-vision-preview': 'gpt4',
 };
 
+
+/**
+ * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
+ */
+const encoderMap: Record<TiktokenModel, Tiktoken> = {} as any;
+function getEncoder(model: TiktokenModel): Tiktoken {
+    if (encoderMap[model]) {
+    } else {
+        encoderMap[model] = encoding_for_model(model);
+    }
+    return encoderMap[model];
+}
 
 export interface WrapperOptions {
     allowLocalFiles: boolean;
@@ -76,13 +88,29 @@ class RunBit {
 
         let runPromise = null;
 
+        console.log(logString('start', ''));
         if (this.openApiWrapper.wrapperOptions.useAzure) {
+            if (args.max_tokens) {
+            } else if (args.model === 'gpt-4-vision-preview') {
+                // vision-previの時にmax_tokensを設定しないと20くらいで返ってきてしまう。
+                args.max_tokens = 4096;
+            }
+            // console.log('shot');
             runPromise = (azureClient.streamChatCompletions(azureDeployNameMap[args.model] || args.model, args.messages as any, { ...args as any })).then((response) => {
+                // console.log('res');
                 ratelimitObj.limitRequests = 0;
-                ratelimitObj.remainingRequests = 0;
-                ratelimitObj.resetRequests = new Date().toISOString();
-                ratelimitObj.remainingTokens = 0;
                 ratelimitObj.limitTokens = 0;
+                ratelimitObj.resetRequests = new Date().toISOString();
+                ratelimitObj.remainingRequests = 1; // シングルスレッドで動かす
+                ratelimitObj.remainingTokens = 1;
+
+                if ((response as any).headers) {
+                    // azureのライブラリを直接改造してないとここは取れない。
+                    (response as any).headers['x-ratelimit-remaining-requests'] && (ratelimitObj.remainingRequests = Number((response as any).headers['x-ratelimit-remaining-requests']));
+                    (response as any).headers['x-ratelimit-remaining-tokens'] && (ratelimitObj.remainingTokens = Number((response as any).headers['x-ratelimit-remaining-tokens']));
+                } else {
+                }
+
                 // fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response: { status: response.response.status, headers } }, Utils.genJsonSafer()), {}, (err) => { });
 
                 // ストリームからデータを読み取るためのリーダーを取得
@@ -108,21 +136,22 @@ class RunBit {
                         // console.log(JSON.stringify(value));
                         // // 中身を取り出す
                         // const content = decoder.decode(value.choices);
-                        // // console.log(content);
+                        const content = JSON.stringify(value);
+                        // console.log(content);
 
-                        // // 中身がない場合はスキップ
-                        // if (!content) { continue; }
-                        // // ファイルに書き出す
-                        // fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
-                        // // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
-                        // // トークン数をカウント
-                        // tokenCount.completion_tokens++;
-                        // const text = JSON.parse(content).choices[0].delta.content || '';
-                        // tokenBuilder += text;
-                        // tokenCount.tokenBuilder = tokenBuilder;
+                        // 中身がない場合はスキップ
+                        if (!content) { continue; }
+                        // ファイルに書き出す
+                        fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
+                        // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
+                        // トークン数をカウント
+                        tokenCount.completion_tokens++;
+                        const text = JSON.parse(content)?.choices[0]?.delta?.content || '';
+                        tokenBuilder += text;
+                        tokenCount.tokenBuilder = tokenBuilder;
 
                         // streamHandlerを呼び出す
-                        observer.next(value.choices[0].delta?.content || '');
+                        observer.next(text);
                     }
                 }
                 // ストリームの読み取りを開始
@@ -382,7 +411,8 @@ export class OpenAIApiWrapper {
             const prompt = args.messages.map(message => `<im_start>${message.role}\n${message.content}<im_end>`).join('\n');
             const tokenCount = new TokenCount(args.model as GPTModels, 0, 0);
             // gpt-4-1106-preview に未対応のため、gpt-4に置き換え。プロンプトのトークンを数えるだけなのでモデルはどれにしてもしても同じだと思われるが。。。
-            tokenCount.prompt_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+            tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+            // tokenCount.prompt_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             tokenCount.prompt_tokens += imagePrompt;
             this.tokenCountList.push(tokenCount);
 
@@ -391,7 +421,8 @@ export class OpenAIApiWrapper {
                 const take = numForm(Date.now() - bef, 9);
                 const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
                 // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
-                tokenCount.completion_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                // tokenCount.completion_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                tokenCount.completion_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
                 const completion_tokens = numForm(tokenCount.completion_tokens, 6);
 
                 const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
@@ -400,7 +431,7 @@ export class OpenAIApiWrapper {
                 return logString;
             };
 
-            console.log(logString('start'));
+            console.log(logString('enque'));
 
             const runBit = new RunBit(logString, tokenCount, args, { ...reqOptions, ...this.options }, this, observer);
             // 未知モデル名の場合は空queueを追加しておく
