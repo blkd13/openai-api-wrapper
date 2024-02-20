@@ -371,7 +371,7 @@ export class MultiStep extends BaseStepInterface<string[]> {
     get result() { return fs.readFileSync(this.resultPath, 'utf-8'); }
     get formed() { return fs.readFileSync(this.formedPath, 'utf-8'); }
 
-    async run(): Promise<string[]> {
+    async run(isForce: boolean = false, refineIndex: number = 0): Promise<string[]> {
         if (this.isSkip) {
             // スキップ指定されていたら空文字を返す。
             return new Promise<string[]>((resolve, reject) => {
@@ -385,7 +385,7 @@ export class MultiStep extends BaseStepInterface<string[]> {
             });
         } else {
             return new Promise<string[]>((resolve, reject) => {
-                Promise.all(this.childStepList.map(step => step.run())).then((resultList: string[]) => {
+                Promise.all(this.childStepList.map(step => step.run(isForce, refineIndex))).then((resultList: string[]) => {
                     // 全部まとめてファイルに出力する。
                     fss.writeFile(this.resultPath, resultList.join('\n\n---\n\n'), (err: any) => {
                         if (err) reject(err);

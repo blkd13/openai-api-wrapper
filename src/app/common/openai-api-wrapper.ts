@@ -111,7 +111,7 @@ class RunBit {
                     // azureのライブラリを直接改造してないとここは取れない。
                     'x-ratelimit-remaining-requests' in (response as any).headers && (ratelimitObj.remainingRequests = Number((response as any).headers['x-ratelimit-remaining-requests'])) || 1;
                     'x-ratelimit-remaining-tokens' in (response as any).headers && (ratelimitObj.remainingTokens = Number((response as any).headers['x-ratelimit-remaining-tokens'])) || 1;
-                    console.log((response as any).headers);
+                    // console.log((response as any).headers);
                 } else {
                 }
 
