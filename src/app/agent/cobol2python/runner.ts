@@ -1,0 +1,218 @@
+import { fileURLToPath } from 'url';
+import * as fs from 'fs';
+import { BaseStep, MultiStep, PromptLang, StepOutputFormat, aiApi } from "../../common/base-step.js";
+import { GPTModels } from '../../common/openai-api-wrapper.js';
+import { Utils } from '../../common/utils.js';
+import fss from '../../common/fss.js';
+import path from 'path';
+import { SAMPLE_INSERT_COBOL, SAMPLE_INSERT_PYTHON } from './sample_code.js';
+
+// Azureに向ける
+aiApi.wrapperOptions.useAzure = true;
+
+// サブディレクトリ名
+const PROJECT_NAME = 'wja-poc';
+
+// シングルステップ用共通設定
+abstract class BaseStepCobol2Python extends BaseStep {
+    agentName: string = Utils.basename(Utils.dirname(import.meta.url));
+    model: GPTModels = 'gpt-4-vision-preview';
+    // model: GPTModels = 'gpt-3.5-turbo';
+    labelPrefix: string = `${PROJECT_NAME}/`;  // ラベルのプレフィックス。サブディレクトリに分けるように/を入れておくと便利。
+    systemMessageJa = 'COBOLからPythonへの変換エージェントです。';
+    systemMessageEn = 'COBOL to Python conversion agent.';
+    systemMessage = this.systemMessageJa;
+    temperature: number = 0.0; // ランダム度合い。0に近いほど毎回同じ結果になる。プログラムのようなものは 0 に、文章系は 1 にするのが良い。
+    format = StepOutputFormat.MARKDOWN;
+    lang: PromptLang = 'ja';
+}
+
+// マルチステップ用共通設定
+abstract class MultiStepCobol2Python extends MultiStep {
+    agentName: string = Utils.basename(Utils.dirname(import.meta.url));
+    labelPrefix: string = `${PROJECT_NAME}/`;  // ラベルのプレフィックス。サブディレクトリに分けるように/を入れておくと便利。
+}
+
+/**
+ * 単純にサンプルを見ながらCOBOL->python書換をする。
+ */
+class Step0010_SimpleConvert extends MultiStepCobol2Python {
+
+    // クラスとして普通に自由に変数を作ってもよい。
+    filePathList!: string[];
+
+    constructor() {
+        super();
+
+        /**
+         * 実際のステップ定義はここで書く。
+         */
+        class Step0010_SimpleConvertChil extends BaseStepCobol2Python {
+            // 共通定義を上書きする場合はここで定義する。
+            constructor(public fileName: string, public innerIndex: number, public sectionName: string, public sectionCode: string) {
+                super();
+                // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
+                this.label = `${this.constructor.name}_${Utils.safeFileName(fileName)}-${innerIndex}-${sectionName.replaceAll('-', '_')}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                // 個別の指示を作成。
+                this.chapters = [
+                    {
+                        title: `Instructions`,
+                        contentJa: Utils.trimLines(`
+                            COBOLで書かれたソースコードをPythonに書き換えてください。
+
+                            - 補足は不要です
+                            - 外部関数などのライブラリは既存のものとして扱ってよいです。追加で定義する必要はありません。
+                            - コメントは日本語で
+                        `),
+                        contentEn: Utils.trimLines(`
+                            Please convert the source code written in COBOL to Python.
+
+                            - No explanation is required.
+                            - Libraries such as external functions can be treated as existing ones. There is no need to define them additionally.
+                            - Comments are in Japanese.
+                        `),
+                        children: [
+                            {
+                                titleJa: `変換サンプル`, titleEn: `Conversion sample`,
+                                content: `変換サンプルは以下の通りです。注意深く参考にしてください。`,
+                                children: [{
+                                    titleJa: `変換前`, titleEn: `Before conversion`,
+                                    content: Utils.setMarkdownBlock(SAMPLE_INSERT_COBOL, 'cobol'),
+                                }, {
+                                    titleJa: `変換後`, titleEn: `After conversion`,
+                                    content: Utils.setMarkdownBlock(SAMPLE_INSERT_PYTHON, 'python'),
+                                }]
+                            },
+                            {
+                                titleJa: `変換対象のCOBOLソースコード`, titleEn: `COBOL source code to be converted`,
+                                content: Utils.setMarkdownBlock(sectionCode, 'cobol'),
+                            },
+                        ]
+                    }
+                ];
+            }
+        }
+        // this.filePathList = fss.getFilesRecursively('E:/workspace/NDP/git/interface-mgt-cc/src/main/java/jp/co/nomura/onlineservice/cc/interfacemgt/star/ext/usecase/').filter(filename => filename.endsWith('Usecase.java'));
+        this.filePathList = fss.getFilesRecursively('E:/workspace/STAR/wja-poc/COBOL').filter(filePath => filePath.endsWith('.pco') || filePath.endsWith('.cob'));
+
+        // ルーチン名が可変であることを考慮した正規表現
+        const regexSection = /...... ([\w-]+)-RTN\s+SECTION\.[\s\S]*?\1-EXT\./g;
+        const regexSectionName = /^...... ([\w-]+)-RTN\s+SECTION.*$/g;
+
+        // childStepListを組み立て。
+        this.childStepList = this.filePathList.map(targetFilePath => {
+
+            const cobolText = fs.readFileSync(targetFilePath, 'utf-8');
+
+            // WORKING-STORAGE SECTION.
+            const cobolLines = cobolText.split('\n');
+            let isWorkingStorage = false;
+            let layer = 0;
+            let line = '';
+            const dtoLines = [];
+            for (let idx = 0; idx < cobolLines.length; idx++) {
+                if (cobolLines[idx][6] === ' ') {
+                    // 実コード
+                } else {
+                    // コメント
+                    continue;
+                }
+
+                // 7byte目以降
+                cobolLines[idx] = cobolLines[idx].substring(7).replaceAll(/\s*$/g, '');
+
+                if (cobolLines[idx].trim().match(/^WORKING-STORAGE\s+SECTION\./)) {
+                    isWorkingStorage = true;
+                    continue;
+                } else { }
+
+                // console.log(cobolLines[idx]);
+                if (cobolLines[idx].startsWith('LINKAGE ') || cobolLines[idx].startsWith('PROCEDURE ')) {
+                    break;
+                } else { }
+
+                if (isWorkingStorage) {
+                    if (line.length === 0) {
+                        line = cobolLines[idx];
+                    } else {
+                        line += ' ' + cobolLines[idx].trim();
+                    }
+                    if (cobolLines[idx].trim().endsWith('.')) {
+                        dtoLines.push(line);
+                        line = '';
+                    } else {
+                        // 中間コード
+                    }
+                } else { }
+            }
+            // console.log(dtoLines);
+
+            // サブルーチン毎に分割する
+            let match;
+            const sectionList = [];
+            while ((match = regexSection.exec(cobolText)) !== null) {
+                // console.log(match[0]); // マッチした各ルーチンのテキスト
+                sectionList.push(match[0]);
+            }
+            const baseName = path.basename(targetFilePath)
+            return sectionList.map((section, innerIndex) => {
+                return new Step0010_SimpleConvertChil(baseName, innerIndex, section.split('\n')[0].replace(regexSectionName, '$1'), section);
+            });
+        }).flat().filter((obj, idx) => idx < 10000);
+    }
+
+    postProcess(result: string[]): string[] {
+        // 結果をファイルごとにまとめる。
+        const codes = (this.childStepList as any as { fileName: string, sectionName: string, sectionCode: string }[]).reduce((prev, curr, index) => {
+            // ファイル名をキーにしたマップを作る
+            if (curr.fileName in prev) { } else { prev[curr.fileName] = []; }
+            // indexで結果と紐づける。
+            prev[curr.fileName].push(Utils.mdFirstCode(result[index]));
+            return prev;
+        }, {} as { [key: string]: string[] });
+
+        // 書き出し
+        Object.entries(codes).forEach(([fileName, sectionList]) => {
+            fss.writeFileSync(`./results/${this.agentName}/${PROJECT_NAME}/${fileName}.py`, sectionList.join('\n\n'));
+        });
+
+        return result;
+    }
+}
+
+
+/**
+ * 必ず main() という関数を定義する。
+ * promiseチェーンで順次実行させる。
+ * 
+ * 1. newでオブジェクトを作る。
+ * 2. initPromptでプロンプトをファイルに出力。
+ * 3. run()で実行
+ * 
+ * 途中まで行ってたらコメントアウトして再ランする。
+ * 例えば、promptを手修正したかったらinitPromptだけコメントアウトすれば手修正したファイルがそのまま飛ぶ。
+ */
+export async function main() {
+    let obj;
+    return Promise.resolve().then(() => {
+    }).then(() => {
+        obj = new Step0010_SimpleConvert();
+        obj.initPrompt();
+        return obj.run();
+        // obj.postProcess(obj.childStepList.map(chil => chil.result));
+    }).then(() => {
+    }).then(() => {
+
+    });
+}
+
+
+/**
+ * このファイルが直接実行された場合のコード。
+ */
+if (fileURLToPath(import.meta.url) === process.argv[1]) {
+    main();
+} else {
+    // main実行じゃなかったら何もしない
+}
+
