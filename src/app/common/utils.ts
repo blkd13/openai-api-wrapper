@@ -276,6 +276,69 @@ export class Utils {
             }).join('\n');
         }
     }
+
+
+    /**
+     * Markdown がコードブロックを含むかどうかにかかわらず、
+     * 最初のコードと思われれるものを返す。
+     * @param str0 
+     * @returns 
+     */
+    static mdFirstCode(str0: string): string {
+        const codeBlocks = Utils.mdCodeBlockSpilt(str0);
+        if (codeBlocks.length > 1) {
+            // コードブロックがある場合は最初のコードブロックを返す
+            return codeBlocks.find(obj => obj.brackets.length > 0)?.body || '';
+        } else if (codeBlocks.length === 0) {
+            console.log(str0);
+            return str0;
+        } else {
+            // コードブロック分割されていない場合はそのまま返す
+            // console.log(JSON.stringify(codeBlocks));
+            return codeBlocks[0].body;
+        }
+    }
+
+    /**
+     * Markdownのコードブロックを```を外した配列にする
+     * @param {*} str 
+     * @returns 
+     */
+    static mdCodeBlockSpilt(str0: string): { brackets: string[], body: string }[] {
+        const lines = str0.split('\n');
+        const res = [];
+        let block: { brackets: string[], body: string[] } = { brackets: [], body: [] };
+        for (let idx = 0; idx < lines.length; idx++) {
+            if (lines[idx].trim().startsWith('```')) {
+                if (block.brackets.length === 0) {
+                    // コードブロックの開始
+                    // これまでのものをストックに入れて、コードブロックの中用の新しいオブジェクトを作る。
+                    res.push(block);
+                    block = { brackets: [], body: [] };
+                    block.brackets.push(lines[idx]);
+                } else {
+                    // コードブロックの終了
+                    // これまでのものをストックに入れて、コードブロックの外用の新しいオブジェクトを作る。
+                    block.brackets.push(lines[idx]);
+                    res.push(block);
+                    block = { brackets: [], body: [] };
+                }
+            } else if (block.brackets.length > 0) {
+                // コードブロックの中
+                block.body.push(lines[idx]);
+            } else {
+                // コードブロックの外
+                block.body.push(lines[idx]);
+            }
+        }
+        if (block.body.length > 0 || block.brackets.length > 0) {
+            res.push(block);
+        } else { }
+        return res
+            .filter(obj => obj.body.length > 0 || obj.brackets.length > 0) // 中身が全くないものは除外する。
+            .map(obj => ({ brackets: obj.brackets, body: obj.body.join('\n') }));
+    }
+
     // /**
     //  * Markdownのコードブロックを```を外したものにする。
     //  * @param {string} text - Markdown形式のテキスト

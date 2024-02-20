@@ -144,12 +144,21 @@ export abstract class BaseStep extends BaseStepInterface<string> {
      * メイン処理。
      * initPromptで作ったものを手で修正して使うこともあるので、
      * 敢えてファイルからプロンプトを読み込ませるようにしてある。
+     * @param {boolean} [isForce=false] resultファイルがあっても再実行する場合はtrueにする。refineIndexの機能には対応していないので注意。
      * @param {number} [refineIndex=0] セルフリファインの二周目以降から開始する場合はここで指定する。
      * @returns 
      */
-    async run(refineIndex: number = 0): Promise<string> {
-        // スキップ指定されていたら空文字を返す。
-        if (this.isSkip) { return Promise.resolve(''); }
+    async run(isForce: boolean = false, refineIndex: number = 0): Promise<string> {
+        // TODO refineIndexが指定されているときの!isForceの挙動が怪しい。
+        if (!isForce && fs.existsSync(this.resultPath) && fs.statSync(this.resultPath).size > 0) {
+            console.log(`${Utils.formatDate()} done ${this.label}`);
+            return Promise.resolve(this.result);
+        } else { }
+        // スキップ指定されていたら既存の処理結果、もしくは空文字を返す。
+        if (this.isSkip) {
+            console.log(`${Utils.formatDate()} skip ${this.label}`);
+            return Promise.resolve(this.result || '');
+        } else { }
         return new Promise<string>((resolveRoot, rejectRoot) => {
             fs.readFile(this.promptPath, 'utf-8', (err, prompt: string) => {
                 // messages
