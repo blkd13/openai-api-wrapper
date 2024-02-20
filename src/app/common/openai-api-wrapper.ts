@@ -28,7 +28,10 @@ export const azureDeployNameMap: Record<string, string> = {
     'gpt-3.5-turbo': 'gpt35',
     'gpt-4-vision-preview': 'gpt4',
 };
-
+export const azureDeployTpmMap: Record<string, number> = {
+    'gpt-3.5-turbo': 60000,
+    'gpt-4-vision-preview': 10000,
+};
 
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
@@ -62,7 +65,7 @@ interface Ratelimit {
 class RunBit {
     attempts: number = 0;
     constructor(
-        public logString: (stepName: string, error: any) => string,
+        public logObject: { output: (stepName: string, error: any) => string },
         public tokenCount: TokenCount,
         public args: ChatCompletionCreateParamsBase,
         public options: RequestOptions,
@@ -75,7 +78,7 @@ class RunBit {
         const options = this.options;
         const idempotencyKey = this.options.idempotencyKey as string;
         const tokenCount = this.tokenCount;
-        const logString = this.logString;
+        const logObject = this.logObject;
         let attempts = this.attempts;
         const maxAttempts = 5;
         const observer = this.observer;
@@ -88,7 +91,7 @@ class RunBit {
 
         let runPromise = null;
 
-        console.log(logString('start', ''));
+        console.log(logObject.output('start', ''));
         if (this.openApiWrapper.wrapperOptions.useAzure) {
             if (args.max_tokens) {
             } else if (args.model === 'gpt-4-vision-preview') {
@@ -98,16 +101,17 @@ class RunBit {
             // console.log('shot');
             runPromise = (azureClient.streamChatCompletions(azureDeployNameMap[args.model] || args.model, args.messages as any, { ...args as any })).then((response) => {
                 // console.log('res');
-                ratelimitObj.limitRequests = 0;
-                ratelimitObj.limitTokens = 0;
+                ratelimitObj.limitRequests = 5; // 適当に5にしておく。
+                ratelimitObj.limitTokens = azureDeployTpmMap[args.model];
                 ratelimitObj.resetRequests = new Date().toISOString();
-                ratelimitObj.remainingRequests = 1; // シングルスレッドで動かす
-                ratelimitObj.remainingTokens = 1;
+                ratelimitObj.remainingRequests = 1; // ヘッダーが取得できないときはシングルスレッドで動かす
+                ratelimitObj.remainingTokens = 100000; // トークン数は適当
 
                 if ((response as any).headers) {
                     // azureのライブラリを直接改造してないとここは取れない。
-                    (response as any).headers['x-ratelimit-remaining-requests'] && (ratelimitObj.remainingRequests = Number((response as any).headers['x-ratelimit-remaining-requests']));
-                    (response as any).headers['x-ratelimit-remaining-tokens'] && (ratelimitObj.remainingTokens = Number((response as any).headers['x-ratelimit-remaining-tokens']));
+                    'x-ratelimit-remaining-requests' in (response as any).headers && (ratelimitObj.remainingRequests = Number((response as any).headers['x-ratelimit-remaining-requests'])) || 1;
+                    'x-ratelimit-remaining-tokens' in (response as any).headers && (ratelimitObj.remainingTokens = Number((response as any).headers['x-ratelimit-remaining-tokens'])) || 1;
+                    console.log((response as any).headers);
                 } else {
                 }
 
@@ -125,7 +129,7 @@ class RunBit {
                         if (done) {
                             // ストリームが終了したらループを抜ける
                             tokenCount.cost = tokenCount.calcCost();
-                            console.log(logString('fine', ''));
+                            console.log(logObject.output('fine', ''));
                             observer.complete();
 
                             // ファイルに書き出す
@@ -188,7 +192,7 @@ class RunBit {
                             if (done) {
                                 // ストリームが終了したらループを抜ける
                                 tokenCount.cost = tokenCount.calcCost();
-                                console.log(logString('fine', ''));
+                                console.log(logObject.output('fine', ''));
                                 observer.complete();
 
                                 // ファイルに書き出す
@@ -224,27 +228,31 @@ class RunBit {
             attempts++;
 
             // エラーを出力
-            console.log(logString('error', error));
+            console.log(logObject.output('error', JSON.stringify(error, Utils.genJsonSafer())));
 
             // 400エラーの場合は、リトライしない
             if (error.toString().startsWith('Error: 400')) {
                 observer.error(error);
+                this.openApiWrapper.fire(); // キューに着火
                 throw error;
             } else { }
 
             // 最大試行回数に達したかチェック
             if (attempts >= maxAttempts) {
                 // throw new Error(`API call failed after ${maxAttempts} attempts: ${error}`);
-                console.log(logString('error', 'retry over'));
+                console.log(logObject.output('error', 'retry over'));
                 observer.error('retry over');
+                this.openApiWrapper.fire(); // キューに着火
                 throw error;
             } else { }
 
             // レートリミットに引っかかった場合は、レートリミットに書かれている時間分待機する。
-            if (error.toString().startsWith('Error: 429')) {
-                const waitMs = Number(ratelimitObj.resetRequests.replace('ms', ''));
-                const waitS = Number(ratelimitObj.resetTokens.replace('s', ''));
-                console.log(logString('wait', `wait ${waitMs}ms ${waitS}s`));
+            if (error.toString().startsWith('Error: 429') || JSON.stringify(error, Utils.genJsonSafer()).includes('"429"')) {
+                let waitMs = Number(String(ratelimitObj.resetRequests).replace('ms', '')) || 0;
+                let waitS = Number(String(ratelimitObj.resetTokens).replace('s', '')) || 0;
+                // 待ち時間が設定されていなかったらとりあえずRPM/TPMを回復させるために60秒待つ。
+                waitMs = waitMs === 0 ? ((waitS || 60) * 1000) : waitMs;
+                console.log(logObject.output('wait', `wait ${waitMs}ms ${waitS}s`));
                 setTimeout(() => { this.executeCall(); }, waitMs);
             } else { }
         });
@@ -271,6 +279,7 @@ export class OpenAIApiWrapper {
         'gpt4-128': [],
         'gpt4-vis': [],
     };
+    timeoutMap: { [key: string]: NodeJS.Timeout | null } = {};
 
     // レートリミット情報
     currentRatelimit: { [key: string]: Ratelimit } = {
@@ -416,24 +425,28 @@ export class OpenAIApiWrapper {
             tokenCount.prompt_tokens += imagePrompt;
             this.tokenCountList.push(tokenCount);
 
-            let bef = Date.now();
-            const logString = (stepName: string, error: any = ''): string => {
-                const take = numForm(Date.now() - bef, 9);
-                const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
-                // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
-                // tokenCount.completion_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
-                tokenCount.completion_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
-                const completion_tokens = numForm(tokenCount.completion_tokens, 6);
+            class LogObject {
+                constructor(public baseTime: number) { }
+                output(stepName: string, error: any = ''): string {
+                    const take = numForm(Date.now() - this.baseTime, 9);
+                    this.baseTime = Date.now(); // baseTimeを更新しておく。
+                    const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
+                    // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
+                    // tokenCount.completion_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                    tokenCount.completion_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                    const completion_tokens = numForm(tokenCount.completion_tokens, 6);
 
-                const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
-                const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} ${attempts} ${take} ${prompt_tokens} ${completion_tokens} ${tokenCount.modelShort} ${costStr} ${label} ${error}`;
-                fss.appendFile(`history.log`, `${logString}\n`, {}, () => { });
-                return logString;
-            };
+                    const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
+                    const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} ${attempts} ${take} ${prompt_tokens} ${completion_tokens} ${tokenCount.modelShort} ${costStr} ${label} ${error}`;
+                    fss.appendFile(`history.log`, `${logString}\n`, {}, () => { });
+                    return logString;
+                }
+            }
+            const logObject = new LogObject(Date.now());
+            console.log(logObject.output('enque'));
+            // console.log(logString('enque'));
 
-            console.log(logString('enque'));
-
-            const runBit = new RunBit(logString, tokenCount, args, { ...reqOptions, ...this.options }, this, observer);
+            const runBit = new RunBit(logObject, tokenCount, args, { ...reqOptions, ...this.options }, this, observer);
             // 未知モデル名の場合は空queueを追加しておく
             if (!this.queue[tokenCount.modelShort]) this.queue[tokenCount.modelShort] = [];
             this.queue[tokenCount.modelShort].push(runBit);
@@ -441,17 +454,43 @@ export class OpenAIApiWrapper {
         });
     }
 
-    async fire(): Promise<void> {
+
+    fire(): void {
         const queue = this.queue;
         for (const key of Object.keys(queue)) {
             // 未知モデル名の場合は空Objectを追加しておく
             if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { limitRequests: 0, limitTokens: 0, remainingRequests: 0, remainingTokens: 0, resetRequests: '', resetTokens: '' };
             const ratelimitObj = this.currentRatelimit[key];
             for (let i = 0; i < Math.min(queue[key].length, ratelimitObj.remainingRequests); i++) {
+                if (queue[key][i].tokenCount.prompt_tokens > ratelimitObj.remainingTokens) { break; }
                 const runBit = queue[key].shift();
                 if (!runBit) { break; }
-                await runBit.executeCall();
+                runBit.executeCall();
                 ratelimitObj.remainingRequests--;
+                ratelimitObj.remainingTokens -= runBit.tokenCount.prompt_tokens;
+            }
+            // キューの残りがあるかチェック。
+            if (queue[key].length > 0) {
+                // キューが捌けてない場合。
+                if (this.timeoutMap[key] == null) {
+                    // 待ちスレッドを立てる。
+                    // TODO 待ち時間の計算がなんか変。。。
+                    let waitMs = Number(String(ratelimitObj.resetRequests).replace('ms', '')) || 0;
+                    let waitS = Number(String(ratelimitObj.resetTokens).replace('s', '')) || 0;
+                    // 待ち時間が設定されていなかったらとりあえずRPM/TPMを回復させるために60秒待つ。
+                    waitMs = waitMs === 0 ? ((waitS || 60) * 1000) : waitMs;
+                    this.timeoutMap[key] = setTimeout(() => {
+                        ratelimitObj.remainingRequests = ratelimitObj.limitRequests;
+                        ratelimitObj.remainingTokens = ratelimitObj.limitTokens;
+                        this.timeoutMap[key] = null; // 監視スレッドをクリアしておかないと、次回以降のキュー追加時に監視スレッドが立たなくなる。
+                        this.fire(); // 待ち時間が経過したので再点火する。
+                    }, waitMs);
+                } else {
+                    // 既に待ちスレッドが立っている場合は何もしない。
+                }
+            } else {
+                /** キューが捌けたので待ちスレッドをクリアする */
+                this.timeoutMap[key] = null;
             }
         }
     }
