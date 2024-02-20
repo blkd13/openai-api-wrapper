@@ -117,14 +117,48 @@ npm run generate <agentName>
 
 ## Azure を使う場合
 
+以下の 4 手順を行う。
+
+- Azure 用の環境変数を設定する
+- Azure のライブラリを改造
+- デプロイ名を設定する
+- useAzure フラグを立てる
+
+### Azure 用の環境変数を設定する
+
 ```bash
 # Azure OpenAI のエンドポイント
 export AZURE_OPENAI_ENDPOINT="${YOUR_AZURE_OPENAI_ENDPOINT}"
 
 # Azure OpenAI のAPI鍵
 export AZURE_OPENAI_API_KEY="${YOUR_AZURE_OPENAI_API_KEY}"
+```
 
+### Azure のライブラリを改造
+
+```bash
 # Microsoft のazureライブラリを上書きする。※httpヘッダーが取れない問題に対応するため。
 cd node_modules_overwrite
 ./overwrite.sh
+```
+
+### デプロイ名を設定する
+
+モデルごとのデプロイ名は openai-api-wrapper.ts の azureDeployNameMap で設定する。
+
+```typescript ./src/app/common/openai-api-wrapper.ts
+export const azureDeployNameMap: Record<string, string> = {
+  "gpt-3.5-turbo": "gpt35",
+  "gpt-4-vision-preview": "gpt4",
+};
+```
+
+### useAzure フラグを立てる
+
+runner 等のプログラムの頭で aiApi の useAzure フラグを true にする。
+場合によっては base-step にハードコーディングしてもよい。
+
+```typescript
+// Azure に向ける
+aiApi.wrapperOptions.useAzure = true;
 ```
