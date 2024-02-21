@@ -4,9 +4,9 @@ import { BaseStep, MultiStep, PromptLang, StepOutputFormat, aiApi } from "../../
 import { GPTModels } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
 import fss from '../../common/fss.js';
-import path from 'path';
+import path, { parse } from 'path';
 import { SAMPLE_INSERT_COBOL, SAMPLE_INSERT_PYTHON } from './sample_code.js';
-import { getSubroutineList } from './parse-cobol.js';
+import { GroupClause, getSubroutineList, getWorkingStorageSection, lineToObjet, parseWorkingStorageSection } from './parse-cobol.js';
 
 // Azureに向ける
 aiApi.wrapperOptions.useAzure = true;
@@ -50,10 +50,11 @@ class Step0010_SimpleConvert extends MultiStepCobol2Python {
          */
         class Step0010_SimpleConvertChil extends BaseStepCobol2Python {
             // 共通定義を上書きする場合はここで定義する。
-            constructor(public fileName: string, public innerIndex: number, public sectionName: string, public sectionCode: string) {
+            constructor(public targetFilePath: string, public innerIndex: number, public sectionName: string, public sectionCode: string) {
                 super();
+                const baseName = path.basename(targetFilePath);
                 // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
-                this.label = `${this.constructor.name}_${Utils.safeFileName(fileName)}-${innerIndex}-${sectionName.replaceAll('-', '_')}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                this.label = `${this.constructor.name}_${Utils.safeFileName(baseName)}-${innerIndex}-${sectionName.replaceAll('-', '_')}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
                 // 個別の指示を作成。
                 this.chapters = [
                     {
@@ -93,41 +94,53 @@ class Step0010_SimpleConvert extends MultiStepCobol2Python {
                 ];
             }
         }
-        // this.filePathList = fss.getFilesRecursively('E:/workspace/NDP/git/interface-mgt-cc/src/main/java/jp/co/nomura/onlineservice/cc/interfacemgt/star/ext/usecase/').filter(filename => filename.endsWith('Usecase.java'));
+
         this.filePathList = fss.getFilesRecursively('E:/workspace/STAR/wja-poc/COBOL').filter(filePath => filePath.endsWith('.pco') || filePath.endsWith('.cob'));
-        const cpyMap = fss.getFilesRecursively('E:/workspace/STAR/wja-poc/COBOL')
-            .filter(filePath => filePath.endsWith('.cpy'))
-            .reduce((prev, curr) => {
-                prev[path.basename(curr).replace(/\..+$/, '')] = fs.readFileSync(curr, 'utf-8');
-                // prev[path.basename(curr)] = prev[path.basename(curr)];
-                return prev;
-            }, {} as { [key: string]: string });
-        // console.log(cpyMap);
 
         // childStepListを組み立て。
         this.childStepList = this.filePathList.map(targetFilePath => {
-            const baseName = path.basename(targetFilePath)
             const cobolText = fs.readFileSync(targetFilePath, 'utf-8');
             // サブルーチン毎に分割する
             return getSubroutineList(cobolText).map((section, innerIndex) => {
-                return new Step0010_SimpleConvertChil(baseName, innerIndex, section.name, section.code);
+                return new Step0010_SimpleConvertChil(targetFilePath, innerIndex, section.name, section.code);
             });
         }).flat().filter((obj, idx) => idx < 10000);
     }
 
     postProcess(result: string[]): string[] {
-        // 結果をファイルごとにまとめる。
-        const codes = (this.childStepList as any as { fileName: string, sectionName: string, sectionCode: string }[]).reduce((prev, curr, index) => {
+        // 変換結果をファイルごとにまとめる。
+        const codes = (this.childStepList as any as { targetFilePath: string, sectionName: string, sectionCode: string }[]).reduce((prev, curr, index) => {
             // ファイル名をキーにしたマップを作る
-            if (curr.fileName in prev) { } else { prev[curr.fileName] = []; }
+            if (curr.targetFilePath in prev) { } else { prev[curr.targetFilePath] = []; }
             // indexで結果と紐づける。
-            prev[curr.fileName].push(Utils.mdFirstCode(result[index]));
+            prev[curr.targetFilePath].push(Utils.mdFirstCode(result[index]));
             return prev;
         }, {} as { [key: string]: string[] });
 
+        // COPY句をロードして、「ファイルID：Dtoオブジェクト」の連想配列にする。
+        const cpyMap = fss.getFilesRecursively('E:/workspace/STAR/wja-poc/COBOL')
+            .filter(filePath => filePath.endsWith('.cpy'))
+            .reduce((prev, curr) => {
+                const copyObj = parseWorkingStorageSection(fs.readFileSync(curr, 'utf-8'), {}, true);
+                prev[path.basename(curr).replace(/\..+$/, '')] = copyObj;
+                // prev[path.basename(curr)] = prev[path.basename(curr)];
+                return prev;
+            }, {} as { [key: string]: GroupClause });
+
+        // console.log(JSON.stringify(cpyMap['WJALDTE0'], null, 2));
+
         // 書き出し
-        Object.entries(codes).forEach(([fileName, sectionList]) => {
-            fss.writeFileSync(`./results/${this.agentName}/${PROJECT_NAME}/${fileName}.py`, sectionList.join('\n\n'));
+        Object.entries(codes).forEach(([targetFilePath, sectionList]) => {
+            const fileName = path.basename(targetFilePath).split('.')[0];
+            const cobolText = fs.readFileSync(targetFilePath, 'utf-8');
+            const dtoObject = parseWorkingStorageSection(cobolText, cpyMap);
+            dtoObject.name = Utils.toPascalCase(fileName);
+            // console.dir(dtoObject, { depth: 10 });
+            const dtoArea = dtoObject.toPython().replaceAll('\t', '    ');
+            // console.log(dtoArea);
+            // console.log(Object.keys(cpyMap));
+
+            fss.writeFileSync(`./results/${this.agentName}/${PROJECT_NAME}/${fileName}.py`, dtoArea + '\n\n' + sectionList.join('\n\n'));
         });
 
         return result;
