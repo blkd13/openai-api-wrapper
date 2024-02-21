@@ -6,6 +6,7 @@ import { Utils } from '../../common/utils.js';
 import fss from '../../common/fss.js';
 import path from 'path';
 import { SAMPLE_INSERT_COBOL, SAMPLE_INSERT_PYTHON } from './sample_code.js';
+import { getSubroutineList } from './parse-cobol.js';
 
 // Azureに向ける
 aiApi.wrapperOptions.useAzure = true;
@@ -94,69 +95,22 @@ class Step0010_SimpleConvert extends MultiStepCobol2Python {
         }
         // this.filePathList = fss.getFilesRecursively('E:/workspace/NDP/git/interface-mgt-cc/src/main/java/jp/co/nomura/onlineservice/cc/interfacemgt/star/ext/usecase/').filter(filename => filename.endsWith('Usecase.java'));
         this.filePathList = fss.getFilesRecursively('E:/workspace/STAR/wja-poc/COBOL').filter(filePath => filePath.endsWith('.pco') || filePath.endsWith('.cob'));
-
-        // ルーチン名が可変であることを考慮した正規表現
-        const regexSection = /...... ([\w-]+)-RTN\s+SECTION\.[\s\S]*?\1-EXT\./g;
-        const regexSectionName = /^...... ([\w-]+)-RTN\s+SECTION.*$/g;
+        const cpyMap = fss.getFilesRecursively('E:/workspace/STAR/wja-poc/COBOL')
+            .filter(filePath => filePath.endsWith('.cpy'))
+            .reduce((prev, curr) => {
+                prev[path.basename(curr).replace(/\..+$/, '')] = fs.readFileSync(curr, 'utf-8');
+                // prev[path.basename(curr)] = prev[path.basename(curr)];
+                return prev;
+            }, {} as { [key: string]: string });
+        // console.log(cpyMap);
 
         // childStepListを組み立て。
         this.childStepList = this.filePathList.map(targetFilePath => {
-
-            const cobolText = fs.readFileSync(targetFilePath, 'utf-8');
-
-            // WORKING-STORAGE SECTION.
-            const cobolLines = cobolText.split('\n');
-            let isWorkingStorage = false;
-            let layer = 0;
-            let line = '';
-            const dtoLines = [];
-            for (let idx = 0; idx < cobolLines.length; idx++) {
-                if (cobolLines[idx][6] === ' ') {
-                    // 実コード
-                } else {
-                    // コメント
-                    continue;
-                }
-
-                // 7byte目以降
-                cobolLines[idx] = cobolLines[idx].substring(7).replaceAll(/\s*$/g, '');
-
-                if (cobolLines[idx].trim().match(/^WORKING-STORAGE\s+SECTION\./)) {
-                    isWorkingStorage = true;
-                    continue;
-                } else { }
-
-                // console.log(cobolLines[idx]);
-                if (cobolLines[idx].startsWith('LINKAGE ') || cobolLines[idx].startsWith('PROCEDURE ')) {
-                    break;
-                } else { }
-
-                if (isWorkingStorage) {
-                    if (line.length === 0) {
-                        line = cobolLines[idx];
-                    } else {
-                        line += ' ' + cobolLines[idx].trim();
-                    }
-                    if (cobolLines[idx].trim().endsWith('.')) {
-                        dtoLines.push(line);
-                        line = '';
-                    } else {
-                        // 中間コード
-                    }
-                } else { }
-            }
-            // console.log(dtoLines);
-
-            // サブルーチン毎に分割する
-            let match;
-            const sectionList = [];
-            while ((match = regexSection.exec(cobolText)) !== null) {
-                // console.log(match[0]); // マッチした各ルーチンのテキスト
-                sectionList.push(match[0]);
-            }
             const baseName = path.basename(targetFilePath)
-            return sectionList.map((section, innerIndex) => {
-                return new Step0010_SimpleConvertChil(baseName, innerIndex, section.split('\n')[0].replace(regexSectionName, '$1'), section);
+            const cobolText = fs.readFileSync(targetFilePath, 'utf-8');
+            // サブルーチン毎に分割する
+            return getSubroutineList(cobolText).map((section, innerIndex) => {
+                return new Step0010_SimpleConvertChil(baseName, innerIndex, section.name, section.code);
             });
         }).flat().filter((obj, idx) => idx < 10000);
     }
