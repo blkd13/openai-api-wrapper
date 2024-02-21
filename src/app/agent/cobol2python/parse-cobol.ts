@@ -41,9 +41,11 @@ export class GroupClause extends VarClause {
     constructor(public layer: number, public name: string, public occurs: number = 1) { super('group', layer, name); }
     // getLength(): number { return this.children.reduce((prev, curr) => prev + curr.getLength(), 0); };
     toPython(depth: number = 0): string {
+        // const indent = '\t'.repeat(depth);
+        const indent = '';
         return Utils.trimLines(`
-            ${'\t'.repeat(depth)}class ${Utils.toPascalCase(this.name)}:
-            ${'\t'.repeat(depth)}    def __init__(self):
+            ${indent}class ${Utils.toPascalCase(this.name)}:
+            ${indent}    def __init__(self):
             ${this.children.filter(child => ['pic', 'copy'].includes(child.type)).map(child => child.toPython(depth + 2)).join('\n') || ('\t'.repeat(depth + 2) + 'pass')}
 
             ${this.children.filter(child => ['group'].includes(child.type)).map(child => child.toPython(depth + 1)).join('\n\n')}
@@ -54,14 +56,18 @@ export class CopyClause extends VarClause {
     constructor(public layer: number, public name: string) { super('copy', layer, name); }
     // getLength(): number {        return 0;    }
     toPython(depth: number = 0): string {
-        return Utils.trimLines(`COPY${'\t'.repeat(depth)}${this.name}`);
+        const indent = '\t'.repeat(depth);
+        return Utils.trimLines(`COPY${indent}${this.name}`);
     }
 }
 export class PicClause extends VarClause {
+    public display: string | null = null;
     constructor(public layer: number, public name: string, public lenString: string, public value: string | null) { super('pic', layer, name); }
     // getLength(): number { return extractBytesFromPic(this.lenString); }
     toPython(depth: number = 0): string {
-        return Utils.trimLines(`${'\t'.repeat(depth)}${Utils.toSnakeCase(this.name)} = ${toValueString(this.value)}`);
+        // const indent = '\t'.repeat(depth);
+        const indent = '\t'.repeat(2);
+        return Utils.trimLines(`${indent}self.${Utils.toSnakeCase(this.name)} = ${toValueString(this.value)}`);
     }
 }
 function toValueString(value: string | null) {
@@ -72,7 +78,14 @@ function toValueString(value: string | null) {
         'ZERO': 0,
         'SPACE': '',
     };
-    return value in a ? a[value] : value;
+    if (value in a) {
+        return a[value];
+    } else if (value.startsWith("'")) {
+        return value;
+    } else if (value.match(/[-0-9]/g)) {
+        return value;
+    }
+    return value;
 }
 
 
@@ -192,11 +205,22 @@ export function lineToObjet(dtoLines: string[], copyMas: { [key: string]: GroupC
                     cur = new GroupClause(curLayer, words[1], Number(words[3]));
                 } else if (words[2] === 'PIC') {
                     // PIC項目行
+                    let valueIndex = 0;
                     if (['COMP', 'COMP-5'].includes(words[4])) {
-                        cur = new PicClause(curLayer, words[1], words[3] + words[4], words[6] || null);
+                        cur = new PicClause(curLayer, words[1], words[3] + words[4], null);
+                        valueIndex = 5;
                     } else {
-                        cur = new PicClause(curLayer, words[1], words[3], words[5] || null);
+                        cur = new PicClause(curLayer, words[1], words[3], null);
+                        valueIndex = 4;
                     }
+                    // console.log(words);
+                    if (words[valueIndex] === 'VALUE') {
+                        (cur as PicClause).value = words.slice(valueIndex + 1).join(' ');
+                    } else if (words[valueIndex] === 'DISPLAY') {
+                        (cur as PicClause).display = words.slice(valueIndex + 1).join(' ');
+                    } else { }
+                    // words.slice(5).join(' ') ||
+                    // words.slice(6).join(' ') || null
                     // console.log(words, words[5]);
                 } else if (words[2] === 'COMP-2') {
                     // 何故PICにしていないのかは不明だが、PICとして扱う
