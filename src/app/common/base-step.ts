@@ -33,7 +33,7 @@ function toMarkdown(chapter: StructuredPrompt, lang: PromptLang, layer: number =
     let title;
     title = (lang === 'ja' ? chapter.titleJa : chapter.titleEn) || chapter.title || '';
     if (title) {
-        sb += `${'#'.repeat(layer)} ${chapter.title}\n\n`;
+        sb += `${'#'.repeat(layer)} ${title}\n\n`;
     } else { }
     let content;
     content = (lang === 'ja' ? chapter.contentJa : chapter.contentEn) || chapter.content || '';

@@ -277,7 +277,6 @@ export class Utils {
         }
     }
 
-
     /**
      * Markdown がコードブロックを含むかどうかにかかわらず、
      * 最初のコードと思われれるものを返す。
@@ -337,6 +336,84 @@ export class Utils {
         return res
             .filter(obj => obj.body.length > 0 || obj.brackets.length > 0) // 中身が全くないものは除外する。
             .map(obj => ({ brackets: obj.brackets, body: obj.body.join('\n') }));
+    }
+
+
+    /**
+     * 文字列リテラルやコメントブロックと、通常のコード部分を選り分けたうえで、
+     * 通常のコード部分をスペースなどで分割する。
+     */
+    static escapedTokenize(str0: string, escapeSet: string[][] = [['"', '"'], ["'", "'"], ['//', '\n'], ['/*', '*/']], splitter: RegExp = / +/g): string[] {
+        const ret: string[] = [];
+        Utils.escapeBlockSpilt(str0, escapeSet).forEach(block => {
+            if (block.brackets.length > 0) {
+                // 括弧付きの場合は括弧を結合する。
+                ret.push([block.brackets[0], block.body, block.brackets[1] || ''].join(''));
+            } else {
+                // 通常コードの場合はスプリッター展開
+                ret.push(...block.body.split(splitter));
+            }
+        });
+        return ret;
+    }
+
+    /**
+     * 文字列リテラルやコメントブロックと、通常のコード部分を選り分ける。
+     * @param {*} str 
+     * @param {*} escapeSet
+     * @returns 
+     */
+    static escapeBlockSpilt(str0: string, escapeSet: string[][] = [['"', '"'], ["'", "'"], ['//', '\n'], ['/*', '*/']]): { brackets: string[], body: string }[] {
+        const n = str0.length;
+        let escapeType = -1;
+        let currBlockStartIndex = 0;
+        let res = [];
+        // console.log(str0);
+        for (let idx = 0; idx < n; idx++) {
+            // バックスラッシュがあったら問答無用で1文字飛ばす
+            // console.log(str0[idx]);
+            if (str0[idx] === '\\') { idx++; continue; } else { }
+
+            if (escapeType === -1) {
+                // エスケープ外。エスケープ開始文字と一致するかをチェックする。
+                for (let iEscape = 0; iEscape < escapeSet.length; iEscape++) {
+                    const escapeStartChar = escapeSet[iEscape][0];
+                    // console.log(idx + '[s]:' + escapeStartChar + ':' + str0.substring(idx, idx + escapeStartChar.length))
+                    if (escapeStartChar === str0.substring(idx, idx + escapeStartChar.length)) {
+                        // 通常コード部分をブロックとして保存する
+                        res.push({ brackets: [], body: str0.substring(currBlockStartIndex, idx) });
+
+                        // エスケープ終了文字分だけカーソルを動かす
+                        currBlockStartIndex = idx + escapeStartChar.length;
+                        idx = currBlockStartIndex - 1; // idxはforループで1インクリメントされるので-1しておく
+                        escapeType = iEscape;
+                        break;
+                    } else { }
+                }
+            } else {
+                const escapeEndChar = escapeSet[escapeType][1];
+                // console.log(idx + '[e]:' + escapeEndChar + ':' + str0.substring(idx, idx + escapeEndChar.length))
+                // エスケープ中。エスケープ終了文字と一致するかをチェックする。
+                if (escapeEndChar === str0.substring(idx, idx + escapeEndChar.length)) {
+                    // エスケープ（文字列リテラル、コメント）コード部分をブロックとして保存する
+                    res.push({ brackets: escapeSet[escapeType], body: str0.substring(currBlockStartIndex, idx) });
+
+                    // エスケープ終了文字分だけカーソルを動かす
+                    currBlockStartIndex = idx + escapeEndChar.length;
+                    idx = currBlockStartIndex - 1; // idxはforループで1インクリメントされるので-1しておく
+                    escapeType = -1;
+                } else { }
+            }
+        }
+        if (currBlockStartIndex < str0.length) {
+            if (escapeType === -1) {
+                res.push({ brackets: [], body: str0.substring(currBlockStartIndex, str0.length) });
+            } else {
+                // エスケープ開始文字が閉じられていないのでbracketsは片側だけ
+                res.push({ brackets: [escapeSet[escapeType][0]], body: str0.substring(currBlockStartIndex, str0.length) });
+            }
+        } else { }
+        return res;
     }
 
     // /**
@@ -838,3 +915,10 @@ export class Utils {
 // console.log('pascl=' + Utils.toPascalCase('kebab-caseCase'));
 // console.log('pascl=' + Utils.toPascalCase('PascalCaseCase'));
 // console.log('');
+
+
+// console.log(Utils.escapeBlockSpilt(`
+// asdiof aosdijfa;l  'askdf' ;lkajdfa "asd;lkf"
+// asdfpijklaaaba:s;ld:asbacd:jasdfaaabac
+// as;hthsa'dnasdl;kaklie"ii929\\'1083029'1l;a;lkj
+// `));
