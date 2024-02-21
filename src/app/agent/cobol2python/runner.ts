@@ -127,8 +127,6 @@ class Step0010_SimpleConvert extends MultiStepCobol2Python {
                 return prev;
             }, {} as { [key: string]: GroupClause });
 
-        // console.log(JSON.stringify(cpyMap['WJALDTE0'], null, 2));
-
         // 書き出し
         Object.entries(codes).forEach(([targetFilePath, sectionList]) => {
             const fileName = path.basename(targetFilePath).split('.')[0];
@@ -136,7 +134,20 @@ class Step0010_SimpleConvert extends MultiStepCobol2Python {
             const dtoObject = parseWorkingStorageSection(cobolText, cpyMap);
             dtoObject.name = Utils.toPascalCase(fileName);
             // console.dir(dtoObject, { depth: 10 });
-            const dtoArea = dtoObject.toPython().replaceAll('\t', '    ');
+            // const dtoArea = dtoObject.toPythonInit().replaceAll('\t', '    ');
+            const classList = Array.from(dtoObject.getClassRecursive());
+            // console.log(classList.map(cls => cls.name).sort());
+            const duplicates = classList.map(cls => Utils.toPascalCase(cls.name)).sort().reduce((acc, el, _, arr) => {
+                if (arr.indexOf(el) !== arr.lastIndexOf(el) && !acc.includes(el)) {
+                    acc.push(el);
+                } else { }
+                return acc;
+            }, [] as string[]);
+
+            // TODO クラス名が重複するものは後で個別の手当てが必要。
+            console.log('[Duplicate]', fileName, JSON.stringify(duplicates));
+
+            const dtoArea = classList.map(obj => (duplicates.includes(obj.name) ? '# Duplicate\n' : '') + obj.toPythonInit().replaceAll('\t', '    ')).join('\n\n');
             // console.log(dtoArea);
             // console.log(Object.keys(cpyMap));
 

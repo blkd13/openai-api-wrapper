@@ -42,14 +42,23 @@ export class GroupClause extends VarClause {
     // getLength(): number { return this.children.reduce((prev, curr) => prev + curr.getLength(), 0); };
     toPython(depth: number = 0): string {
         // const indent = '\t'.repeat(depth);
+        const indent = '\t'.repeat(2);
+        return Utils.trimLines(`${indent}self.${Utils.toSnakeCase(this.name)} = ${Utils.toPascalCase(this.name)}()`);
+    }
+
+    toPythonInit(depth: number = 0): string {
+        // const indent = '\t'.repeat(depth);
         const indent = '';
         return Utils.trimLines(`
             ${indent}class ${Utils.toPascalCase(this.name)}:
             ${indent}    def __init__(self):
-            ${this.children.filter(child => ['pic', 'copy'].includes(child.type)).map(child => child.toPython(depth + 2)).join('\n') || ('\t'.repeat(depth + 2) + 'pass')}
-
-            ${this.children.filter(child => ['group'].includes(child.type)).map(child => child.toPython(depth + 1)).join('\n\n')}
+            ${this.children.filter(child => ['pic', 'copy', 'group'].includes(child.type)).map(child => child.toPython(depth + 2)).join('\n') || ('\t'.repeat(depth + 2) + 'pass')}
         `);
+    }
+    getClassRecursive(m: Set<GroupClause> = new Set<GroupClause>()): Set<GroupClause> {
+        m.add(this);
+        this.children.filter(obj => obj.type === 'group').flatMap(child => (child as GroupClause).getClassRecursive(m));
+        return m;
     }
 }
 export class CopyClause extends VarClause {
