@@ -54,7 +54,7 @@ class Step0010_SimpleConvert extends MultiStepCobol2Python {
                 super();
                 const baseName = path.basename(targetFilePath);
                 // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
-                this.label = `${this.constructor.name}_${Utils.safeFileName(baseName)}-${innerIndex}-${sectionName.replaceAll('-', '_')}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                this.label = `${this.constructor.name}_${Utils.safeFileName(baseName)}-${innerIndex}-${Utils.safeFileName(sectionName.replaceAll('-', '_'))}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
                 // 個別の指示を作成。
                 this.chapters = [
                     {
@@ -132,15 +132,14 @@ class Step0010_SimpleConvert extends MultiStepCobol2Python {
             const fileName = path.basename(targetFilePath).split('.')[0];
             const cobolText = fs.readFileSync(targetFilePath, 'utf-8');
             const dtoObject = parseWorkingStorageSection(cobolText, cpyMap);
-            dtoObject.name = Utils.toPascalCase(fileName);
             // console.dir(dtoObject, { depth: 10 });
             // const dtoArea = dtoObject.toPythonInit().replaceAll('\t', '    ');
-            const classList = Array.from(dtoObject.getClassRecursive());
+            // レイヤー数が多きもの＝深い階層のものなので先に定義する
+            const classList = Array.from(dtoObject.getClassRecursive()).filter(obj => obj.name !== 'root').sort((a, b) => b.layer - a.layer);
+            // dtoObject.name = Utils.toPascalCase(fileName);
             // console.log(classList.map(cls => cls.name).sort());
-            const duplicates = classList.map(cls => Utils.toPascalCase(cls.name)).sort().reduce((acc, el, _, arr) => {
-                if (arr.indexOf(el) !== arr.lastIndexOf(el) && !acc.includes(el)) {
-                    acc.push(el);
-                } else { }
+            const duplicates = classList.map(cls => cls.name).sort().reduce((acc, el, _, arr) => {
+                if (arr.indexOf(el) !== arr.lastIndexOf(el) && !acc.includes(el)) { acc.push(el); } else { }
                 return acc;
             }, [] as string[]);
 

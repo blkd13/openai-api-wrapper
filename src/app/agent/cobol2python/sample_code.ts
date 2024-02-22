@@ -224,11 +224,9 @@ export const SAMPLE_INSERT_COBOL = `
 
 export const SAMPLE_INSERT_PYTHON = `
 # M520 取得コストＩＮＳＥＲＴ処理
-def insert_rtn():
+def m520_insert_rtn():
     # Initialize variables
     sw_nayose = 0
-    tbl_nayose = TblNayose()
-    tbl_cost = TblCost()
 
     # Assign values
     tbl_nayose.user_cd = wk_wjaa310.user_cd
@@ -253,7 +251,7 @@ def insert_rtn():
             # Call M522-NAYOSE-UPDATE-RTN function
             # This function is not defined in the provided COBOL code, so it's not clear what it does
             # You need to implement this function in Python
-            m522_nayose_update_rtn(wk_wjaa310, cns_prg_id, wk_sqldate, cns_ora_success, zero, cns_sql_update, cns_tbl_nayose)
+            m522_nayose_update_rtn()
             tbl_cost.btn_daihyo = tbl_nayose.btn
             tbl_cost.int_koza_no_daihyo = tbl_nayose.int_koza_no
 
@@ -323,19 +321,19 @@ def insert_rtn():
 
     # Check SQLCODE
     if cur.rowcount > 0:
-        rtn_cd = 0
+        wk_wjala310.rtn_cd = 0
         # Update wk_wjaa310
         wk_wjaa310.zan_suryo_go = tbl_cost.zan_suryo
         wk_wjaa310.heikin_tanka_go = tbl_cost.heikin_tanka
         wk_wjaa310.zan_kin_go = tbl_cost.zan_kin
     else:
-        rtn_cd = -1
-        err_sql = 'CNS-SQL-INSERT'
-        err_table_id = 'CNS-TBL-COST'
+        wk_wjala310.rtn_cd = -1
+        err_sql = sql_constant_area.cns_sql_insert
+        err_table_id = sql_constant_area.cns_tbl_const
         # Call M990-ERROR-RTN function
         # This function is not defined in the provided COBOL code, so it's not clear what it does
         # You need to implement this function in Python
-        m990_error_rtn()
+        sefl.m990_error_rtn()
 
     # Commit changes and close cursor
     con.commit()

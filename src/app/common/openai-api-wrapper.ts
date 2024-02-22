@@ -462,7 +462,11 @@ export class OpenAIApiWrapper {
             if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { limitRequests: 0, limitTokens: 0, remainingRequests: 0, remainingTokens: 0, resetRequests: '', resetTokens: '' };
             const ratelimitObj = this.currentRatelimit[key];
             for (let i = 0; i < Math.min(queue[key].length, ratelimitObj.remainingRequests); i++) {
-                if (queue[key][i].tokenCount.prompt_tokens > ratelimitObj.remainingTokens) { break; }
+                if (queue[key][i].tokenCount.prompt_tokens > ratelimitObj.remainingTokens
+                    && ratelimitObj.remainingTokens !== ratelimitObj.limitTokens) { // そもそもlimitオーバーのトークンは弾かずに投げてしまう。
+                    // console.log(`${i} ${queue[key][i].tokenCount.prompt_tokens} > ${ratelimitObj.remainingTokens}`);
+                    continue;
+                }
                 const runBit = queue[key].shift();
                 if (!runBit) { break; }
                 runBit.executeCall();
@@ -480,6 +484,8 @@ export class OpenAIApiWrapper {
                     // 待ち時間が設定されていなかったらとりあえずRPM/TPMを回復させるために60秒待つ。
                     waitMs = waitMs === 0 ? ((waitS || 60) * 1000) : waitMs;
                     this.timeoutMap[key] = setTimeout(() => {
+                        // console.log(ratelimitObj);
+                        // console.log(queue[key].length);
                         ratelimitObj.remainingRequests = ratelimitObj.limitRequests;
                         ratelimitObj.remainingTokens = ratelimitObj.limitTokens;
                         this.timeoutMap[key] = null; // 監視スレッドをクリアしておかないと、次回以降のキュー追加時に監視スレッドが立たなくなる。

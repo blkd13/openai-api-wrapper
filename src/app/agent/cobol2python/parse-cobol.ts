@@ -43,7 +43,8 @@ export class GroupClause extends VarClause {
     toPython(depth: number = 0): string {
         // const indent = '\t'.repeat(depth);
         const indent = '\t'.repeat(2);
-        return Utils.trimLines(`${indent}self.${Utils.toSnakeCase(this.name)} = ${Utils.toPascalCase(this.name)}()`);
+        return Utils.trimLines(`${indent}self.${Utils.toSnakeCase(this.name)} = ${Utils.toSnakeCase(this.name)}`);
+        // return Utils.trimLines(`${indent}self.${Utils.toSnakeCase(this.name)} = ${Utils.toPascalCase(this.name)}()`);
     }
 
     toPythonInit(depth: number = 0): string {
@@ -53,6 +54,8 @@ export class GroupClause extends VarClause {
             ${indent}class ${Utils.toPascalCase(this.name)}:
             ${indent}    def __init__(self):
             ${this.children.filter(child => ['pic', 'copy', 'group'].includes(child.type)).map(child => child.toPython(depth + 2)).join('\n') || ('\t'.repeat(depth + 2) + 'pass')}
+
+            ${indent}${Utils.toSnakeCase(this.name)} = ${Utils.toPascalCase(this.name)}()
         `);
     }
     getClassRecursive(m: Set<GroupClause> = new Set<GroupClause>()): Set<GroupClause> {
@@ -129,7 +132,10 @@ export function getWorkingStorageSection(cobolText: string, isWorkingStorage = f
         // 7byte目以降。右空白はゴミなので右トリムしておく。
         cobolLines[idx] = cobolLines[idx].substring(7).replaceAll(/\s*$/g, '');
 
-        if (cobolLines[idx].trim().match(/^WORKING-STORAGE\s+SECTION\./) || cobolLines[idx].trim().match(/^LINKAGE\s+SECTION\./)) {
+        if (cobolLines[idx].trim().match(/^WORKING-STORAGE\s+SECTION\./)
+            || cobolLines[idx].trim().match(/^LINKAGE\s+SECTION\./)
+            || cobolLines[idx].trim().match(/^FILE\s+SECTION\./)
+        ) {
             isWorkingStorage = true;
             continue;
         } else { }
@@ -177,10 +183,12 @@ export function lineToObjet(dtoLines: string[], copyMas: { [key: string]: GroupC
         let curLayer = Number(words[0]);
         // const indent = indentChain.join('');
         // console.log(curLayer, depthChain[depthChain.length - 1].layer);
-        if (curLayer > depthChain[depthChain.length - 1].layer || ['COPY', 'EXEC'].includes(words[0])) {
+        if (curLayer > depthChain[depthChain.length - 1].layer || ['COPY', 'EXEC', 'FD'].includes(words[0])) {
             cur = null;
             copyName = '';
-            if (words[0] === 'COPY') {
+            if (words[0] === 'FD') {
+                // FDはスキップ
+            } else if (words[0] === 'COPY') {
                 // COPY句
                 copyName = words[1];
             } else if (words[0] === 'EXEC') {
