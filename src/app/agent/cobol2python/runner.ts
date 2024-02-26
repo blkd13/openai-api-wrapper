@@ -160,6 +160,177 @@ export class Step0010_SimpleConvert extends MultiStepCobol2Python {
 
 
 /**
+ * ソースから文書（詳細設計書）化
+ */
+export class Step0020_ConvertToDoc extends MultiStepCobol2Python {
+
+    constructor() {
+        super();
+        class Step0020_ConvertToDocChil extends BaseStepCobol2Python {
+            systemMessageJa = '経験豊富で優秀なソフトウェアエンジニア。専門はCOBOLシステムのモダナイズ。';
+            systemMessageEn = 'An experienced and excellent software engineer. Specializes in modernizing COBOL systems.';
+            // 共通定義を上書きする場合はここで定義する。
+            constructor(public targetFilePath: string, public innerIndex: number, public sectionName: string, public sectionCode: string) {
+                super();
+                const baseName = path.basename(targetFilePath);
+                // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
+                this.label = Utils.safeFileName(`${this.constructor.name}_${baseName}-${innerIndex}-${sectionName.replaceAll('-', '_')}`); // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                // 個別の指示を作成。
+                this.chapters = [
+                    {
+                        title: `Instructions`,
+                        contentJa: Utils.trimLines(`プログラムの詳細設計書を作成してください。`),
+                        contentEn: Utils.trimLines(``),
+                        children: [{
+                            titleJa: `対象のCOBOLソースコード`, titleEn: `Target COBOL source code`,
+                            content: Utils.setMarkdownBlock(sectionCode, 'cobol'),
+                        },]
+                    }
+                ];
+            }
+        }
+        // childStepListを組み立て。
+        this.childStepList = getStepInstance(Step0010_SimpleConvert).childStepList.map(step0 => {
+            const step = step0 as any as { targetFilePath: string, innerIndex: number, sectionName: string, sectionCode: string };
+            return new Step0020_ConvertToDocChil(step.targetFilePath, step.innerIndex, step.sectionName, step.sectionCode);
+        });
+    }
+
+    postProcess(result: string[]): string[] {
+        return [];
+    }
+}
+
+/**
+ * ソースから文書（詳細設計書）化
+ */
+export class Step0030_DomainClassify extends MultiStepCobol2Python {
+
+    // クラスとして普通に自由に変数を作ってもよい。
+    filePathList!: string[];
+
+    constructor() {
+        super();
+        class Step0030_DomainClassifyChil extends BaseStepCobol2Python {
+            systemMessageJa = '経験豊富で優秀なソフトウェアエンジニア。専門はドメイン駆動設計とクリーンアーキテクチャ。';
+            systemMessageEn = 'An experienced and excellent software engineer. Specializes in domain-driven design and clean architecture.';
+            format: StepOutputFormat = StepOutputFormat.JSON;
+            // 共通定義を上書きする場合はここで定義する。
+            constructor(public targetFilePath: string, public innerIndex: number, public sectionName: string, public document: string) {
+                super();
+                const baseName = path.basename(targetFilePath);
+                // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
+                this.label = Utils.safeFileName(`${this.constructor.name}_${baseName}-${innerIndex}-${sectionName.replaceAll('-', '_')}`); // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                // 個別の指示を作成。
+                this.chapters = [
+                    {
+                        title: `Instructions`,
+                        contentJa: Utils.trimLines(`
+                            これから示す設計書は詳細設計書は「譲渡益税管理システム」の一部です。
+                            この詳細設計書が「譲渡益税管理システム」の全体に対してどのような位置づけになるか、以下の３つに分類してください。
+                            - 業務ロジック（金額や数量、日付の計算、決済処理、複雑な条件分岐、条件付きのDBアクセス、など）
+                            - サポートロジック（単純なファイル入出力の定義、DBコネクション接続、引数取得、エラーハンドリング、ログ出力、メール送信など）
+                        `),
+                        contentEn: Utils.trimLines(`
+                        `),
+                        children: [
+                            {
+                                titleJa: `対象の詳細設計書`, titleEn: `Target detailed design document`,
+                                content: Utils.setMarkdownBlock(document, 'markdown'),
+                            },
+                            {
+                                titleJa: `出力形式`, titleEn: `Output format`,
+                                content: Utils.trimLines(`
+                                    判定結果は以下のJSON形式で出力してください。
+                                    {"businessLogic": true, "supportLogic": false, "other": false, "reason": "xxxxx"}
+                                `),
+                            }
+                        ]
+                    }
+                ];
+            }
+        }
+
+        // childStepListを組み立て。
+        this.childStepList = getStepInstance(Step0020_ConvertToDoc).childStepList.map(step0 => {
+            const step = step0 as any as { targetFilePath: string, innerIndex: number, sectionName: string, sectionCode: string, result: string };
+            return new Step0030_DomainClassifyChil(step.targetFilePath, step.innerIndex, step.sectionName, step.result);
+        });
+    }
+
+    postProcess(resultList: string[]): string[] {
+        // console.log(summary);
+        resultList.forEach((result, index) => {
+            const aa = Utils.jsonParse(result) as { businessLogic: boolean, supportLogic: boolean, other: boolean, reason: string };;
+            console.log(`${this.childStepList[index].label} ${aa.businessLogic} ${aa.supportLogic} ${aa.other}`);
+        });
+        return resultList;
+    }
+}
+
+/**
+ * ソースから文書（詳細設計書）化
+ */
+class Step0040_RebuildDocument extends MultiStepCobol2Python {
+
+    // クラスとして普通に自由に変数を作ってもよい。
+    filePathList!: string[];
+
+    constructor() {
+        super();
+        class Step0040_RebuildDocumentChil extends BaseStepCobol2Python {
+            systemMessageJa = '経験豊富で優秀なソフトウェアエンジニア。専門はドメイン駆動設計とクリーンアーキテクチャ。';
+            systemMessageEn = 'An experienced and excellent software engineer. Specializes in domain-driven design and clean architecture.';
+            // 共通定義を上書きする場合はここで定義する。
+            constructor(public targetFilePath: string, public innerIndex: number, public sectionName: string, public document: string) {
+                super();
+                const baseName = path.basename(targetFilePath);
+                // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
+                this.label = Utils.safeFileName(`${this.constructor.name}_${baseName}-${innerIndex}-${sectionName.replaceAll('-', '_')}`); // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                // 個別の指示を作成。
+                this.chapters = [{
+                    title: `Instructions`,
+                    contentJa: Utils.trimLines(`
+                        以下の詳細設計書を、以下の章立てで分解して再構成してください。
+                        - コアドメイン（ビジネスにとって最も価値が高い領域）、
+                        - サポートドメイン（コアドメインを支援する領域）、
+                        - 汎用ドメイン（業界全体で共通の機能やサービス）、
+                    `),
+                    contentEn: Utils.trimLines(`
+                    `),
+                    children: [
+                        {
+                            titleJa: `再構成サンプル`, titleEn: `Conversion sample`,
+                            content: `再構成サンプルは以下の通りです。注意深く参考にしてください。`,
+                            children: [{
+                                titleJa: `再構成前`, titleEn: `Before conversion`,
+                                content: Utils.setMarkdownBlock(FROM_DOC, 'markdown'),
+                            }, {
+                                titleJa: `再構成後`, titleEn: `After conversion`,
+                                content: Utils.setMarkdownBlock(TO_DOC, 'markdown'),
+                            }]
+                        },
+                        {
+                            titleJa: `再構成対象の詳細設計書`, titleEn: `Target detailed design document`,
+                            content: Utils.setMarkdownBlock(document, 'markdown'),
+                        }]
+                }];
+            }
+        }
+
+        // childStepListを組み立て。
+        const docList = getStepInstance(Step0020_ConvertToDoc);
+        this.childStepList = docList.childStepList.map((step0, index) => {
+            const step = step0 as any as { targetFilePath: string, innerIndex: number, sectionName: string };
+            return new Step0040_RebuildDocumentChil(step.targetFilePath, step.innerIndex, step.sectionName, step0.result);
+        });
+    }
+    postProcess(resultList: string[]): string[] {
+        return resultList;
+    }
+}
+
+/**
  * 必ず main() という関数を定義する。
  * promiseチェーンで順次実行させる。
  * 
@@ -174,10 +345,27 @@ export async function main() {
     let obj;
     return Promise.resolve().then(() => {
     }).then(() => {
-        obj = new Step0010_SimpleConvert();
+        obj = getStepInstance(Step0010_SimpleConvert);
         obj.initPrompt();
         return obj.run();
         // obj.postProcess(obj.childStepList.map(chil => chil.result));
+    }).then(() => {
+        obj = getStepInstance(Step0020_ConvertToDoc);
+        obj.initPrompt();
+        return obj.run();
+    }).then(() => {
+        obj = getStepInstance(Step0030_DomainClassify);
+        obj.initPrompt();
+        // return obj.run();
+        // obj.postProcess(obj.childStepList.map(chil => chil.result));
+    }).then(() => {
+        obj = getStepInstance(Step0040_RebuildDocument);
+        obj.initPrompt();
+        // return obj.run();
+        // obj.postProcess(obj.childStepList.map(chil => chil.result));
+    }).then(() => {
+    }).then(() => {
+    }).then(() => {
     }).then(() => {
     }).then(() => {
 
