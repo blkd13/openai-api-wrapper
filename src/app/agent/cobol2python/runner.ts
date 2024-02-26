@@ -1,23 +1,24 @@
 import { fileURLToPath } from 'url';
 import * as fs from 'fs';
-import { BaseStep, MultiStep, PromptLang, StepOutputFormat, aiApi } from "../../common/base-step.js";
+import { BaseStep, MultiStep, PromptLang, StepOutputFormat, aiApi, getStepInstance } from "../../common/base-step.js";
 import { GPTModels } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
 import fss from '../../common/fss.js';
 import path, { parse } from 'path';
-import { SAMPLE_INSERT_COBOL, SAMPLE_INSERT_PYTHON } from './sample_code.js';
+import { FROM_DOC, SAMPLE_INSERT_COBOL, SAMPLE_INSERT_PYTHON, TO_DOC } from './sample_code.js';
 import { GroupClause, getSubroutineList, getWorkingStorageSection, lineToObjet, parseWorkingStorageSection } from './parse-cobol.js';
 
 // Azureに向ける
-aiApi.wrapperOptions.useAzure = true;
+aiApi.wrapperOptions.provider = 'azure';
 
 // サブディレクトリ名
-const PROJECT_NAME = 'wja-poc';
+export const PROJECT_NAME = 'wja-poc';
 
 // シングルステップ用共通設定
-abstract class BaseStepCobol2Python extends BaseStep {
+export abstract class BaseStepCobol2Python extends BaseStep {
     agentName: string = Utils.basename(Utils.dirname(import.meta.url));
-    model: GPTModels = 'gpt-4-vision-preview';
+    // model: GPTModels = 'gpt-4-vision-preview';
+    model: GPTModels = 'mixtral-8x7b-32768';
     // model: GPTModels = 'gpt-3.5-turbo';
     labelPrefix: string = `${PROJECT_NAME}/`;  // ラベルのプレフィックス。サブディレクトリに分けるように/を入れておくと便利。
     systemMessageJa = 'COBOLからPythonへの変換エージェントです。';
@@ -29,7 +30,7 @@ abstract class BaseStepCobol2Python extends BaseStep {
 }
 
 // マルチステップ用共通設定
-abstract class MultiStepCobol2Python extends MultiStep {
+export abstract class MultiStepCobol2Python extends MultiStep {
     agentName: string = Utils.basename(Utils.dirname(import.meta.url));
     labelPrefix: string = `${PROJECT_NAME}/`;  // ラベルのプレフィックス。サブディレクトリに分けるように/を入れておくと便利。
 }
@@ -37,7 +38,7 @@ abstract class MultiStepCobol2Python extends MultiStep {
 /**
  * 単純にサンプルを見ながらCOBOL->python書換をする。
  */
-class Step0010_SimpleConvert extends MultiStepCobol2Python {
+export class Step0010_SimpleConvert extends MultiStepCobol2Python {
 
     // クラスとして普通に自由に変数を作ってもよい。
     filePathList!: string[];
@@ -54,7 +55,7 @@ class Step0010_SimpleConvert extends MultiStepCobol2Python {
                 super();
                 const baseName = path.basename(targetFilePath);
                 // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
-                this.label = `${this.constructor.name}_${Utils.safeFileName(baseName)}-${innerIndex}-${Utils.safeFileName(sectionName.replaceAll('-', '_'))}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                this.label = Utils.safeFileName(`${this.constructor.name}_${baseName}-${innerIndex}-${sectionName.replaceAll('-', '_')}`); // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
                 // 個別の指示を作成。
                 this.chapters = [
                     {

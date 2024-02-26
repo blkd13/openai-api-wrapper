@@ -19,6 +19,13 @@ const openai = new OpenAI({
     // baseOptions: { timeout: 1200000, Configuration: { timeout: 1200000 } },
 });
 
+// llama2-70b-4096
+// mixtral-8x7b-32768
+const groq = new OpenAI({
+    apiKey: process.env['GROQ_API_KEY'],
+    baseURL: 'https://api.groq.com/openai/v1',
+});
+console.log(process.env['GROQ_API_KEY']);
 import { AzureKeyCredential, OpenAIClient } from "@azure/openai";
 const azureClient = new OpenAIClient(
     process.env['AZURE_OPENAI_ENDPOINT'] as string,
@@ -40,14 +47,19 @@ const encoderMap: Record<TiktokenModel, Tiktoken> = {} as any;
 function getEncoder(model: TiktokenModel): Tiktoken {
     if (encoderMap[model]) {
     } else {
-        encoderMap[model] = encoding_for_model(model);
+        try {
+            encoderMap[model] = encoding_for_model(model);
+        } catch (ex) {
+            // 登録されていないトークナイザの場合はとりあえずgpt-4のトークナイザを当てておく
+            encoderMap[model] = encoding_for_model('gpt-4');
+        }
     }
     return encoderMap[model];
 }
 
 export interface WrapperOptions {
     allowLocalFiles: boolean;
-    useAzure: boolean;
+    provider: 'openai' | 'azure' | 'groq';
 }
 
 // Uint8Arrayを文字列に変換
@@ -92,7 +104,7 @@ class RunBit {
         let runPromise = null;
 
         console.log(logObject.output('start', ''));
-        if (this.openApiWrapper.wrapperOptions.useAzure) {
+        if (this.openApiWrapper.wrapperOptions.provider === 'azure') {
             if (args.max_tokens) {
             } else if (args.model === 'gpt-4-vision-preview') {
                 // vision-previの時にmax_tokensを設定しないと20くらいで返ってきてしまう。
@@ -163,7 +175,8 @@ class RunBit {
                 this.openApiWrapper.fire();
             });
         } else {
-            runPromise = (openai.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
+            const client = this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq : openai;
+            runPromise = (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
                 .withResponse().then((response) => {
                     response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
                     response.response.headers.get('x-ratelimit-limit-tokens') && (ratelimitObj.limitTokens = Number(response.response.headers.get('x-ratelimit-limit-tokens')));
@@ -289,10 +302,12 @@ export class OpenAIApiWrapper {
         'gpt4-32k': { limitRequests: 5000, limitTokens: 80000, remainingRequests: 1, remainingTokens: 32000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt4-128': { limitRequests: 500, limitTokens: 300000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt4-vis': { limitRequests: 500, limitTokens: 300000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+        'g-mxl-87': { limitRequests: 10, limitTokens: 100000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+        'g-lm2-70': { limitRequests: 10, limitTokens: 100000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
     };
 
     constructor(
-        public wrapperOptions: WrapperOptions = { allowLocalFiles: false, useAzure: false }
+        public wrapperOptions: WrapperOptions = { allowLocalFiles: false, provider: 'openai' }
     ) {
         // proxy設定判定用オブジェクト
         const proxyObj: { [key: string]: any } = {
@@ -302,7 +317,7 @@ export class OpenAIApiWrapper {
 
         const noProxies = process.env['no_proxy']?.split(',') || [];
         let host = '';
-        if (wrapperOptions.useAzure) {
+        if (wrapperOptions.provider === 'azure') {
             host = new URL(process.env['AZURE_OPENAI_ENDPOINT'] as string).host;
         } else {
             host = 'api.openai.com';
@@ -514,7 +529,7 @@ export class OpenAIApiWrapper {
 
 // TiktokenModelが新モデルに追いつくまでは自己定義で対応する。
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
-export type GPTModels = TiktokenModel;
+export type GPTModels = TiktokenModel | 'llama2-70b-4096' | 'mixtral-8x7b-32768';
 
 /**
  * トークン数とコストを計算するクラス
@@ -523,13 +538,15 @@ export class TokenCount {
 
     // モデル名とコストの対応表
     static COST_TABLE: { [key: string]: { prompt: number, completion: number } } = {
-        'all     ': { prompt: 0.0000, completion: 0.0000, },
-        'gpt3.5  ': { prompt: 0.0015, completion: 0.0020, },
-        'gpt3-16k': { prompt: 0.0005, completion: 0.0015, },
-        'gpt4    ': { prompt: 0.0300, completion: 0.0600, },
-        'gpt4-32k': { prompt: 0.0600, completion: 0.1200, },
-        'gpt4-vis': { prompt: 0.0100, completion: 0.0300, },
-        'gpt4-128': { prompt: 0.0100, completion: 0.0300, },
+        'all     ': { prompt: 0.00000, completion: 0.00000, },
+        'gpt3.5  ': { prompt: 0.00150, completion: 0.00200, },
+        'gpt3-16k': { prompt: 0.00050, completion: 0.00150, },
+        'gpt4    ': { prompt: 0.03000, completion: 0.06000, },
+        'gpt4-32k': { prompt: 0.06000, completion: 0.12000, },
+        'gpt4-vis': { prompt: 0.01000, completion: 0.03000, },
+        'gpt4-128': { prompt: 0.01000, completion: 0.03000, },
+        'g-mxl-87': { prompt: 0.00027, completion: 0.00027, },
+        'g-lm2-70': { prompt: 0.00070, completion: 0.00080, },
     };
 
     static SHORT_NAME: { [key: string]: string } = {
@@ -582,6 +599,8 @@ export class TokenCount {
         'gpt-3.5-turbo-16k-0613	': 'gpt3-16k',
         'gpt-3.5-turbo-instruct': 'gpt3.5  ',
         'gpt-3.5-turbo-instruct-0914': 'gpt3.5  ',
+        'mixtral-8x7b-32768': 'g-mxl-87',
+        'llama2-70b-4096': 'g-lm2-70',
     };
 
     // コスト
