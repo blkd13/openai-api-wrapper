@@ -153,12 +153,32 @@ export const azureDeployNameMap: Record<string, string> = {
 };
 ```
 
-### useAzure フラグを立てる
+### aiApi.wrapperOptions.provider で azure を設定する
 
-runner 等のプログラムの頭で aiApi の useAzure フラグを true にする。
+runner 等のプログラムの頭で aiApi の aiApi.wrapperOptions.provider を azure にする。
 場合によっては base-step にハードコーディングしてもよい。
 
 ```typescript
 // Azure に向ける
-aiApi.wrapperOptions.useAzure = true;
+aiApi.wrapperOptions.provider = 'azure';
+```
+
+
+## Groq を使う場合
+
+### Groq 用の環境変数を設定する
+
+```bash
+# Groq のAPI鍵
+export GROQ_API_KEY="${YOUR_GROQ_API_KEY}"
+```
+
+### aiApi.wrapperOptions.provider で groq を設定する
+
+runner 等のプログラムの頭で aiApi の aiApi.wrapperOptions.provider を groq にする。
+場合によっては base-step にハードコーディングしてもよい。
+
+```typescript
+// Groq に向ける
+aiApi.wrapperOptions.provider = 'groq';
 ```
