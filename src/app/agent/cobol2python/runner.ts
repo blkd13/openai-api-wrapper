@@ -17,8 +17,8 @@ export const PROJECT_NAME = 'wja-poc';
 // シングルステップ用共通設定
 export abstract class BaseStepCobol2Python extends BaseStep {
     agentName: string = Utils.basename(Utils.dirname(import.meta.url));
-    // model: GPTModels = 'gpt-4-vision-preview';
-    model: GPTModels = 'mixtral-8x7b-32768';
+    model: GPTModels = 'gpt-4-vision-preview';
+    // model: GPTModels = 'mixtral-8x7b-32768';
     // model: GPTModels = 'gpt-3.5-turbo';
     labelPrefix: string = `${PROJECT_NAME}/`;  // ラベルのプレフィックス。サブディレクトリに分けるように/を入れておくと便利。
     systemMessageJa = 'COBOLからPythonへの変換エージェントです。';
