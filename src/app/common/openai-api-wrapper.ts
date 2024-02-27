@@ -25,7 +25,11 @@ const groq = new OpenAI({
     apiKey: process.env['GROQ_API_KEY'],
     baseURL: 'https://api.groq.com/openai/v1',
 });
-console.log(process.env['GROQ_API_KEY']);
+const mistral = new OpenAI({
+    apiKey: process.env['MISTRAL_API_KEY'],
+    baseURL: 'https://api.mistral.ai/v1',
+});
+
 import { AzureKeyCredential, OpenAIClient } from "@azure/openai";
 const azureClient = new OpenAIClient(
     process.env['AZURE_OPENAI_ENDPOINT'] as string,
@@ -59,7 +63,7 @@ function getEncoder(model: TiktokenModel): Tiktoken {
 
 export interface WrapperOptions {
     allowLocalFiles: boolean;
-    provider: 'openai' | 'azure' | 'groq';
+    provider: 'openai' | 'azure' | 'groq' | 'mistral';
 }
 
 // Uint8Arrayを文字列に変換
@@ -175,7 +179,7 @@ class RunBit {
                 this.openApiWrapper.fire();
             });
         } else {
-            const client = this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq : openai;
+            const client = this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq : this.openApiWrapper.wrapperOptions.provider === 'mistral' ? mistral : openai;
             runPromise = (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
                 .withResponse().then((response) => {
                     response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
@@ -296,14 +300,22 @@ export class OpenAIApiWrapper {
 
     // レートリミット情報
     currentRatelimit: { [key: string]: Ratelimit } = {
+        // openai
         'gpt3.5  ': { limitRequests: 3500, limitTokens: 160000, remainingRequests: 1, remainingTokens: 4000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt3-16k': { limitRequests: 3500, limitTokens: 160000, remainingRequests: 1, remainingTokens: 16000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt4    ': { limitRequests: 5000, limitTokens: 80000, remainingRequests: 1, remainingTokens: 8000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt4-32k': { limitRequests: 5000, limitTokens: 80000, remainingRequests: 1, remainingTokens: 32000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt4-128': { limitRequests: 500, limitTokens: 300000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt4-vis': { limitRequests: 500, limitTokens: 300000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+        // groq
         'g-mxl-87': { limitRequests: 10, limitTokens: 100000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         'g-lm2-70': { limitRequests: 10, limitTokens: 100000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+        // mistral
+        'msl-7b  ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+        'msl-87b ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+        'msl-sm  ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+        'msl-md  ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+        'msl-lg  ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     };
 
     constructor(
@@ -529,7 +541,7 @@ export class OpenAIApiWrapper {
 
 // TiktokenModelが新モデルに追いつくまでは自己定義で対応する。
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
-export type GPTModels = TiktokenModel | 'llama2-70b-4096' | 'mixtral-8x7b-32768';
+export type GPTModels = TiktokenModel | 'llama2-70b-4096' | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b' | 'mistral-small-2312' | 'mistral-small' | 'mistral-small-2402' | 'mistral-small-latest' | 'mistral-medium-latest' | 'mistral-medium-2312' | 'mistral-medium' | 'mistral-large-latest' | 'mistral-large-2402' | 'mistral-embed';
 
 /**
  * トークン数とコストを計算するクラス
@@ -547,6 +559,11 @@ export class TokenCount {
         'gpt4-128': { prompt: 0.01000, completion: 0.03000, },
         'g-mxl-87': { prompt: 0.00027, completion: 0.00027, },
         'g-lm2-70': { prompt: 0.00070, completion: 0.00080, },
+        'msl-7b  ': { prompt: 0.00025, completion: 0.00025, },
+        'msl-87b ': { prompt: 0.00070, completion: 0.00070, },
+        'msl-sm  ': { prompt: 0.00200, completion: 0.00600, },
+        'msl-md  ': { prompt: 0.00270, completion: 0.00810, },
+        'msl-lg  ': { prompt: 0.00870, completion: 0.02400, },
     };
 
     static SHORT_NAME: { [key: string]: string } = {
@@ -601,6 +618,20 @@ export class TokenCount {
         'gpt-3.5-turbo-instruct-0914': 'gpt3.5  ',
         'mixtral-8x7b-32768': 'g-mxl-87',
         'llama2-70b-4096': 'g-lm2-70',
+        'open-mistral-7b': 'msl-7b  ',
+        'mistral-tiny-2312': 'msl-tiny',
+        'mistral-tiny': 'msl-tiny',
+        'open-mixtral-8x7b': 'msl-87b ',
+        'mistral-small-2312': 'msl-sm  ',
+        'mistral-small': 'msl-sm  ',
+        'mistral-small-2402': 'msl-sm  ',
+        'mistral-small-latest': 'msl-sm  ',
+        'mistral-medium-latest': 'msl-md  ',
+        'mistral-medium-2312': 'msl-md  ',
+        'mistral-medium': 'msl-md  ',
+        'mistral-large-latest': 'msl-lg  ',
+        'mistral-large-2402': 'msl-lg  ',
+        'mistral-embed': 'msl-em  ',
     };
 
     // コスト
