@@ -1,3 +1,4 @@
+import iconv from 'iconv-lite';
 import { Utils } from '../../common/utils.js';
 function extractBytesFromPic(pic: string): number {
     let totalBytes = 0;
@@ -101,22 +102,86 @@ function toValueString(value: string | null) {
 }
 
 
-// ルーチン名が可変であることを考慮した正規表現
-const regexSection = /...... ([\w-]+)-RTN\s+SECTION\.[\s\S]*?\1-EXT\./g;
-const regexSectionName = /^...... ([\w-]+)-RTN\s+SECTION.*$/g;
-export function getSubroutineList(cobolText: string): { name: string, code: string }[] {
-    // サブルーチン毎に分割する
-    let match;
-    const sectionList = [];
-    while ((match = regexSection.exec(cobolText)) !== null) {
-        // console.log(match[0]); // マッチした各ルーチンのテキスト
-        sectionList.push(match[0]);
-    }
-    return sectionList.map((section, innerIndex) => ({ name: section.split('\n')[0].replace(regexSectionName, '$1'), code: section }));
+// テキストをSJISに変換し、72バイトで区切る関数
+function trimRightComments(text: string): string {
+    return text.split('\n').map(line => {
+        // UTF-8のテキストをSJISに変換
+        const sjisBuffer = iconv.encode(line, 'Shift_JIS');
+        if (sjisBuffer.length > 72) {
+            return iconv.decode(sjisBuffer.slice(0, 72), 'Shift_JIS');
+        } else {
+            return line;
+        }
+    }).join('\n');
 }
 
-const regexDtoLine = /^( *)[0-9]+ .*$/g;
+/**
+ * サブルーチン分割（改善版）
+ * @param cobolText 
+ * @returns 
+ */
+export function getSubroutineList(cobolText: string): { name: string, code: string }[] {
+    // 右コメントをカット
+    cobolText = trimRightComments(cobolText);
+
+    const cobolLines = cobolText.split('\n');
+    let line = '';
+    let key = '';
+    const sectionMap: { [key: string]: string[] } = {};
+    for (let idx = 0; idx < cobolLines.length; idx++) {
+        if (line.length === 0) {
+            line = cobolLines[idx];
+        } else {
+            line += '\n' + cobolLines[idx];
+        }
+        if (cobolLines[idx][6] === ' ' && cobolLines[idx].trim().endsWith('.')) {
+            // 文は必ずドットで終わる。ドットがあると邪魔なので削っておく。
+            if (line.match(/\s+SECTION\.$/)) {
+                const trimed = line.trim().split(/ +/g);
+                // console.log(trimed);
+                key = trimed[trimed.length - 2];
+                // console.log(key);
+                sectionMap[key] = [line];
+            } else if (line.match(/\s+EXIT\.$/) || line.match(/\s+GOBACK\.$/)) {
+                if (sectionMap[key]) {
+                    sectionMap[key].push(line);
+                } else { }
+                key = '';
+            } else if (key) {
+                sectionMap[key].push(line);
+            } else {
+                // console.log(`unknown line: ${cobolLines[idx]}`);
+            }
+            line = '';
+        } else {
+            // ドットで終わらない行は改行ありの継続行。
+        }
+    }
+    // console.log(sectionMap);
+    return Object.entries(sectionMap)
+        .filter(([key, value]) => !['', 'CONFIGURATION', 'INPUT-OUTPUT', 'FILE', 'WORKING-STORAGE', 'LOCAL-STORAGE', 'LINKAGE',].includes(key))
+        .map(([key, value]) => ({ name: key.replaceAll(/-RTN/g, ''), code: value.join('\n') }));
+}
+
+export function grepCaller(prog: string, obj: { name: string, code: string }) {
+    obj.code.split('\n').filter(line => line[6] === ' ').forEach(line => {
+        if (line.trim().startsWith('CALL ')) {
+            // console.log(`CALL: ${prog} ${obj.name} ${line.trim().split(/ +/g)[1]}`);
+        } else {
+
+        }
+    });
+}
+
+/**
+ * 項目定義系SECTIONの中身を正規化（コメント削除、1行1定義）した配列を返す
+ * @param cobolText 
+ * @param isWorkingStorage 
+ * @returns 
+ */
 export function getWorkingStorageSection(cobolText: string, isWorkingStorage = false): string[] {
+    // 右コメントをカット
+    cobolText = trimRightComments(cobolText);
     // WORKING-STORAGE SECTION.
     const cobolLines = cobolText.split('\n');
     let line = '';
@@ -164,6 +229,12 @@ export function getWorkingStorageSection(cobolText: string, isWorkingStorage = f
     return dtoLines;
 }
 
+/**
+ * COBOLの WORKING-STORAGE-SECTION のような項目値を定義する行の集合をオブジェクトツリー構造に整形する。
+ * @param dtoLines 
+ * @param copyMas 
+ * @returns 
+ */
 export function lineToObjet(dtoLines: string[], copyMas: { [key: string]: GroupClause }): GroupClause {
     const rootDto = new GroupClause(0, 'root');
     const depthChain: GroupClause[] = [rootDto];

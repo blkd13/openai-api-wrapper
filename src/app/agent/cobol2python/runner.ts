@@ -6,13 +6,17 @@ import { Utils } from '../../common/utils.js';
 import fss from '../../common/fss.js';
 import path, { parse } from 'path';
 import { FROM_DOC, SAMPLE_INSERT_COBOL, SAMPLE_INSERT_PYTHON, TO_DOC } from './sample_code.js';
-import { GroupClause, getSubroutineList, getWorkingStorageSection, lineToObjet, parseWorkingStorageSection } from './parse-cobol.js';
+import { GroupClause, getSubroutineList, getWorkingStorageSection, grepCaller, lineToObjet, parseWorkingStorageSection } from './parse-cobol.js';
 
 // Azureに向ける
 aiApi.wrapperOptions.provider = 'azure';
 
 // サブディレクトリ名
-export const PROJECT_NAME = 'wja-poc';
+// export const PROJECT_NAME = 'wja-poc';
+// export const COBOL_DIR = 'E:/workspace/STAR/wja-poc/COBOL'
+
+export const PROJECT_NAME = 'wpf';
+export const COBOL_DIR = 'E:/workspace/APF/wrapflow/wpf/BL/'
 
 // シングルステップ用共通設定
 export abstract class BaseStepCobol2Python extends BaseStep {
@@ -55,7 +59,7 @@ export class Step0010_SimpleConvert extends MultiStepCobol2Python {
                 super();
                 const baseName = path.basename(targetFilePath);
                 // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
-                this.label = Utils.safeFileName(`${this.constructor.name}_${baseName}-${innerIndex}-${sectionName.replaceAll('-', '_')}`); // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                this.label = Utils.safeFileName(`${this.constructor.name}_${baseName}-${innerIndex.toString().padStart(3, '0')}-${sectionName.replaceAll('-', '_')}`); // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
                 // 個別の指示を作成。
                 this.chapters = [
                     {
@@ -96,16 +100,21 @@ export class Step0010_SimpleConvert extends MultiStepCobol2Python {
             }
         }
 
-        this.filePathList = fss.getFilesRecursively('E:/workspace/STAR/wja-poc/COBOL').filter(filePath => filePath.endsWith('.pco') || filePath.endsWith('.cob'));
+        this.filePathList = fss.getFilesRecursively(COBOL_DIR).filter(filePath => filePath.endsWith('.pco') || filePath.endsWith('.cob'));
 
         // childStepListを組み立て。
         this.childStepList = this.filePathList.map(targetFilePath => {
             const cobolText = fs.readFileSync(targetFilePath, 'utf-8');
+            console.log(`cobolText: ${path.basename(targetFilePath)} ${cobolText.split('\n').filter(line => line[6] === ' ').length} ${cobolText.split('\n').length}`);
             // サブルーチン毎に分割する
-            return getSubroutineList(cobolText).map((section, innerIndex) => {
-                return new Step0010_SimpleConvertChil(targetFilePath, innerIndex, section.name, section.code);
+            const subroutineList = getSubroutineList(cobolText);
+            subroutineList.forEach(subroutine => {
+                grepCaller(path.basename(targetFilePath), subroutine);
             });
-        }).flat().filter((obj, idx) => idx < 10000);
+            return subroutineList.map((section, innerIndex) => {
+                return new Step0010_SimpleConvertChil(targetFilePath, innerIndex, section.name, section.code.split('\n').filter(line => line[6] === ' ').join('\n'));
+            });
+        }).flat().filter((obj, idx) => idx < 10000000000000000);
     }
 
     postProcess(result: string[]): string[] {
@@ -119,7 +128,7 @@ export class Step0010_SimpleConvert extends MultiStepCobol2Python {
         }, {} as { [key: string]: string[] });
 
         // COPY句をロードして、「ファイルID：Dtoオブジェクト」の連想配列にする。
-        const cpyMap = fss.getFilesRecursively('E:/workspace/STAR/wja-poc/COBOL')
+        const cpyMap = fss.getFilesRecursively(COBOL_DIR)
             .filter(filePath => filePath.endsWith('.cpy'))
             .reduce((prev, curr) => {
                 const copyObj = parseWorkingStorageSection(fs.readFileSync(curr, 'utf-8'), {}, true);
@@ -174,13 +183,13 @@ export class Step0020_ConvertToDoc extends MultiStepCobol2Python {
                 super();
                 const baseName = path.basename(targetFilePath);
                 // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
-                this.label = Utils.safeFileName(`${this.constructor.name}_${baseName}-${innerIndex}-${sectionName.replaceAll('-', '_')}`); // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
+                this.label = Utils.safeFileName(`${this.constructor.name}_${baseName}-${innerIndex.toString().padStart(3, '0')}-${sectionName.replaceAll('-', '_')}`); // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
                 // 個別の指示を作成。
                 this.chapters = [
                     {
                         title: `Instructions`,
-                        contentJa: Utils.trimLines(`プログラムの詳細設計書を作成してください。`),
-                        contentEn: Utils.trimLines(``),
+                        contentJa: Utils.trimLines(`プログラムの詳細設計書を作成してください。ロジックを単に文章に変換するだけで良いです。ソースから読み取れないことは書かなくて良いです。`),
+                        contentEn: Utils.trimLines(`Create a detailed design document for the program. It is sufficient to simply convert the logic into sentences. You do not need to write anything that cannot be read from the source.`),
                         children: [{
                             titleJa: `対象のCOBOLソースコード`, titleEn: `Target COBOL source code`,
                             content: Utils.setMarkdownBlock(sectionCode, 'cobol'),
