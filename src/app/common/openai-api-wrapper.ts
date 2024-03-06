@@ -15,25 +15,25 @@ import { Utils } from "./utils.js";
 
 const HISTORY_DIRE = `./history`;
 const openai = new OpenAI({
-    apiKey: process.env['OPENAI_API_KEY'],
+    apiKey: process.env['OPENAI_API_KEY'] || 'dummy',
     // baseOptions: { timeout: 1200000, Configuration: { timeout: 1200000 } },
 });
 
 // llama2-70b-4096
 // mixtral-8x7b-32768
 const groq = new OpenAI({
-    apiKey: process.env['GROQ_API_KEY'],
+    apiKey: process.env['GROQ_API_KEY'] || 'dummy',
     baseURL: 'https://api.groq.com/openai/v1',
 });
 const mistral = new OpenAI({
-    apiKey: process.env['MISTRAL_API_KEY'],
+    apiKey: process.env['MISTRAL_API_KEY'] || 'dummy',
     baseURL: 'https://api.mistral.ai/v1',
 });
 
 import { AzureKeyCredential, OpenAIClient } from "@azure/openai";
 const azureClient = new OpenAIClient(
-    process.env['AZURE_OPENAI_ENDPOINT'] as string,
-    new AzureKeyCredential(process.env['AZURE_OPENAI_API_KEY'] as string)
+    process.env['AZURE_OPENAI_ENDPOINT'] as string || 'dummy',
+    new AzureKeyCredential(process.env['AZURE_OPENAI_API_KEY'] as string || 'dummy')
 );
 export const azureDeployNameMap: Record<string, string> = {
     'gpt-3.5-turbo': 'gpt35',
@@ -131,52 +131,62 @@ class RunBit {
                 } else {
                 }
 
-                // fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response: { status: response.response.status, headers } }, Utils.genJsonSafer()), {}, (err) => { });
+                fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response }, Utils.genJsonSafer()), {}, (err) => { });
 
                 // ストリームからデータを読み取るためのリーダーを取得
                 const reader = response.getReader();
 
                 let tokenBuilder: string = '';
 
+                const _that = this;
+
                 // ストリームからデータを読み取る非同期関数
                 async function readStream() {
                     while (true) {
-                        const { value, done } = await reader.read();
-                        if (done) {
-                            // ストリームが終了したらループを抜ける
-                            tokenCount.cost = tokenCount.calcCost();
-                            console.log(logObject.output('fine', ''));
-                            observer.complete();
+                        try {
+                            const { value, done } = await reader.read();
+                            if (done) {
+                                // ストリームが終了したらループを抜ける
+                                tokenCount.cost = tokenCount.calcCost();
+                                console.log(logObject.output('fine', ''));
+                                observer.complete();
 
+                                // ファイルに書き出す
+                                const trg = args.response_format?.type === 'json_object' ? 'json' : 'md';
+                                fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
+                                _that.openApiWrapper.fire();
+                                break;
+                            }
+                            // console.log(JSON.stringify(value));
+                            // // 中身を取り出す
+                            // const content = decoder.decode(value.choices);
+                            const content = JSON.stringify(value);
+                            // console.log(content);
+
+                            // 中身がない場合はスキップ
+                            if (!content) { continue; }
                             // ファイルに書き出す
-                            const trg = args.response_format?.type === 'json_object' ? 'json' : 'md';
-                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
-                            break;
+                            fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
+                            // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
+                            // トークン数をカウント
+                            tokenCount.completion_tokens++;
+                            const text = JSON.parse(content)?.choices[0]?.delta?.content || '';
+                            tokenBuilder += text;
+                            tokenCount.tokenBuilder = tokenBuilder;
+
+                            // streamHandlerを呼び出す
+                            observer.next(text);
+                        } catch (e) {
+                            console.log(`reader.read() error: ${e}`);
+                            console.log(e);
                         }
-                        // console.log(JSON.stringify(value));
-                        // // 中身を取り出す
-                        // const content = decoder.decode(value.choices);
-                        const content = JSON.stringify(value);
-                        // console.log(content);
-
-                        // 中身がない場合はスキップ
-                        if (!content) { continue; }
-                        // ファイルに書き出す
-                        fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
-                        // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
-                        // トークン数をカウント
-                        tokenCount.completion_tokens++;
-                        const text = JSON.parse(content)?.choices[0]?.delta?.content || '';
-                        tokenBuilder += text;
-                        tokenCount.tokenBuilder = tokenBuilder;
-
-                        // streamHandlerを呼び出す
-                        observer.next(text);
                     }
+                    // console.log('readStreamFine');
+                    return;
                 }
                 // ストリームの読み取りを開始
-                readStream();
-                this.openApiWrapper.fire();
+                // console.log('readStreamStart');
+                return readStream();
             });
         } else {
             const client = this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq : this.openApiWrapper.wrapperOptions.provider === 'mistral' ? mistral : openai;
@@ -202,6 +212,8 @@ class RunBit {
 
                     let tokenBuilder: string = '';
 
+                    const _that = this;
+
                     // ストリームからデータを読み取る非同期関数
                     async function readStream() {
                         while (true) {
@@ -211,6 +223,8 @@ class RunBit {
                                 tokenCount.cost = tokenCount.calcCost();
                                 console.log(logObject.output('fine', ''));
                                 observer.complete();
+
+                                _that.openApiWrapper.fire();
 
                                 // ファイルに書き出す
                                 const trg = args.response_format?.type === 'json_object' ? 'json' : 'md';
@@ -235,10 +249,10 @@ class RunBit {
                             // streamHandlerを呼び出す
                             observer.next(text);
                         }
+                        return;
                     }
                     // ストリームの読み取りを開始
-                    readStream();
-                    this.openApiWrapper.fire();
+                    return readStream();
                 });
         }
         runPromise.catch(error => {
@@ -273,6 +287,7 @@ class RunBit {
                 setTimeout(() => { this.executeCall(); }, waitMs);
             } else { }
         });
+        return runPromise;
     };
 }
 
@@ -287,15 +302,11 @@ export class OpenAIApiWrapper {
     // トークン数をカウントするためのリスト
     tokenCountList: TokenCount[] = [];
 
-    // 実行待ちリスト
-    queue: { [key: string]: RunBit[] } = {
-        'gpt3.5  ': [],
-        'gpt3-16k': [],
-        'gpt4    ': [],
-        'gpt4-32k': [],
-        'gpt4-128': [],
-        'gpt4-vis': [],
-    };
+    // 実行待リスト key = short name
+    waitQueue: { [key: string]: RunBit[] } = {};
+    // 実行中リスト key = short name
+    inProgressQueue: { [key: string]: RunBit[] } = {};
+    // タイムアウト管理オブジェクト
     timeoutMap: { [key: string]: NodeJS.Timeout | null } = {};
 
     // レートリミット情報
@@ -306,7 +317,7 @@ export class OpenAIApiWrapper {
         'gpt4    ': { limitRequests: 5000, limitTokens: 80000, remainingRequests: 1, remainingTokens: 8000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt4-32k': { limitRequests: 5000, limitTokens: 80000, remainingRequests: 1, remainingTokens: 32000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt4-128': { limitRequests: 500, limitTokens: 300000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
-        'gpt4-vis': { limitRequests: 500, limitTokens: 300000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+        'gpt4-vis': { limitRequests: 5, limitTokens: 300000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         // groq
         'g-mxl-87': { limitRequests: 10, limitTokens: 100000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         'g-lm2-70': { limitRequests: 10, limitTokens: 100000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
@@ -455,7 +466,7 @@ export class OpenAIApiWrapper {
             class LogObject {
                 constructor(public baseTime: number) { }
                 output(stepName: string, error: any = ''): string {
-                    const take = numForm(Date.now() - this.baseTime, 9);
+                    const take = numForm(Date.now() - this.baseTime, 10);
                     this.baseTime = Date.now(); // baseTimeを更新しておく。
                     const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
                     // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
@@ -475,33 +486,48 @@ export class OpenAIApiWrapper {
 
             const runBit = new RunBit(logObject, tokenCount, args, { ...reqOptions, ...this.options }, this, observer);
             // 未知モデル名の場合は空queueを追加しておく
-            if (!this.queue[tokenCount.modelShort]) this.queue[tokenCount.modelShort] = [];
-            this.queue[tokenCount.modelShort].push(runBit);
+            if (!this.waitQueue[tokenCount.modelShort]) this.waitQueue[tokenCount.modelShort] = [], this.inProgressQueue[tokenCount.modelShort] = [];
+            this.waitQueue[tokenCount.modelShort].push(runBit);
             this.fire();
         });
     }
 
 
     fire(): void {
-        const queue = this.queue;
-        for (const key of Object.keys(queue)) {
+        const waitQueue = this.waitQueue;
+        const inProgressQueue = this.inProgressQueue;
+        for (const key of Object.keys(waitQueue)) {
             // 未知モデル名の場合は空Objectを追加しておく
             if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { limitRequests: 0, limitTokens: 0, remainingRequests: 0, remainingTokens: 0, resetRequests: '', resetTokens: '' };
             const ratelimitObj = this.currentRatelimit[key];
-            for (let i = 0; i < Math.min(queue[key].length, ratelimitObj.remainingRequests); i++) {
-                if (queue[key][i].tokenCount.prompt_tokens > ratelimitObj.remainingTokens
+            // console.log(`fire ${key} x waitQueue:${waitQueue[key].length} inProgressQueue:${inProgressQueue[key].length} reqlimit:${ratelimitObj.limitRequests} toklimit:${ratelimitObj.limitTokens} remainingRequests:${ratelimitObj.remainingRequests} remaingTokens:${ratelimitObj.remainingTokens}`);
+            for (let i = 0; i < Math.min(waitQueue[key].length, ratelimitObj.remainingRequests - inProgressQueue[key].length); i++) {
+                // console.log(`fire ${key} ${i} waitQueue:${waitQueue[key].length} inProgressQueue:${inProgressQueue[key].length} reqlimit:${ratelimitObj.limitRequests} toklimit:${ratelimitObj.limitTokens} remainingRequests:${ratelimitObj.remainingRequests} remaingTokens:${ratelimitObj.remainingTokens}`);
+                if (waitQueue[key][i].tokenCount.prompt_tokens > ratelimitObj.remainingTokens
                     && ratelimitObj.remainingTokens !== ratelimitObj.limitTokens) { // そもそもlimitオーバーのトークンは弾かずに投げてしまう。
                     // console.log(`${i} ${queue[key][i].tokenCount.prompt_tokens} > ${ratelimitObj.remainingTokens}`);
                     continue;
                 }
-                const runBit = queue[key].shift();
+                const runBit = waitQueue[key].shift();
                 if (!runBit) { break; }
-                runBit.executeCall();
+                inProgressQueue[key].push(runBit);
+                runBit.executeCall()
+                    .then((response: any) => {
+                        // console.log(`execute Call then ${runBit.tokenCount.modelShort} ${runBit.tokenCount.prompt_tokens} ${response}`);
+                    })
+                    .catch((error: any) => {
+                        // console.log(`execute Call catc ${runBit.tokenCount.modelShort} ${runBit.tokenCount.prompt_tokens} ${JSON.stringify(error, Utils.genJsonSafer())}`);
+                    })
+                    .finally(() => {
+                        // console.log(`execute Call fine ${runBit.tokenCount.modelShort} ${runBit.tokenCount.prompt_tokens}`);
+                        inProgressQueue[key].splice(inProgressQueue[key].indexOf(runBit), 1);
+                    });
+
                 ratelimitObj.remainingRequests--;
                 ratelimitObj.remainingTokens -= runBit.tokenCount.prompt_tokens;
             }
             // キューの残りがあるかチェック。
-            if (queue[key].length > 0) {
+            if (waitQueue[key].length > 0) {
                 // キューが捌けてない場合。
                 if (this.timeoutMap[key] == null) {
                     // 待ちスレッドを立てる。
