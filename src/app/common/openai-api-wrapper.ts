@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import sizeOf from 'image-size';
 
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { APIPromise, RequestOptions } from 'openai/core';
 import { ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionCreateParamsStreaming } from 'openai/resources/chat/completions';
 import { Stream } from 'openai/streaming';
@@ -30,7 +31,14 @@ const mistral = new OpenAI({
     baseURL: 'https://api.mistral.ai/v1',
 });
 
+const anthropic = new Anthropic({
+    apiKey: process.env['ANTHROPIC_API_KEY'] || 'dummy',
+    httpAgent: new HttpsProxyAgent(process.env['https_proxy'] || process.env['http_proxy'] || ''),
+});
+
 import { AzureKeyCredential, OpenAIClient } from "@azure/openai";
+import { MessageStream } from '@anthropic-ai/sdk/lib/MessageStream.js';
+
 const azureClient = new OpenAIClient(
     process.env['AZURE_OPENAI_ENDPOINT'] as string || 'dummy',
     new AzureKeyCredential(process.env['AZURE_OPENAI_API_KEY'] as string || 'dummy')
@@ -63,7 +71,7 @@ function getEncoder(model: TiktokenModel): Tiktoken {
 
 export interface WrapperOptions {
     allowLocalFiles: boolean;
-    provider: 'openai' | 'azure' | 'groq' | 'mistral';
+    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic';
 }
 
 // Uint8Arrayを文字列に変換
@@ -108,7 +116,95 @@ class RunBit {
         let runPromise = null;
 
         console.log(logObject.output('start', ''));
-        if (this.openApiWrapper.wrapperOptions.provider === 'azure') {
+        if (this.openApiWrapper.wrapperOptions.provider === 'anthropic') {
+            args.max_tokens = args.max_tokens || 4096;
+            // console.log('shot');
+            // claudeはsystemプロンプトが無い。
+            args.messages = args.messages.filter(m => m.role !== 'system');
+            const response = (anthropic.messages.stream(args as any).toReadableStream());
+
+            // console.log('res');
+            ratelimitObj.limitRequests = 5; // 適当に5にしておく。
+            ratelimitObj.limitTokens = azureDeployTpmMap[args.model];
+            ratelimitObj.resetRequests = new Date().toISOString();
+            ratelimitObj.remainingRequests = 1; // ヘッダーが取得できないときはシングルスレッドで動かす
+            ratelimitObj.remainingTokens = 100000; // トークン数は適当
+
+            if ((response as any).headers) {
+                // < anthropic-ratelimit-requests-limit: 50
+                // < anthropic-ratelimit-requests-remaining: 46
+                // < anthropic-ratelimit-requests-reset: 2024-03-08T11:21:00Z
+                // < anthropic-ratelimit-tokens-limit: 50000
+                // < anthropic-ratelimit-tokens-remaining: 50000
+                // < anthropic-ratelimit-tokens-reset: 2024-03-08T11:21:00Z
+                // azureのライブラリを直接改造してないとここは取れない。
+                'x-ratelimit-remaining-requests' in (response as any).headers && (ratelimitObj.remainingRequests = Number((response as any).headers['x-ratelimit-remaining-requests'])) || 1;
+                'x-ratelimit-remaining-tokens' in (response as any).headers && (ratelimitObj.remainingTokens = Number((response as any).headers['x-ratelimit-remaining-tokens'])) || 1;
+                // console.log((response as any).headers);
+            } else {
+            }
+
+            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response }, Utils.genJsonSafer()), {}, (err) => { });
+
+            // ストリームからデータを読み取るためのリーダーを取得
+            const reader = response.getReader();
+
+            let tokenBuilder: string = '';
+
+            const _that = this;
+
+            // ストリームからデータを読み取る非同期関数
+            async function readStream() {
+                while (true) {
+                    try {
+                        const { value, done } = await reader.read();
+                        if (done) {
+                            // ストリームが終了したらループを抜ける
+                            tokenCount.cost = tokenCount.calcCost();
+                            console.log(logObject.output('fine', ''));
+                            observer.complete();
+
+                            // ファイルに書き出す
+                            const trg = args.response_format?.type === 'json_object' ? 'json' : 'md';
+                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
+                            _that.openApiWrapper.fire();
+                            break;
+                        }
+                        // console.log(JSON.stringify(value));
+                        // // 中身を取り出す
+                        const content = decoder.decode(value);
+                        // console.log(content);
+
+                        // 中身がない場合はスキップ
+                        if (!content) { continue; }
+                        // ファイルに書き出す
+                        fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
+                        // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
+                        const obj = JSON.parse(content);
+                        if (obj && obj.delta && obj.delta.text) {
+                            // トークン数をカウント
+                            tokenCount.completion_tokens++;
+                            const text = obj.delta.text || '';
+                            tokenBuilder += text;
+                            tokenCount.tokenBuilder = tokenBuilder;
+
+                            // streamHandlerを呼び出す
+                            observer.next(text);
+                        } else {
+                        }
+                    } catch (e) {
+                        console.log(`reader.read() error: ${e}`);
+                        console.log(e);
+                    }
+                }
+                // console.log('readStreamFine');
+                return;
+            }
+            // ストリームの読み取りを開始
+            // console.log('readStreamStart');
+            return readStream();
+
+        } else if (this.openApiWrapper.wrapperOptions.provider === 'azure') {
             if (args.max_tokens) {
             } else if (args.model === 'gpt-4-vision-preview') {
                 // vision-previの時にmax_tokensを設定しないと20くらいで返ってきてしまう。
@@ -189,7 +285,10 @@ class RunBit {
                 return readStream();
             });
         } else {
-            const client = this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq : this.openApiWrapper.wrapperOptions.provider === 'mistral' ? mistral : openai;
+            const client =
+                this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq
+                    : this.openApiWrapper.wrapperOptions.provider === 'mistral' ? mistral
+                        : openai;
             runPromise = (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
                 .withResponse().then((response) => {
                     response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
@@ -327,6 +426,13 @@ export class OpenAIApiWrapper {
         'msl-sm  ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'msl-md  ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'msl-lg  ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+
+        'cla-1.2 ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-2   ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-2.1 ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-3-hk': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-3-sn': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-3-op': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     };
 
     constructor(
@@ -567,7 +673,11 @@ export class OpenAIApiWrapper {
 
 // TiktokenModelが新モデルに追いつくまでは自己定義で対応する。
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
-export type GPTModels = TiktokenModel | 'llama2-70b-4096' | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b' | 'mistral-small-2312' | 'mistral-small' | 'mistral-small-2402' | 'mistral-small-latest' | 'mistral-medium-latest' | 'mistral-medium-2312' | 'mistral-medium' | 'mistral-large-latest' | 'mistral-large-2402' | 'mistral-embed';
+export type GPTModels = TiktokenModel
+    | 'llama2-70b-4096'
+    | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b'
+    | 'mistral-small-2312' | 'mistral-small' | 'mistral-small-2402' | 'mistral-small-latest' | 'mistral-medium-latest' | 'mistral-medium-2312' | 'mistral-medium' | 'mistral-large-latest' | 'mistral-large-2402' | 'mistral-embed'
+    | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240229' | 'claude-3-sonnet-20240229' | 'claude-3-opus-20240229';
 
 /**
  * トークン数とコストを計算するクラス
@@ -583,6 +693,12 @@ export class TokenCount {
         'gpt4-32k': { prompt: 0.06000, completion: 0.12000, },
         'gpt4-vis': { prompt: 0.01000, completion: 0.03000, },
         'gpt4-128': { prompt: 0.01000, completion: 0.03000, },
+        'cla-1.2 ': { prompt: 0.00800, completion: 0.02400, },
+        'cla-2   ': { prompt: 0.00800, completion: 0.02400, },
+        'cla-2.1 ': { prompt: 0.00800, completion: 0.02400, },
+        'cla-3-hk': { prompt: 0.00025, completion: 0.00125, },
+        'cla-3-sn': { prompt: 0.00300, completion: 0.01500, },
+        'cla-3-op': { prompt: 0.01500, completion: 0.07500, },
         'g-mxl-87': { prompt: 0.00027, completion: 0.00027, },
         'g-lm2-70': { prompt: 0.00070, completion: 0.00080, },
         'msl-7b  ': { prompt: 0.00025, completion: 0.00025, },
@@ -645,6 +761,12 @@ export class TokenCount {
         'mixtral-8x7b-32768': 'g-mxl-87',
         'llama2-70b-4096': 'g-lm2-70',
         'open-mistral-7b': 'msl-7b  ',
+        'claude-instant-1.2': 'cla-1.2 ',
+        'claude-2': 'cla-2   ',
+        'claude-2.1': 'cla-2.1 ',
+        'claude-3-haiku-20240229': 'cla-3-hk',
+        'claude-3-sonnet-20240229': 'cla-3-sn',
+        'claude-3-opus-20240229': 'cla-3-op',
         'mistral-tiny-2312': 'msl-tiny',
         'mistral-tiny': 'msl-tiny',
         'open-mixtral-8x7b': 'msl-87b ',

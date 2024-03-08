@@ -362,7 +362,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
  * 複数のステップを順番に実行するステップ
  */
 export class MultiStep extends BaseStepInterface<string[]> {
-    agentName: string = 'common';
+    agentName!: string;
 
     constructor(
         public childStepList: BaseStep[] = []
@@ -385,6 +385,7 @@ export class MultiStep extends BaseStepInterface<string[]> {
     get formed() { return fs.readFileSync(this.formedPath, 'utf-8'); }
 
     async run(isForce: boolean = false, refineIndex: number = 0): Promise<string[]> {
+        this.agentName = this.childStepList[0]?.agentName;
         if (this.isSkip) {
             // スキップ指定されていたら空文字を返す。
             return new Promise<string[]>((resolve, reject) => {
