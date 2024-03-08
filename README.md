@@ -109,7 +109,7 @@ npm run start:dev
 
 ```bash
 # agentNameで名前を指定する
-npm run generate <agentName>
+npm run cli generate <agentName>
 ```
 
 `src/app/agent/${agentName}`配下に`runner.ts`という名前でひな型が作成されるので、それを元に作る。
