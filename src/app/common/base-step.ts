@@ -7,7 +7,7 @@ import { GPTModels, OpenAIApiWrapper } from "./openai-api-wrapper.js";
 import { Utils } from './utils.js';
 
 // aiApi as singleton (for queing requests)
-export const aiApi = new OpenAIApiWrapper({ allowLocalFiles: true, useAzure: false });
+export const aiApi = new OpenAIApiWrapper({ allowLocalFiles: true, provider: 'openai' });
 
 export interface StructuredPrompt {
     title?: string;
@@ -21,6 +21,11 @@ export interface StructuredPrompt {
     contentEn?: string;
 }
 export type PromptLang = 'ja' | 'en';
+export type Prompt = string | Partial<Record<PromptLang, string>>;
+
+function toString(prompt: Prompt, lang: PromptLang) {
+    if (typeof prompt === 'string') { return prompt; } else { return prompt[lang] || ''; }
+}
 
 /**
  * [{title: 'hoge', content: 'fuga', children: [{title: 'hoge', content: 'fuga'}]}]のようなオブジェクトをMarkdownに変換する
@@ -98,7 +103,11 @@ export abstract class BaseStep extends BaseStepInterface<string> {
     // model: GPTModels = 'gpt-3.5-turbo';
     // model: GPTModels = 'gpt-4';
     model: GPTModels = 'gpt-4-1106-preview';
-    systemMessage = 'You are an experienced and talented software engineer.';
+    systemMessageJa = '経験豊富で優秀なソフトウェアエンジニア';
+    systemMessageEn = 'You are an experienced and talented software engineer.';
+    systemMessage = this.systemMessageEn;
+    assistantMessageJa = '';
+    assistantMessageEn = '';
     assistantMessage = '';
     visionPath = ''; // 画像読み込ませるとき用のパス。現状は1ステップ1画像のみにしておく。
     temperature = 0.0;
@@ -151,6 +160,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
     async run(isForce: boolean = false, refineIndex: number = 0): Promise<string> {
         // TODO refineIndexが指定されているときの!isForceの挙動が怪しい。
         if (!isForce && fs.existsSync(this.resultPath) && fs.statSync(this.resultPath).size > 0) {
+            // console.log(this.resultPath);
             console.log(`${Utils.formatDate()} done ${this.label}`);
             return Promise.resolve(this.result);
         } else { }
@@ -163,6 +173,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
             fs.readFile(this.promptPath, 'utf-8', (err, prompt: string) => {
                 // messages
                 const messages: ChatCompletionMessageParam[] = [];
+                this.systemMessage = (this.lang === 'ja' ? this.systemMessageJa : this.systemMessageEn) || this.systemMessage || '';
                 if (this.systemMessage) {
                     messages.push({ role: 'system', content: this.systemMessage });
                 } else { }
@@ -184,6 +195,8 @@ export abstract class BaseStep extends BaseStepInterface<string> {
                 } else {
                     messages.push({ role: 'user', content: prompt });
                 }
+
+                this.assistantMessage = (this.lang === 'ja' ? this.assistantMessageJa : this.assistantMessageEn) || this.assistantMessage || '';
                 if (this.assistantMessage) {
                     messages.push({ role: 'assistant', content: this.assistantMessage });
                 } else { }
@@ -349,7 +362,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
  * 複数のステップを順番に実行するステップ
  */
 export class MultiStep extends BaseStepInterface<string[]> {
-    agentName: string = 'common';
+    agentName!: string;
 
     constructor(
         public childStepList: BaseStep[] = []
@@ -372,6 +385,7 @@ export class MultiStep extends BaseStepInterface<string[]> {
     get formed() { return fs.readFileSync(this.formedPath, 'utf-8'); }
 
     async run(isForce: boolean = false, refineIndex: number = 0): Promise<string[]> {
+        this.agentName = this.childStepList[0]?.agentName;
         if (this.isSkip) {
             // スキップ指定されていたら空文字を返す。
             return new Promise<string[]>((resolve, reject) => {
@@ -386,6 +400,7 @@ export class MultiStep extends BaseStepInterface<string[]> {
         } else {
             return new Promise<string[]>((resolve, reject) => {
                 Promise.all(this.childStepList.map(step => step.run(isForce, refineIndex))).then((resultList: string[]) => {
+
                     // 全部まとめてファイルに出力する。
                     fss.writeFile(this.resultPath, resultList.join('\n\n---\n\n'), (err: any) => {
                         if (err) reject(err);
