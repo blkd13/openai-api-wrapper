@@ -356,6 +356,14 @@ export abstract class BaseStep extends BaseStepInterface<string> {
         // 最後の結果を追加する。
         this.presetMessages.push({ role: 'assistant', content: step.getRefineData(refineIndex) });
     }
+
+    chooseContent(content: { contentJa?: string, contentEn?: string }): string {
+        return this.lang === 'ja' ? content.contentJa || content.contentEn || '' : content.contentEn || content.contentJa || '';
+    }
+
+    chooseTitle(title: { titleJa?: string, titleEn?: string }): string {
+        return this.lang === 'ja' ? title.titleJa || title.titleEn || '' : title.titleEn || title.titleJa || '';
+    }
 }
 
 /**
