@@ -39,7 +39,7 @@ The theme is "System requirements for a lending business".
  * このエージェント用の共通設定。
  * エージェントごとに設定したいデフォルト値が異なるのでrunnerの最初に書くことにした。
  */
-abstract class BaseStepDomainModelGenerator extends BaseStep {
+export abstract class BaseStepDomainModelGenerator extends BaseStep {
     agentName: string = Utils.basename(Utils.dirname(import.meta.url));
     model: GPTModels = 'gpt-4-turbo-preview';
     labelPrefix: string = `${PROJECT_NAME}/`;  // ラベルのプレフィックス。サブディレクトリに分けるように/を入れておくと便利。
@@ -54,19 +54,9 @@ abstract class BaseStepDomainModelGenerator extends BaseStep {
  * このエージェント用の共通設定。
  * エージェントごとに設定したいデフォルト値が異なるのでrunnerの最初に書くことにした。
  */
-abstract class MultiStepDomainModelGenerator extends MultiStep {
+export abstract class MultiStepDomainModelGenerator extends MultiStep {
     agentName: string = Utils.basename(Utils.dirname(import.meta.url));
     labelPrefix: string = `${PROJECT_NAME}/`;  // ラベルのプレフィックス。サブディレクトリに分けるように/を入れておくと便利。
-}
-
-const CONTAINER: Record<string, BaseStepDomainModelGenerator | MultiStepDomainModelGenerator> = {};
-
-function getStepInstance<T extends BaseStepDomainModelGenerator | MultiStepDomainModelGenerator>(stepClass: { new(): T }): T {
-    if (CONTAINER[stepClass.name]) {
-        return CONTAINER[stepClass.name] as T;
-    } else {
-        return CONTAINER[stepClass.name] = new stepClass();
-    }
 }
 
 class Step0000_RequirementsToFeatureListSummary extends BaseStepDomainModelGenerator {
@@ -141,13 +131,13 @@ class Step0013_AdvancedExpertiseListJson extends BaseStepDomainModelGenerator {
             contentJa: Utils.trimLines(`
                 出力フォーマットは以下の通りです。
                 \`\`\`json
-                {"advancedExpertiseList":[{"title":"機能タイトル","content":"内容",featureName:"機能名"},{"title":"機能タイトル","content":"内容",featureName:"機能名"}]}
+                {"advancedExpertiseList":[{"title":"機能タイトル","content":"内容","featureName":"機能名"},{"title":"機能タイトル","content":"内容","featureName":"機能名"}]}
                 \`\`\`
             `),
             contentEn: Utils.trimLines(`
                 The output format is as follows.
                 \`\`\`json
-                {"advancedExpertiseList":[{"title":"Function Title","content":"Content",featureName:"Feature Name"},{"title":"Function Title","content":"Content",featureName:"Feature Name"}]}
+                {"advancedExpertiseList":[{"title":"Function Title","content":"Content","featureName":"Feature Name"},{"title":"Function Title","content":"Content","featureName":"Feature Name"}]}
                 \`\`\`
             `),
         }];
@@ -161,6 +151,8 @@ class Step0015_AdvancedExpertiseDetail extends MultiStepDomainModelGenerator {
         const featureListDetailStep = getStepInstance(Step0010_FeatureListSummaryToFeatureListDetail);
         const advancedExpertiseListJsonStep = getStepInstance(Step0013_AdvancedExpertiseListJson);
         this.advancedExpertiseList = JSON.parse(advancedExpertiseListJsonStep.formed).advancedExpertiseList;
+        // console.log(this.advancedExpertiseList);
+        // console.log(advancedExpertiseListJsonStep.chapters[0]);
         const advancedExpertiseListMarkdown = this.advancedExpertiseList.map(target => `- ** ${target.title} **: ${target.content}`).join('\n');
         class Step0015_AdvancedExpertiseDetailChil extends BaseStepDomainModelGenerator {
             // model: GPTModels = 'gpt-3.5-turbo';
@@ -171,7 +163,7 @@ class Step0015_AdvancedExpertiseDetail extends MultiStepDomainModelGenerator {
                 this.presetMessages.push({ role: 'user', content: featureListDetailStep.prompt });
                 this.presetMessages.push({ role: 'assistant', content: featureListDetailStep.result });
                 // advancedExpertiseListはJson形式なので、Markdown形式に変換する。
-                this.presetMessages.push({ role: 'user', content: advancedExpertiseListJsonStep.chapters[0].content || '' });
+                this.presetMessages.push({ role: 'user', content: this.chooseContent(advancedExpertiseListJsonStep.chapters[0]) });
                 this.presetMessages.push({ role: 'assistant', content: advancedExpertiseListMarkdown });
 
                 this.chapters = [{
@@ -596,7 +588,7 @@ class Step0040_EntityList extends BaseStepDomainModelGenerator {
         const entityObject: Record<string, Record<string, string>> = {};
         let groupName = '';
         // refineしたものを結合する。
-        Array.from(Utils.range(this.refineMessages.length)).forEach(index => {
+        Array.from(Utils.range(this.refineMessages.length + 1)).forEach(index => {
             this.getRefineData(index).split('\n').forEach(target => {
                 if (target.startsWith('### ') && (target.endsWith('のエンティティ:') || target.endsWith(' Related Entities:')) && target.length > 5) {
                     groupName = target.replace('### ', '').replace('のエンティティ:', '').replace(' Related Entities:', '').replace(/関連$/g, '').replace(/機能$/g, '') + '機能';
@@ -649,15 +641,11 @@ class Step0042_EntityFeatureMapping extends BaseStepDomainModelGenerator {
                 The output format is as follows.
                 \`\`\`json
                 {
-                    "entityFeatureMapping":{"entity1":["機能1","機能2"],"entity2":["機能3","機能4"]}
+                    "entityFeatureMapping":{"entity1":["Feature1","Feature2"],"entity2":["Feature3","Feature4"]}
                 }
                 \`\`\`
             `),
         }];
-    }
-    postProcess(result: string): string {
-        const entityObject: Record<string, string[]> = {};
-        return result;
     }
 }
 
@@ -886,6 +874,71 @@ class Step0042_EntityFeatureMapping extends BaseStepDomainModelGenerator {
 //     }
 // }
 
+class Step0050_AllAtOneceEntityAttributes extends BaseStepDomainModelGenerator {
+    entityListGroupMap: string[] = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityList.json`, 'utf-8'));
+    systemMessageJa: string = `経験豊富で優秀なビジネスアナリスト。`;
+    systemMessageEn: string = `An experienced and excellent business analyst.`;
+    constructor() {
+        super();
+        const entityFeatureMapping: Record<string, string[]> = JSON.parse(getStepInstance(Step0042_EntityFeatureMapping).formed).entityFeatureMapping;
+        Object.keys(entityFeatureMapping).forEach(key => { entityFeatureMapping[Utils.toPascalCase(key)] = entityFeatureMapping[key]; });
+        // const designSummaryMap: Record<string, string> = JSON.parse(getStepInstance(Step0030_DesignSummary).formed);
+        // const designSummaryMap: Record<string, string> = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/FeatureDocs.json`, 'utf-8')) as { [key: string]: string };
+        this.chapters = [{
+            title: `Instructions`,
+            contentJa: Utils.trimLines(`
+                        これから提示する設計書をよく読んで、Entity一覧の設計を詳細化してください。
+                        注意点は以下の通りです。
+                        - 出力はjavaのクラス形式でお願いします。
+                        - EntityのIdはLong型としてください。関連するEntityのIdもLong型です。
+                        - 日付型はLocalDate、LocalDateTimeとしてください。
+                        - ValueObjects、Enumsを含む場合はそれらについても記載してください。
+                        - Attributesの名前はCamelCaseで記述してください。
+                        - ValueObjects、Enumsの名前はPasCalCaseで記述してください。
+                        - Enumsの値は全て大文字のSNAKE_CASEで記述してください。
+                        - Getter/Setter、コンストラクタ は不要です。
+                    `),
+            contentEn: Utils.trimLines(`
+                        Please read the following design document carefully and detail the design of the Entity list.
+                        The points to note are as follows.
+                        - The output should be in the form of a Java class.
+                        - The Entity's ID should be of type Long. The IDs of related Entities should also be of type Long.
+                        - Date types should be LocalDate and LocalDateTime.
+                        - If there are ValueObjects and Enums, please describe them as well.
+                        - The name of the attribute is written in CamelCase.
+                        - The name of ValueObjects and Enums is written in PasCalCase.
+                        - The value of Enums should be written in all uppercase SNAKE_CASE.
+                        - Access modifiers such as getter/setter, and constructors are not necessary.
+                    `),
+        }, {
+            titleJa: '設計書', titleEn: 'Design Document',
+            children: [{
+                titleJa: `機能設計書（関連するもののみ抜粋）`, titleEn: `Feature Design Document (Extract only related items)`,
+                contentJa: Utils.addMarkdownDepth(getStepInstance(Step0030_DesignSummary).childStepList.map((step: BaseStep) => step.formed).join('\n\n'), 2),
+                // 抽出版
+                // content: Utils.addMarkdownDepth(entityFeatureMapping[entityName].map(functionName => designSummaryMap[functionName]).join('\n\n'), 2),
+            }, {
+                titleJa: `Entity一覧`, titleEn: `Entity List`,
+                content: Utils.addMarkdownDepth(getStepInstance(Step0040_EntityList).formed, 1),
+                // }, {
+                //     title: `Common`,
+                //     contentJa: Utils.addMarkdownDepth(getStepInstance(Step0043_ValueObjectEnumList).formed, 1),
+            }],
+        }];
+
+        // とりあえず一回セルフリファインを掛けておく。
+        this.refineMessages.push({
+            role: 'user', content: this.lang === 'ja' ? Utils.trimLines(`
+                        設計書に照らして、Entityの属性、ValueObjectsの属性、およびEnumsの値が十分かチェックしてください。
+                        十分であれば特に何もせず、不十分であれば追加設計を提示してください。
+                    `) : Utils.trimLines(`
+                        Please check if the attributes of the Entity, ValueObjects, and Enums are sufficient based on the design document.
+                        If sufficient, do nothing in particular. If insufficient, please present additional design.
+                    `),
+        });
+    }
+}
+
 
 class Step0050_EntityAttributes extends MultiStepDomainModelGenerator {
     entityListGroupMap: string[] = JSON.parse(fs.readFileSync(`results/${this.agentName}/${PROJECT_NAME}/EntityList.json`, 'utf-8'));
@@ -905,21 +958,27 @@ class Step0050_EntityAttributes extends MultiStepDomainModelGenerator {
                     title: `Instructions`,
                     contentJa: Utils.trimLines(`
                         これから提示する設計書をよく読んで、Entity一覧の「${entityName}」のAttributesを考えてください。
-                        EntityのIdはLong型としてください。関連するEntityのIdもLong型です。
-                        日付型はLocalDate、LocalDateTimeとしてください。
-                        ValueObjects、Enumsを含む場合はそれらについても記載してください。
-                        Attributesの名前はCamelCaseで記述してください。
-                        ValueObjects、Enumsの名前はPasCalCaseで記述してください。
-                        Enumsの値は全て大文字のSNAKE_CASEで記述してください。
+                        注意点は以下の通りです。
+                        - EntityのIdはLong型としてください。関連するEntityのIdもLong型です。
+                        - 日付型はLocalDate、LocalDateTimeとしてください。
+                        - ValueObjects、Enumsを含む場合はそれらについても記載してください。
+                        - Attributesの名前はCamelCaseで記述してください。
+                        - ValueObjects、Enumsの名前はPasCalCaseで記述してください。
+                        - Enumsの値は全て大文字のSNAKE_CASEで記述してください。
+                        - Getter/Setter、コンストラクタ は不要です。
+                        - 「${entityName}」のみを出力対象としてください。
                     `),
                     contentEn: Utils.trimLines(`
-                        Please read the following design document carefully and consider the Attributes of " ${entityName}" in the Entity list.
-                        The ID of the Entity should be of type Long. The IDs of related Entities should also be of type Long.
-                        Date types should be LocalDate and LocalDateTime.
-                        If there are ValueObjects and Enums, please include them as well.
-                        The name of the attribute should be written in CamelCase.
-                        The name of ValueObjects and Enums should be written in PasCalCase.
-                        The values of Enums should be written in all uppercase SNAKE_CASE.
+                        Please read the following design document carefully and consider the Attributes of "${entityName}" in the Entity list.
+                        The points to note are as follows.
+                        - The Entity's ID should be of type Long. The IDs of related Entities should also be of type Long.
+                        - Date types should be LocalDate and LocalDateTime.
+                        - If there are ValueObjects and Enums, please describe them as well.
+                        - The name of the attribute is written in CamelCase.
+                        - The name of ValueObjects and Enums is written in PasCalCase.
+                        - The value of Enums should be written in all uppercase SNAKE_CASE.
+                        - Access modifiers such as getter/setter, and constructors are not necessary.
+                        - Please output only "${entityName}".
                     `),
                 }, {
                     titleJa: '設計書', titleEn: 'Design Document',
