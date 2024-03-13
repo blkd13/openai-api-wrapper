@@ -356,13 +356,21 @@ export abstract class BaseStep extends BaseStepInterface<string> {
         // 最後の結果を追加する。
         this.presetMessages.push({ role: 'assistant', content: step.getRefineData(refineIndex) });
     }
+
+    chooseContent(content: { contentJa?: string, contentEn?: string }): string {
+        return this.lang === 'ja' ? content.contentJa || content.contentEn || '' : content.contentEn || content.contentJa || '';
+    }
+
+    chooseTitle(title: { titleJa?: string, titleEn?: string }): string {
+        return this.lang === 'ja' ? title.titleJa || title.titleEn || '' : title.titleEn || title.titleJa || '';
+    }
 }
 
 /**
  * 複数のステップを順番に実行するステップ
  */
 export class MultiStep extends BaseStepInterface<string[]> {
-    agentName: string = 'common';
+    agentName!: string;
 
     constructor(
         public childStepList: BaseStep[] = []
@@ -385,6 +393,7 @@ export class MultiStep extends BaseStepInterface<string[]> {
     get formed() { return fs.readFileSync(this.formedPath, 'utf-8'); }
 
     async run(isForce: boolean = false, refineIndex: number = 0): Promise<string[]> {
+        this.agentName = this.childStepList[0]?.agentName;
         if (this.isSkip) {
             // スキップ指定されていたら空文字を返す。
             return new Promise<string[]>((resolve, reject) => {
@@ -399,6 +408,7 @@ export class MultiStep extends BaseStepInterface<string[]> {
         } else {
             return new Promise<string[]>((resolve, reject) => {
                 Promise.all(this.childStepList.map(step => step.run(isForce, refineIndex))).then((resultList: string[]) => {
+
                     // 全部まとめてファイルに出力する。
                     fss.writeFile(this.resultPath, resultList.join('\n\n---\n\n'), (err: any) => {
                         if (err) reject(err);
