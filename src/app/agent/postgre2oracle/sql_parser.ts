@@ -54,11 +54,13 @@ export function parseSqlForDML(code: string): SqlSection {
       } else {
         commentBefore.push(node.text);
       }
+    } else {
+      boolAfter = true;
     }
   });
   const sql: string[] = [];
   let count = -1;
-  let countSql = 0;
+  let countSql = 5;
   let truncateText = "";
   code.split("\n").forEach((text) => {
     if (text.trim().startsWith("--")) {
@@ -79,7 +81,7 @@ export function parseSqlForDML(code: string): SqlSection {
       }
     }
   });
-  sql[0] = truncateText + "\n" + sql[0];
+  sql[0] = truncateText + "\n\n" + sql[0];
   return new SqlSection(commentBefore.join("\n"), commentAfter.join("\n"), sql);
 }
 

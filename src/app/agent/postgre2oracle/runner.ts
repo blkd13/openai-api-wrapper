@@ -16,6 +16,7 @@ import fss from "../../common/fss.js";
 import { getStepInstance } from "../../common/base-step.js";
 import { SqlSection, parseSqlForDML, parseSqlForSQL } from "./sql_parser.js";
 import { string } from "yargs";
+import { SAMPLE_AFTER, SAMPLE_BEFORE } from "./sample_code.js";
 
 // Azureに向ける
 aiApi.wrapperOptions.provider = "azure";
@@ -270,8 +271,9 @@ class Step0030_Convert_Child_BT_DML extends BaseStepPos2Ora {
 
     // プロンプトを構造化しやすくするためのオブジェクト。
     const baseName = path.basename(filePath);
+    const subLabel = filePath.includes("HONBAN") ? "HONBAN" : "KAIHATSU";
     this.label = Utils.safeFileName(
-      `${this.constructor.name}_${baseName}_${index}`
+      `${this.constructor.name}_${baseName}_${subLabel}_${index}`
     );
     this.chapters = [
       {
@@ -280,11 +282,22 @@ class Step0030_Convert_Child_BT_DML extends BaseStepPos2Ora {
         content: Utils.trimLines(`
           DBをPostgreSQLからOracleに変更します。必要な変更を加えて、ソースコードを返答してください
   
+          - INSERT ALL は利用しない
           - 補足は不要
+          - 変更が不要な場合はそのまま返却する
           - コメントは日本語でそのまま記載する
           - ソースコードの修正は最小限にする
+          - サンプルを注意深く参考にしてください。
           `),
         children: [
+          {
+            title: `サンプル（変換前）`,
+            content: Utils.setMarkdownBlock(SAMPLE_BEFORE, "sql"),
+          },
+          {
+            title: `サンプル（変換後）`,
+            content: Utils.setMarkdownBlock(SAMPLE_AFTER, "sql"),
+          },
           {
             title: `変換対象のSQL`,
             content: Utils.setMarkdownBlock(Utils.trimLines(code), "sql"),
@@ -337,7 +350,7 @@ class Step0030_Convert_Parent_BT_DML extends MultiStepPos2Ora {
     }[];
     result.forEach((code, index) => {
       if (filePath[index].filePath in codeMap) {
-        codeMap[filePath[index].filePath] += Utils.mdFirstCode(code) + "\n";
+        codeMap[filePath[index].filePath] += "\n" + Utils.mdFirstCode(code);
       } else {
         codeMap[filePath[index].filePath] = Utils.mdFirstCode(code);
       }
