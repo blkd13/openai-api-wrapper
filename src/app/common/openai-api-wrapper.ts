@@ -48,6 +48,12 @@ const mistral = new OpenAI({
 const anthropic = new Anthropic({
     apiKey: process.env['ANTHROPIC_API_KEY'] || 'dummy',
     httpAgent: options.httpAgent,
+    maxRetries: 0,
+});
+
+const deepSeek = new OpenAI({
+    apiKey: process.env['DEEPSEEK_API_KEY'] || 'dummy',
+    baseURL: 'https://api.deepseek.com/v1',
 });
 
 
@@ -85,7 +91,7 @@ function getEncoder(model: TiktokenModel): Tiktoken {
 
 export interface WrapperOptions {
     allowLocalFiles: boolean;
-    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic';
+    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek';
 }
 
 // Uint8Arrayを文字列に変換
@@ -210,8 +216,8 @@ class RunBit {
                                 // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
                                 const obj = JSON.parse(content);
                                 if (obj && obj.delta && obj.delta.text) {
-                                    // トークン数をカウント
-                                    tokenCount.completion_tokens++;
+                                    // // トークン数をカウント
+                                    // tokenCount.completion_tokens++;
                                     const text = obj.delta.text || '';
                                     tokenBuilder += text;
                                     tokenCount.tokenBuilder = tokenBuilder;
@@ -219,6 +225,16 @@ class RunBit {
                                     // streamHandlerを呼び出す
                                     observer.next(text);
                                 } else {
+                                }
+                                if (obj.message && obj.message.usage && obj.message.usage.input_tokens) {
+                                    // claudeはAPIの中にトークン数が書いてあるのでそれを使う。
+                                    tokenCount.prompt_tokens = obj.message.usage.input_tokens;
+                                    tokenCount.completion_tokens = obj.message.usage.output_tokens;
+                                }
+                                if (obj.usage && obj.usage.output_tokens) {
+                                    // claudeはAPIの中にトークン数が書いてあるのでそれを使う。
+                                    tokenCount.completion_tokens = obj.usage.output_tokens;
+                                    console.log(tokenCount.completion_tokens);
                                 }
                             } catch (e) {
                                 reject(e);
@@ -319,7 +335,8 @@ class RunBit {
             const client =
                 this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq
                     : this.openApiWrapper.wrapperOptions.provider === 'mistral' ? mistral
-                        : openai;
+                        : this.openApiWrapper.wrapperOptions.provider === 'deepseek' ? deepSeek
+                            : openai;
             runPromise = (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
                 .withResponse().then((response) => {
                     response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
@@ -461,9 +478,11 @@ export class OpenAIApiWrapper {
         'cla-1.2 ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-2   ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-2.1 ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
-        'cla-3-hk': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
-        'cla-3-sn': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
-        'cla-3-op': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-3-hk': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-3-sn': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-3-op': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'dps-code': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'dps-chat': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
         // 'anthropic-ratelimit-requests-limit': '50',
         // 'anthropic-ratelimit-requests-remaining': '46',
         // 'anthropic-ratelimit-requests-reset': '2024-03-09T08:35:00Z',
@@ -585,7 +604,12 @@ export class OpenAIApiWrapper {
             const prompt = args.messages.map(message => `<im_start>${message.role}\n${message.content}<im_end>`).join('\n');
             const tokenCount = new TokenCount(args.model as GPTModels, 0, 0);
             // gpt-4-1106-preview に未対応のため、gpt-4に置き換え。プロンプトのトークンを数えるだけなのでモデルはどれにしてもしても同じだと思われるが。。。
-            tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+            if (args.model.startsWith('claude-')) {
+                // 本当はAPIの戻りでトークン数を出したいけど、API投げる前にトークン数表示するログにしてしまったので、やむなくtiktokenのトークン数を表示する。APIで入力トークン数がわかったらそれを上書きするようにした。
+                tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+            } else {
+                tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+            }
             // tokenCount.prompt_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             tokenCount.prompt_tokens += imagePrompt;
             this.tokenCountList.push(tokenCount);
@@ -598,7 +622,11 @@ export class OpenAIApiWrapper {
                     const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
                     // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
                     // tokenCount.completion_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
-                    tokenCount.completion_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                    if (args.model.startsWith('claude-')) {
+                        // claudeの場合はAPIレスポンスでトークン数がわかっているのでそれを使う。
+                    } else {
+                        tokenCount.completion_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                    }
                     const completion_tokens = numForm(tokenCount.completion_tokens, 6);
 
                     const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
@@ -698,7 +726,8 @@ export type GPTModels = TiktokenModel
     | 'llama2-70b-4096'
     | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b'
     | 'mistral-small-2312' | 'mistral-small' | 'mistral-small-2402' | 'mistral-small-latest' | 'mistral-medium-latest' | 'mistral-medium-2312' | 'mistral-medium' | 'mistral-large-latest' | 'mistral-large-2402' | 'mistral-embed'
-    | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240229' | 'claude-3-sonnet-20240229' | 'claude-3-opus-20240229';
+    | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-sonnet-20240229' | 'claude-3-opus-20240229'
+    | 'deepseek-coder' | 'deepseek-chat';
 
 /**
  * トークン数とコストを計算するクラス
@@ -727,6 +756,8 @@ export class TokenCount {
         'msl-sm  ': { prompt: 0.00200, completion: 0.00600, },
         'msl-md  ': { prompt: 0.00270, completion: 0.00810, },
         'msl-lg  ': { prompt: 0.00870, completion: 0.02400, },
+        'dps-code': { prompt: 0.00000, completion: 0.00000, },
+        'dps-chat': { prompt: 0.00000, completion: 0.00000, },
     };
 
     static SHORT_NAME: { [key: string]: string } = {
@@ -785,7 +816,7 @@ export class TokenCount {
         'claude-instant-1.2': 'cla-1.2 ',
         'claude-2': 'cla-2   ',
         'claude-2.1': 'cla-2.1 ',
-        'claude-3-haiku-20240229': 'cla-3-hk',
+        'claude-3-haiku-20240307': 'cla-3-hk',
         'claude-3-sonnet-20240229': 'cla-3-sn',
         'claude-3-opus-20240229': 'cla-3-op',
         'mistral-tiny-2312': 'msl-tiny',
@@ -801,6 +832,8 @@ export class TokenCount {
         'mistral-large-latest': 'msl-lg  ',
         'mistral-large-2402': 'msl-lg  ',
         'mistral-embed': 'msl-em  ',
+        'deepseek-coder': 'dps-code',
+        'deepseek-chat': 'dps-chat',
     };
 
     // コスト
