@@ -356,6 +356,14 @@ export abstract class BaseStep extends BaseStepInterface<string> {
         // 最後の結果を追加する。
         this.presetMessages.push({ role: 'assistant', content: step.getRefineData(refineIndex) });
     }
+
+    chooseContent(content: { contentJa?: string, contentEn?: string }): string {
+        return this.lang === 'ja' ? content.contentJa || content.contentEn || '' : content.contentEn || content.contentJa || '';
+    }
+
+    chooseTitle(title: { titleJa?: string, titleEn?: string }): string {
+        return this.lang === 'ja' ? title.titleJa || title.titleEn || '' : title.titleEn || title.titleJa || '';
+    }
 }
 
 /**
@@ -400,6 +408,7 @@ export class MultiStep extends BaseStepInterface<string[]> {
         } else {
             return new Promise<string[]>((resolve, reject) => {
                 Promise.all(this.childStepList.map(step => step.run(isForce, refineIndex))).then((resultList: string[]) => {
+
                     // 全部まとめてファイルに出力する。
                     fss.writeFile(this.resultPath, resultList.join('\n\n---\n\n'), (err: any) => {
                         if (err) reject(err);

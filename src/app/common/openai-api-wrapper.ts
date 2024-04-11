@@ -15,6 +15,20 @@ import fss from './fss.js';
 import { Utils } from "./utils.js";
 
 const HISTORY_DIRE = `./history`;
+
+// proxy設定判定用オブジェクト
+const proxyObj: { [key: string]: any } = {
+    httpProxy: process.env['http_proxy'] as string || undefined,
+    httpsProxy: process.env['https_proxy'] as string || undefined,
+};
+const noProxies = process.env['no_proxy']?.split(',') || [];
+let host = '';
+Object.keys(proxyObj).filter(key => noProxies.includes(host) || !proxyObj[key]).forEach(key => delete proxyObj[key]);
+const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? {
+    httpAgent: new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || ''),
+} : {};
+
+
 const openai = new OpenAI({
     apiKey: process.env['OPENAI_API_KEY'] || 'dummy',
     // baseOptions: { timeout: 1200000, Configuration: { timeout: 1200000 } },
@@ -33,11 +47,10 @@ const mistral = new OpenAI({
 
 const anthropic = new Anthropic({
     apiKey: process.env['ANTHROPIC_API_KEY'] || 'dummy',
-    httpAgent: new HttpsProxyAgent(process.env['https_proxy'] || process.env['http_proxy'] || ''),
+    httpAgent: options.httpAgent || undefined,
 });
 
 import { AzureKeyCredential, OpenAIClient } from "@azure/openai";
-import { MessageStream } from '@anthropic-ai/sdk/lib/MessageStream.js';
 
 const azureClient = new OpenAIClient(
     process.env['AZURE_OPENAI_ENDPOINT'] as string || 'dummy',
@@ -120,90 +133,107 @@ class RunBit {
             args.max_tokens = args.max_tokens || 4096;
             // console.log('shot');
             // claudeはsystemプロンプトが無い。
+            const systemcPrompt = args.messages.find(m => m.role === 'system');
+            if (systemcPrompt) {
+                (args as any)['system'] = systemcPrompt.content;
+            } else { }
             args.messages = args.messages.filter(m => m.role !== 'system');
-            const response = (anthropic.messages.stream(args as any).toReadableStream());
+            // console.log(args);
 
-            // console.log('res');
-            ratelimitObj.limitRequests = 5; // 適当に5にしておく。
-            ratelimitObj.limitTokens = azureDeployTpmMap[args.model];
-            ratelimitObj.resetRequests = new Date().toISOString();
-            ratelimitObj.remainingRequests = 1; // ヘッダーが取得できないときはシングルスレッドで動かす
-            ratelimitObj.remainingTokens = 100000; // トークン数は適当
+            //   status: 429,
+            //   headers: {
+            //     'anthropic-ratelimit-requests-limit': '50',
+            //     'anthropic-ratelimit-requests-remaining': '46',
+            //     'anthropic-ratelimit-requests-reset': '2024-03-09T08:33:00Z',
+            //     'anthropic-ratelimit-tokens-limit': '50000',
+            //     'anthropic-ratelimit-tokens-remaining': '28000',
+            //     'anthropic-ratelimit-tokens-reset': '2024-03-09T08:33:00Z',
+            //     'cf-cache-status': 'DYNAMIC',
+            //     'cf-ray': '8619b6f3cb37268a-NRT',
+            //     connection: 'keep-alive',
+            //     'content-length': '261',
+            //     'content-type': 'application/json',
+            //     date: 'Sat, 09 Mar 2024 08:32:28 GMT',
+            //     'request-id': 'req_01RpaPLbbaKFtR4BSbKa2rzL',
+            //     server: 'cloudflare',
+            //     via: '1.1 google',
+            //     'x-cloud-trace-context': '5b9325b88cf2e68cc39489983301b2db',
+            //     'x-should-retry': 'true'
+            //   },
+            runPromise = new Promise<void>((resolve, reject) => {
+                try {
+                    const response = (anthropic.messages.stream(args as any).toReadableStream());
+                    // console.log('res');
+                    // ratelimitObj.limitRequests = 5; // 適当に5にしておく。
+                    // ratelimitObj.limitTokens = azureDeployTpmMap[args.model];
+                    // ratelimitObj.resetRequests = new Date().toISOString();
+                    // ratelimitObj.remainingRequests = 50; // ヘッダーが取得できないときはシングルスレッドで動かす
+                    // ratelimitObj.remainingTokens = 100000; // トークン数は適当
 
-            if ((response as any).headers) {
-                // < anthropic-ratelimit-requests-limit: 50
-                // < anthropic-ratelimit-requests-remaining: 46
-                // < anthropic-ratelimit-requests-reset: 2024-03-08T11:21:00Z
-                // < anthropic-ratelimit-tokens-limit: 50000
-                // < anthropic-ratelimit-tokens-remaining: 50000
-                // < anthropic-ratelimit-tokens-reset: 2024-03-08T11:21:00Z
-                // azureのライブラリを直接改造してないとここは取れない。
-                'x-ratelimit-remaining-requests' in (response as any).headers && (ratelimitObj.remainingRequests = Number((response as any).headers['x-ratelimit-remaining-requests'])) || 1;
-                'x-ratelimit-remaining-tokens' in (response as any).headers && (ratelimitObj.remainingTokens = Number((response as any).headers['x-ratelimit-remaining-tokens'])) || 1;
-                // console.log((response as any).headers);
-            } else {
-            }
+                    fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response }, Utils.genJsonSafer()), {}, (err) => { });
 
-            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response }, Utils.genJsonSafer()), {}, (err) => { });
+                    // ストリームからデータを読み取るためのリーダーを取得
+                    const reader = response.getReader();
 
-            // ストリームからデータを読み取るためのリーダーを取得
-            const reader = response.getReader();
+                    let tokenBuilder: string = '';
 
-            let tokenBuilder: string = '';
+                    const _that = this;
 
-            const _that = this;
+                    // ストリームからデータを読み取る非同期関数
+                    async function readStream() {
+                        while (true) {
+                            try {
+                                const { value, done } = await reader.read();
+                                if (done) {
+                                    // ストリームが終了したらループを抜ける
+                                    tokenCount.cost = tokenCount.calcCost();
+                                    console.log(logObject.output('fine', ''));
+                                    observer.complete();
 
-            // ストリームからデータを読み取る非同期関数
-            async function readStream() {
-                while (true) {
-                    try {
-                        const { value, done } = await reader.read();
-                        if (done) {
-                            // ストリームが終了したらループを抜ける
-                            tokenCount.cost = tokenCount.calcCost();
-                            console.log(logObject.output('fine', ''));
-                            observer.complete();
+                                    resolve();
+                                    // ファイルに書き出す
+                                    const trg = args.response_format?.type === 'json_object' ? 'json' : 'md';
+                                    fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
+                                    _that.openApiWrapper.fire();
+                                    break;
+                                }
+                                // console.log(JSON.stringify(value));
+                                // // 中身を取り出す
+                                const content = decoder.decode(value);
+                                // console.log(content);
 
-                            // ファイルに書き出す
-                            const trg = args.response_format?.type === 'json_object' ? 'json' : 'md';
-                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
-                            _that.openApiWrapper.fire();
-                            break;
+                                // 中身がない場合はスキップ
+                                if (!content) { continue; }
+                                // ファイルに書き出す
+                                fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
+                                // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
+                                const obj = JSON.parse(content);
+                                if (obj && obj.delta && obj.delta.text) {
+                                    // トークン数をカウント
+                                    tokenCount.completion_tokens++;
+                                    const text = obj.delta.text || '';
+                                    tokenBuilder += text;
+                                    tokenCount.tokenBuilder = tokenBuilder;
+
+                                    // streamHandlerを呼び出す
+                                    observer.next(text);
+                                } else {
+                                }
+                            } catch (e) {
+                                reject(e);
+                            }
                         }
-                        // console.log(JSON.stringify(value));
-                        // // 中身を取り出す
-                        const content = decoder.decode(value);
-                        // console.log(content);
-
-                        // 中身がない場合はスキップ
-                        if (!content) { continue; }
-                        // ファイルに書き出す
-                        fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
-                        // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
-                        const obj = JSON.parse(content);
-                        if (obj && obj.delta && obj.delta.text) {
-                            // トークン数をカウント
-                            tokenCount.completion_tokens++;
-                            const text = obj.delta.text || '';
-                            tokenBuilder += text;
-                            tokenCount.tokenBuilder = tokenBuilder;
-
-                            // streamHandlerを呼び出す
-                            observer.next(text);
-                        } else {
-                        }
-                    } catch (e) {
-                        console.log(`reader.read() error: ${e}`);
-                        console.log(e);
+                        // console.log('readStreamFine');
+                        return;
                     }
+                    // ストリームの読み取りを開始
+                    // console.log('readStreamStart');
+                    return readStream();
+                } catch (e) {
+                    reject(e);
                 }
-                // console.log('readStreamFine');
                 return;
-            }
-            // ストリームの読み取りを開始
-            // console.log('readStreamStart');
-            return readStream();
-
+            });
         } else if (this.openApiWrapper.wrapperOptions.provider === 'azure') {
             if (args.max_tokens) {
             } else if (args.model === 'gpt-4-vision-preview') {
@@ -430,31 +460,21 @@ export class OpenAIApiWrapper {
         'cla-1.2 ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-2   ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-2.1 ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
-        'cla-3-hk': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
-        'cla-3-sn': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
-        'cla-3-op': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-3-hk': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-3-sn': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-3-op': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        // 'anthropic-ratelimit-requests-limit': '50',
+        // 'anthropic-ratelimit-requests-remaining': '46',
+        // 'anthropic-ratelimit-requests-reset': '2024-03-09T08:35:00Z',
+        // 'anthropic-ratelimit-tokens-limit': '50000',
+        // 'anthropic-ratelimit-tokens-remaining': '31000',
+        // 'anthropic-ratelimit-tokens-reset': '2024-03-09T08:35:00Z',
     };
 
     constructor(
         public wrapperOptions: WrapperOptions = { allowLocalFiles: false, provider: 'openai' }
     ) {
-        // proxy設定判定用オブジェクト
-        const proxyObj: { [key: string]: any } = {
-            httpProxy: process.env['http_proxy'] as string || undefined,
-            httpsProxy: process.env['https_proxy'] as string || undefined,
-        };
-
-        const noProxies = process.env['no_proxy']?.split(',') || [];
-        let host = '';
-        if (wrapperOptions.provider === 'azure') {
-            host = new URL(process.env['AZURE_OPENAI_ENDPOINT'] as string).host;
-        } else {
-            host = 'api.openai.com';
-        }
-        Object.keys(proxyObj).filter(key => noProxies.includes(host) || !proxyObj[key]).forEach(key => delete proxyObj[key]);
-        this.options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? {
-            httpAgent: new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || ''),
-        } : {};
+        this.options = options;
         this.options.stream = true;
         // this.options.timeout = 1200000;
 
