@@ -483,7 +483,7 @@ export class OpenAIApiWrapper {
             args.stream = true;
 
             // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
-            if (args.response_format?.type == 'json_object' && ['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'].indexOf(args.model) !== -1) {
+            if (args.response_format?.type == 'json_object' && ['gpt-4-turbo', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'].indexOf(args.model) !== -1) {
                 const userMessage = args.messages.filter(message => message.role === 'user');
                 const lastUserMessage = args.messages[args.messages.indexOf(userMessage[userMessage.length - 1])];
                 if (!(lastUserMessage.content as string).includes('json')) {
@@ -505,7 +505,7 @@ export class OpenAIApiWrapper {
             } else { }
 
             let imagePrompt = 0;
-            if (['gpt-4-vision-preview'].indexOf(args.model) !== -1) {
+            if (['gpt-4-vision-preview', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09'].indexOf(args.model) !== -1) {
                 args.messages.forEach(message => {
                     if (Array.isArray(message.content)) {
                         message.content.forEach((content: ChatCompletionContentPart) => {
@@ -564,7 +564,7 @@ export class OpenAIApiWrapper {
             const prompt = args.messages.map(message => `<im_start>${message.role}\n${message.content}<im_end>`).join('\n');
             const tokenCount = new TokenCount(args.model as GPTModels, 0, 0);
             // gpt-4-1106-preview に未対応のため、gpt-4に置き換え。プロンプトのトークンを数えるだけなのでモデルはどれにしてもしても同じだと思われるが。。。
-            tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+            tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             // tokenCount.prompt_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             tokenCount.prompt_tokens += imagePrompt;
             this.tokenCountList.push(tokenCount);
@@ -577,7 +577,7 @@ export class OpenAIApiWrapper {
                     const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
                     // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
                     // tokenCount.completion_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
-                    tokenCount.completion_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                    tokenCount.completion_tokens = getEncoder((['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
                     const completion_tokens = numForm(tokenCount.completion_tokens, 6);
 
                     const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
@@ -645,7 +645,7 @@ export class OpenAIApiWrapper {
                     this.timeoutMap[key] = setTimeout(() => {
                         // console.log(ratelimitObj);
                         // console.log(queue[key].length);
-                        ratelimitObj.remainingRequests = ratelimitObj.limitRequests;
+                        ratelimitObj.remainingRequests = ratelimitObj.limitRequests - inProgressQueue[key].length;
                         ratelimitObj.remainingTokens = ratelimitObj.limitTokens;
                         this.timeoutMap[key] = null; // 監視スレッドをクリアしておかないと、次回以降のキュー追加時に監視スレッドが立たなくなる。
                         this.fire(); // 待ち時間が経過したので再点火する。
@@ -745,6 +745,8 @@ export class TokenCount {
         'gpt-4-32k': 'gpt4-32k',
         'gpt-4-32k-0314': 'gpt4-32k',
         'gpt-4-32k-0613': 'gpt4-32k',
+        'gpt-4-turbo': 'gpt4-128',
+        'gpt-4-turbo-2024-04-09': 'gpt4-128',
         'gpt-4-turbo-preview': 'gpt4-128',
         'gpt-4-1106-preview': 'gpt4-128',
         'gpt-4-0125-preview': 'gpt4-128',
