@@ -56,6 +56,9 @@ const deepSeek = new OpenAI({
     baseURL: 'https://api.deepseek.com/v1',
 });
 
+const local = new OpenAI({
+    baseURL: 'http://localhost:8913/v1',
+});
 
 import { AzureKeyCredential, OpenAIClient } from "@azure/openai";
 
@@ -91,7 +94,7 @@ function getEncoder(model: TiktokenModel): Tiktoken {
 
 export interface WrapperOptions {
     allowLocalFiles: boolean;
-    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek';
+    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local';
 }
 
 // Uint8Arrayを文字列に変換
@@ -234,7 +237,7 @@ class RunBit {
                                 if (obj.usage && obj.usage.output_tokens) {
                                     // claudeはAPIの中にトークン数が書いてあるのでそれを使う。
                                     tokenCount.completion_tokens = obj.usage.output_tokens;
-                                    console.log(tokenCount.completion_tokens);
+                                    // console.log(tokenCount.completion_tokens);
                                 }
                             } catch (e) {
                                 reject(e);
@@ -336,7 +339,8 @@ class RunBit {
                 this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq
                     : this.openApiWrapper.wrapperOptions.provider === 'mistral' ? mistral
                         : this.openApiWrapper.wrapperOptions.provider === 'deepseek' ? deepSeek
-                            : openai;
+                            : this.openApiWrapper.wrapperOptions.provider === 'local' ? local
+                        : openai;
             runPromise = (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
                 .withResponse().then((response) => {
                     response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
@@ -523,7 +527,7 @@ export class OpenAIApiWrapper {
             args.stream = true;
 
             // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
-            if (args.response_format?.type == 'json_object' && ['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'].indexOf(args.model) !== -1) {
+            if (args.response_format?.type == 'json_object' && ['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'].indexOf(args.model) !== -1) {
                 const userMessage = args.messages.filter(message => message.role === 'user');
                 const lastUserMessage = args.messages[args.messages.indexOf(userMessage[userMessage.length - 1])];
                 if (!(lastUserMessage.content as string).includes('json')) {
@@ -545,7 +549,7 @@ export class OpenAIApiWrapper {
             } else { }
 
             let imagePrompt = 0;
-            if (['gpt-4-vision-preview'].indexOf(args.model) !== -1) {
+            if (['gpt-4-vision-preview', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09'].indexOf(args.model) !== -1) {
                 args.messages.forEach(message => {
                     if (Array.isArray(message.content)) {
                         message.content.forEach((content: ChatCompletionContentPart) => {
@@ -606,9 +610,9 @@ export class OpenAIApiWrapper {
             // gpt-4-1106-preview に未対応のため、gpt-4に置き換え。プロンプトのトークンを数えるだけなのでモデルはどれにしてもしても同じだと思われるが。。。
             if (args.model.startsWith('claude-')) {
                 // 本当はAPIの戻りでトークン数を出したいけど、API投げる前にトークン数表示するログにしてしまったので、やむなくtiktokenのトークン数を表示する。APIで入力トークン数がわかったらそれを上書きするようにした。
-                tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             } else {
-                tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             }
             // tokenCount.prompt_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             tokenCount.prompt_tokens += imagePrompt;
@@ -621,11 +625,11 @@ export class OpenAIApiWrapper {
                     this.baseTime = Date.now(); // baseTimeを更新しておく。
                     const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
                     // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
-                    // tokenCount.completion_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                    // tokenCount.completion_tokens = encoding_for_model((['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
                     if (args.model.startsWith('claude-')) {
                         // claudeの場合はAPIレスポンスでトークン数がわかっているのでそれを使う。
                     } else {
-                        tokenCount.completion_tokens = getEncoder((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                        tokenCount.completion_tokens = getEncoder((['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
                     }
                     const completion_tokens = numForm(tokenCount.completion_tokens, 6);
 
@@ -797,6 +801,8 @@ export class TokenCount {
         'gpt-4-32k': 'gpt4-32k',
         'gpt-4-32k-0314': 'gpt4-32k',
         'gpt-4-32k-0613': 'gpt4-32k',
+        'gpt-4-turbo': 'gpt4-128',
+        'gpt-4-turbo-2024-04-09': 'gpt4-128',
         'gpt-4-turbo-preview': 'gpt4-128',
         'gpt-4-1106-preview': 'gpt4-128',
         'gpt-4-0125-preview': 'gpt4-128',

@@ -1,5 +1,5 @@
 import * as  fs from 'fs';
-import { Observable, finalize, map, tap, toArray } from 'rxjs';
+import { Observable, defer, finalize, forkJoin, map, of, tap, toArray } from 'rxjs';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 import fss from './fss.js';
@@ -238,6 +238,94 @@ export abstract class BaseStep extends BaseStepInterface<string> {
         });
     }
 
+    /**
+     * メイン処理。
+     * initPromptで作ったものを手で修正して使うこともあるので、
+     * 敢えてファイルからプロンプトを読み込ませるようにしてある。
+     * @param {boolean} [isForce=false] resultファイルがあっても再実行する場合はtrueにする。refineIndexの機能には対応していないので注意。
+     * @param {number} [refineIndex=0] セルフリファインの二周目以降から開始する場合はここで指定する。
+     * @returns 
+     */
+    runRx(isForce: boolean = false, refineIndex: number = 0): Observable<string> {
+        // TODO refineIndexが指定されているときの!isForceの挙動が怪しい。
+        if (!isForce && fs.existsSync(this.resultPath) && fs.statSync(this.resultPath).size > 0) {
+            // console.log(this.resultPath);
+            console.log(`${Utils.formatDate()} done ${this.label}`);
+            return of(this.result);
+        } else { }
+        // スキップ指定されていたら既存の処理結果、もしくは空文字を返す。
+        if (this.isSkip) {
+            console.log(`${Utils.formatDate()} skip ${this.label}`);
+            return of(this.result || '');
+        } else { }
+        return new Observable<string>(subscriber => {
+            // return new Promise<string>((resolveRoot, rejectRoot) => {
+            fs.readFile(this.promptPath, 'utf-8', (err, prompt: string) => {
+                // messages
+                const messages: ChatCompletionMessageParam[] = [];
+                this.systemMessage = (this.lang === 'ja' ? this.systemMessageJa : this.systemMessageEn) || this.systemMessage || '';
+                if (this.systemMessage) {
+                    messages.push({ role: 'system', content: this.systemMessage });
+                } else { }
+
+                // presetMessages
+                if (this.presetMessages.length > 0) {
+                    messages.push(...this.presetMessages);
+                } else { }
+
+                if (this.visionPath) {
+                    // 画像を読み込ませるときはモデルを変える。
+                    this.model = 'gpt-4-vision-preview';
+                    messages.push({
+                        role: 'user', content: [
+                            { type: 'text', text: prompt },
+                            { type: 'image_url', image_url: { url: this.visionPath } }
+                        ]
+                    });
+                } else {
+                    messages.push({ role: 'user', content: prompt });
+                }
+
+                this.assistantMessage = (this.lang === 'ja' ? this.assistantMessageJa : this.assistantMessageEn) || this.assistantMessage || '';
+                if (this.assistantMessage) {
+                    messages.push({ role: 'assistant', content: this.assistantMessage });
+                } else { }
+
+                for (let i = 0; i < refineIndex; i++) {
+                    messages.push({ role: 'assistant', content: this.getRefineData(i) });
+                    messages.push(this.refineMessages[i]);
+                }
+
+                // refineの回数がrefineMessagesの数より少ない間はrefineを掛ける。
+                const refine = () => {
+                    let outputPath: string;
+                    if (refineIndex < this.refineMessages.length) {
+                        outputPath = `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.refine-${refineIndex}.md`; // refine用のファイルパス
+                    } else {
+                        outputPath = this.resultPath;
+                    }
+                    this.runStream(messages, outputPath).subscribe({
+                        next: (result: string) => {
+                            // refine
+                            if (refineIndex < this.refineMessages.length) {
+                                // 前回結果を追記してrefineを掛ける
+                                messages.push({ role: 'assistant', content: result });
+                                messages.push(this.refineMessages[refineIndex]);
+                                refineIndex++;
+                                refine();
+                            } else {
+                                // no refineMessages
+                                subscriber.next(this.postProcess(result));
+                            }
+                        },
+                        error: subscriber.error,
+                    });
+                };
+                refine();
+            });
+        });
+    }
+
     runStream(messages: ChatCompletionMessageParam[], outputPath: string): Observable<string> {
         let content = '';
         let isInit = false;
@@ -429,6 +517,39 @@ export class MultiStep extends BaseStepInterface<string[]> {
         }
     }
 
+    runRx(isForce: boolean = false, refineIndex: number = 0): Observable<string[]> {
+        this.agentName = this.childStepList[0]?.agentName;
+        if (this.isSkip) {
+            // スキップ指定されていたら空文字を返す。
+            // skipの時は子ステップもskipにして一応実行しておく。もしかするとrunの中で微妙に細かいところやっておきたくなるかもしれないので。
+            return forkJoin(this.childStepList.map(step => { step.isSkip = this.isSkip; return step.runRx(); }));
+        } else {
+            return new Observable<string[]>((subscriber) => {
+                forkJoin(this.childStepList.map(step => step.runRx(isForce, refineIndex))).pipe(
+                    tap((resultList: string[]) => {
+                        // 全部まとめてファイルに出力する。
+                        fss.writeFile(this.resultPath, resultList.join('\n\n---\n\n'), (err: any) => {
+                            if (err) subscriber.error(err);
+                            // まとめてJSONにもする。
+                            const summary = this.childStepList.reduce((prev: any, step: BaseStep, index: number) => {
+                                prev[step.label.substring(step.constructor.name.length + 1)] = resultList[index];
+                                return prev;
+                            }, {} as { [key: string]: string });
+                            fss.writeFile(this.formedPath, JSON.stringify(summary), (err: any) => {
+                                if (err) subscriber.error(err);
+                                subscriber.next(this.postProcess(resultList));
+                            });
+                        });
+                    })
+                ).subscribe({
+                    // next: subscriber.next, // ファイル出力が完了してからnextを呼ぶのでここでは不要。
+                    error: subscriber.error,
+                    complete: subscriber.complete,
+                });
+            });
+        }
+    }
+
     postProcess(result: string[]): string[] {
         return result;
     }
@@ -442,4 +563,13 @@ export function getStepInstance<T extends BaseStep | MultiStep>(stepClass: { new
     } else {
         return CONTAINER[stepClass.name] = new stepClass();
     }
+}
+
+// それぞれのステップをObservableに変換する関数
+export function runStep(stepClass: typeof BaseStepInterface<string | string[]>) {
+    return defer(() => {
+        let obj = getStepInstance(stepClass as any);
+        obj.initPrompt();
+        return obj.run();  // Observable<string>を返す
+    });
 }
