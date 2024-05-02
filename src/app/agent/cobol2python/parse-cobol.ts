@@ -6,7 +6,8 @@ function extractBytesFromPic(pic: string): number {
         { regex: /9\((\d+)\)/, bytesPerUnit: 1 }, // 数値
         { regex: /A\((\d+)\)/, bytesPerUnit: 1 }, // 英字
         { regex: /X\((\d+)\)/, bytesPerUnit: 1 }, // 任意の文字
-        { regex: /S9\((\d+)\)/, bytesPerUnit: 1, additionalBytes: 1 } // 符号付き数値
+        { regex: /S9\((\d+)\)/, bytesPerUnit: 1, additionalBytes: 1 }, // 符号付き数値
+        { regex: /\+9\((\d+)\)/, bytesPerUnit: 1, additionalBytes: 1 } // 符号付き数値
     ];
 
     patterns.forEach(pattern => {

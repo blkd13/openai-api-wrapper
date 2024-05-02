@@ -373,10 +373,10 @@ export async function main() {
     let obj;
     return Promise.resolve().then(() => {
     }).then(() => {
-        // obj = getStepInstance(Step0010_SimpleConvert);
-        // obj.initPrompt();
-        // // return obj.run();
-        // // // obj.postProcess(obj.childStepList.map(chil => chil.result));
+        obj = getStepInstance(Step0010_SimpleConvert);
+        obj.initPrompt();
+        return obj.run();
+        // obj.postProcess(obj.childStepList.map(chil => chil.result));
     }).then(() => {
         obj = getStepInstance(Step0020_ConvertToDoc);
         obj.initPrompt();
@@ -387,16 +387,11 @@ export async function main() {
         return obj.run();
         // obj.postProcess(obj.childStepList.map(chil => chil.result));
     }).then(() => {
-        //     obj = getStepInstance(Step0040_RebuildDocument);
-        //     obj.initPrompt();
-        //     // return obj.run();
+        obj = getStepInstance(Step0040_RebuildDocument);
+        obj.initPrompt();
+        return obj.run();
         // obj.postProcess(obj.childStepList.map(chil => chil.result));
     }).then(() => {
-    }).then(() => {
-    }).then(() => {
-    }).then(() => {
-    }).then(() => {
-
     });
 }
 
