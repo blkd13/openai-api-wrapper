@@ -87,12 +87,12 @@ function toValueString(value: string | null) {
     if (value == null) {
         return 'None';
     }
-    const a: any = {
+    const CONSTANT: any = {
         'ZERO': 0,
-        'SPACE': '',
+        'SPACE': "' '",
     };
-    if (value in a) {
-        return a[value];
+    if (value in CONSTANT) {
+        return CONSTANT[value];
     } else if (value.startsWith("'")) {
         return value;
     } else if (value.match(/[-0-9]/g)) {
@@ -261,7 +261,7 @@ export function lineToObjet(dtoLines: string[], copyMas: { [key: string]: GroupC
                 // FDはスキップ
             } else if (words[0] === 'COPY') {
                 // COPY句
-                copyName = words[1];
+                copyName = words[1].split('.')[0].replaceAll(/["' ]/g, '');
             } else if (words[0] === 'EXEC') {
                 // EXEC SQL句
                 if (words[0] === 'EXEC' && words[1] === 'SQL') {
@@ -284,7 +284,7 @@ export function lineToObjet(dtoLines: string[], copyMas: { [key: string]: GroupC
                 if (words.length === 2) {
                     // グループ項目行
                     cur = new GroupClause(curLayer, words[1]);
-                } else if (words.length === 4 && words[2] === 'OCCURS') {
+                } else if (words.length >= 4 && words[2] === 'OCCURS') {
                     // グループ項目行(OCCURSあり)
                     cur = new GroupClause(curLayer, words[1], Number(words[3]));
                 } else if (words.length >= 4 && words[2] === 'REDEFINES') {
@@ -313,7 +313,11 @@ export function lineToObjet(dtoLines: string[], copyMas: { [key: string]: GroupC
                 } else if (words[2] === 'COMP-2') {
                     // 何故PICにしていないのかは不明だが、PICとして扱う
                     cur = new PicClause(curLayer, words[1], words[2], words[5] || null);
+                } else if (words.slice(1).join(' ') === 'FILLER SIGN IS LEADING SEPARATE CHARACTER') {
+                    // TODO この行をどう反映させるべきか不明
+                    // console.log('FILLER SIGN IS LEADING SEPARATE CHARACTER');
                 } else {
+                    // console.log(`unknown ${(words.length === 4 && words[2] === 'OCCURS')} [${words.length}]${words}`);
                     console.log(`未対応の行:PIC: ${dtoLine}`);
                 }
             } else {
@@ -363,3 +367,28 @@ export function parseWorkingStorageSection(cobolText: string, copyMas: { [key: s
     // throw new Error('Not implemented');
     return dtoObject;
 }
+
+
+import * as fs from 'fs';
+import path from 'path';
+
+import fss from '../../common/fss.js';
+const COBOL_DIR = 'E:/workspace/APF/wrapflow/wpf/BL/COPY句/';
+
+// COPY句をロードして、「ファイルID：Dtoオブジェクト」の連想配列にする。
+const copyFileList = fss.getFilesRecursively(COBOL_DIR).filter(filePath => filePath.endsWith('.cpy'));
+// COPY句は入れ子もありうるので2回ループしておく
+const cpyMap = [...copyFileList, ...copyFileList].reduce((prev, curr) => {
+    const copyObj = parseWorkingStorageSection(fs.readFileSync(curr, 'utf-8'), prev, true);
+    prev[path.basename(curr).replace(/\..+$/, '')] = copyObj;
+    // prev[path.basename(curr)] = prev[path.basename(curr)];
+    return prev;
+}, {} as { [key: string]: GroupClause });
+console.log('copyLoaded');
+// const _path = 'E:/workspace/APF/wrapflow/wpf/BL/spp/WCRW110.pco';
+const _path = `E:/workspace/APF/wrapflow/wpf/WPF_SPP/MAKE/src/spp/sub/WCRW120.pco`;
+const cobolText = fs.readFileSync(_path, 'utf8');
+
+// console.log(cpyMap);
+const obj = parseWorkingStorageSection(cobolText, cpyMap, false);
+// console.dir(obj, { depth: 100 });

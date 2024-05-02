@@ -108,9 +108,6 @@ export class Step0010_SimpleConvert extends MultiStepCobol2Python {
             console.log(`cobolText: ${path.basename(targetFilePath)} ${cobolText.split('\n').filter(line => line[6] === ' ').length} ${cobolText.split('\n').length}`);
             // サブルーチン毎に分割する
             const subroutineList = getSubroutineList(cobolText);
-            subroutineList.forEach(subroutine => {
-                grepCaller(path.basename(targetFilePath), subroutine);
-            });
             return subroutineList.map((section, innerIndex) => {
                 return new Step0010_SimpleConvertChil(targetFilePath, innerIndex, section.name, section.code.split('\n').filter(line => line[6] === ' ').join('\n'));
             });
@@ -205,8 +202,30 @@ export class Step0020_ConvertToDoc extends MultiStepCobol2Python {
         });
     }
 
+    /**
+     * 結果をファイル名ごとにサマる
+     * @param result 
+     */
     postProcess(result: string[]): string[] {
-        return [];
+        // 結果をファイル名ごとにサマる
+        const codes = (this.childStepList as any as { targetFilePath: string, sectionName: string }[]).reduce((prev, curr, index) => {
+            const doc = `## ${curr.sectionName}\n\n${Utils.addMarkdownDepth(result[index], 2)}`;
+            const name = path.basename(curr.targetFilePath).split('.')[0];
+            // ファイル名をキーにしたマップを作る
+            if (name in prev) {
+                prev[name].push(doc);
+            } else {
+                prev[name] = [doc];
+            }
+            return prev;
+        }, {} as { [key: string]: string[] });
+
+        // 書き出し
+        Object.entries(codes).forEach(([targetFilePath, documentList]) => {
+            const name = path.basename(targetFilePath).split('.')[0];
+            fss.writeFileSync(`./results/${this.agentName}/${PROJECT_NAME}/${name}.md`, `# ${name}\n\n${documentList.join('\n\n')}`);
+        });
+        return result;
     }
 }
 
@@ -354,10 +373,10 @@ export async function main() {
     let obj;
     return Promise.resolve().then(() => {
     }).then(() => {
-        obj = getStepInstance(Step0010_SimpleConvert);
-        obj.initPrompt();
-        return obj.run();
-        // obj.postProcess(obj.childStepList.map(chil => chil.result));
+        // obj = getStepInstance(Step0010_SimpleConvert);
+        // obj.initPrompt();
+        // // return obj.run();
+        // // // obj.postProcess(obj.childStepList.map(chil => chil.result));
     }).then(() => {
         obj = getStepInstance(Step0020_ConvertToDoc);
         obj.initPrompt();
@@ -365,12 +384,12 @@ export async function main() {
     }).then(() => {
         obj = getStepInstance(Step0030_DomainClassify);
         obj.initPrompt();
-        // return obj.run();
+        return obj.run();
         // obj.postProcess(obj.childStepList.map(chil => chil.result));
     }).then(() => {
-        obj = getStepInstance(Step0040_RebuildDocument);
-        obj.initPrompt();
-        // return obj.run();
+        //     obj = getStepInstance(Step0040_RebuildDocument);
+        //     obj.initPrompt();
+        //     // return obj.run();
         // obj.postProcess(obj.childStepList.map(chil => chil.result));
     }).then(() => {
     }).then(() => {
