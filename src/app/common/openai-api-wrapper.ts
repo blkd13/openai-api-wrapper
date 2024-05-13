@@ -340,7 +340,7 @@ class RunBit {
                     : this.openApiWrapper.wrapperOptions.provider === 'mistral' ? mistral
                         : this.openApiWrapper.wrapperOptions.provider === 'deepseek' ? deepSeek
                             : this.openApiWrapper.wrapperOptions.provider === 'local' ? local
-                        : openai;
+                                : openai;
             runPromise = (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
                 .withResponse().then((response) => {
                     response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
@@ -727,6 +727,7 @@ export class OpenAIApiWrapper {
 // TiktokenModelが新モデルに追いつくまでは自己定義で対応する。
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
 export type GPTModels = TiktokenModel
+    | 'gpt-4o-2024-05-13' | 'gpt-4o'
     | 'llama2-70b-4096'
     | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b'
     | 'mistral-small-2312' | 'mistral-small' | 'mistral-small-2402' | 'mistral-small-latest' | 'mistral-medium-latest' | 'mistral-medium-2312' | 'mistral-medium' | 'mistral-large-latest' | 'mistral-large-2402' | 'mistral-embed'
@@ -747,6 +748,7 @@ export class TokenCount {
         'gpt4-32k': { prompt: 0.06000, completion: 0.12000, },
         'gpt4-vis': { prompt: 0.01000, completion: 0.03000, },
         'gpt4-128': { prompt: 0.01000, completion: 0.03000, },
+        'gpt4-o  ': { prompt: 0.00500, completion: 0.01500, },
         'cla-1.2 ': { prompt: 0.00800, completion: 0.02400, },
         'cla-2   ': { prompt: 0.00800, completion: 0.02400, },
         'cla-2.1 ': { prompt: 0.00800, completion: 0.02400, },
@@ -807,6 +809,8 @@ export class TokenCount {
         'gpt-4-1106-preview': 'gpt4-128',
         'gpt-4-0125-preview': 'gpt4-128',
         'gpt-4-vision-preview': 'gpt4-vis',
+        'gpt-4-o': 'gpt4-o  ',
+        'gpt-4o-2024-05-13': 'gpt4-o  ',
         'gpt-3.5-turbo': 'gpt3-16k',
         'gpt-3.5-turbo-0125': 'gpt3-16k',
         'gpt-3.5-turbo-0301': 'gpt3.5  ',
