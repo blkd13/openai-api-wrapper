@@ -6,6 +6,8 @@ import sizeOf from 'image-size';
 
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, VertexAI } from '@google-cloud/vertexai';
+
 import { APIPromise, RequestOptions } from 'openai/core';
 import { ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionCreateParamsStreaming } from 'openai/resources/chat/completions';
 import { Stream } from 'openai/streaming';
@@ -75,6 +77,9 @@ export const azureDeployTpmMap: Record<string, number> = {
     'gpt-4-vision-preview': 10000,
 };
 
+// Initialize Vertex with your Cloud project and location
+const vertex_ai = new VertexAI({ project: process.env['GCP_PROJECT_ID'] || 'dummy', location: process.env['GCP_REGION'] || 'us-central1' });
+
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
  */
@@ -94,7 +99,7 @@ function getEncoder(model: TiktokenModel): Tiktoken {
 
 export interface WrapperOptions {
     allowLocalFiles: boolean;
-    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local';
+    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai';
 }
 
 // Uint8Arrayを文字列に変換
@@ -334,6 +339,126 @@ class RunBit {
                 // console.log('readStreamStart');
                 return readStream();
             });
+        } else if (this.openApiWrapper.wrapperOptions.provider === 'vertexai') {
+            // 'gemini-1.5-flash-001'
+            args.max_tokens = args.max_tokens || 8192;
+            args.top_p = args.top_p || 0.1;
+            args.temperature = args.temperature || 0;
+            // Instantiate the models
+            const generativeModel = vertex_ai.preview.getGenerativeModel({
+                model: args.model,
+                generationConfig: {
+                    maxOutputTokens: args.max_tokens,
+                    temperature: args.temperature,
+                    topP: args.top_p,
+                },
+                safetySettings: [
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, }
+                ],
+            });
+            args.messages[0].content = args.messages[0].content || '';
+            const req: GenerateContentRequest = {
+                contents: [
+                    // {
+                    //     role: 'user', parts: [
+                    //         { text: `konnichiha` },
+                    //         {
+                    //             inlineData: {
+                    //                 mimeType: 'image/jpeg',
+                    //                 data: fs.readFileSync('./sample.jpg').toString('base64')
+                    //             }
+                    //         }
+                    //     ]
+                    // }
+                ],
+            };
+            args.messages.forEach(message => {
+                if (typeof message.content === 'string') {
+                    if (message.role === 'system') {
+                        req.systemInstruction = message.content;
+                    } else {
+                        req.contents.push({ role: message.role, parts: [{ text: message.content }] });
+                    }
+                } else if (Array.isArray(message.content)) {
+                    req.contents.push({
+                        role: message.role,
+                        parts:
+                            message.content.map(content => {
+                                if (content.type === 'image_url') {
+                                    return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url }, };
+                                } else if (content.type === 'text') {
+                                    return { text: content.text as string };
+                                } else {
+                                    console.log('unknown sub message type');
+                                    return null;
+                                }
+                            }).filter(is => is) as Part[],
+                    });
+                } else {
+                    console.log('unknown message type');
+                }
+            });
+
+            console.dir(generativeModel, { depth: null });
+            console.dir(req, { depth: null });
+            runPromise = generativeModel.generateContentStream(req).then((streamingResp) => {
+
+                // vertexaiの場合はレスポンスヘッダーが取れない
+                // fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response: { status: response.response.status, headers } }, Utils.genJsonSafer()), {}, (err) => { });
+
+                let tokenBuilder: string = '';
+
+                const _that = this;
+
+                // ストリームからデータを読み取る非同期関数
+                async function readStream() {
+                    while (true) {
+                        const { value, done } = await streamingResp.stream.next();
+                        if (done) {
+
+                            // ストリームが終了したらループを抜ける
+                            tokenCount.cost = tokenCount.calcCost();
+                            console.log(logObject.output('fine', ''));
+                            observer.complete();
+
+                            _that.openApiWrapper.fire();
+
+                            // ファイルに書き出す
+                            const trg = args.response_format?.type === 'json_object' ? 'json' : 'md';
+                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
+                            break;
+                        }
+
+                        // 中身を取り出す
+                        const content = value;
+                        // console.log(content);
+
+                        // 中身がない場合はスキップ
+                        if (!content || !content.candidates) { continue; }
+                        // ファイルに書き出す
+                        fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, JSON.stringify(content) || '', {}, () => { });
+                        // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
+                        const text = content.candidates[0].content.parts[0].text || '';
+                        tokenBuilder += text;
+
+                        if (content.usageMetadata) {
+                            tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
+                            tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
+                        } else { }
+                        // streamHandlerを呼び出す
+                        observer.next(text);
+                    }
+                    return;
+                }
+                // ストリームの読み取りを開始
+                return readStream();
+
+            }).catch(error => {
+                throw error;
+            });
         } else {
             const client =
                 this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq
@@ -487,9 +612,16 @@ export class OpenAIApiWrapper {
         'cla-2.1 ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-3-hk': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-3-sn': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-35sn': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-3-op': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
         'dps-code': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
         'dps-chat': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+
+        'gem-15fl': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'gem-15pr': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'gem-10pr': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'gem-10pv': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+
         // 'anthropic-ratelimit-requests-limit': '50',
         // 'anthropic-ratelimit-requests-remaining': '46',
         // 'anthropic-ratelimit-requests-reset': '2024-03-09T08:35:00Z',
@@ -732,9 +864,11 @@ export class OpenAIApiWrapper {
 export type GPTModels = TiktokenModel
     | 'gpt-4o-2024-05-13' | 'gpt-4o'
     | 'llama2-70b-4096'
+    | 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' | 'gemini-1.0-pro-001' | 'gemini-1.0-pro-vision-001'
+    | 'gemini-1.5-flash' | 'gemini-1.5-pro' | 'gemini-1.0-pro' | 'gemini-1.0-pro-vision'
     | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b'
     | 'mistral-small-2312' | 'mistral-small' | 'mistral-small-2402' | 'mistral-small-latest' | 'mistral-medium-latest' | 'mistral-medium-2312' | 'mistral-medium' | 'mistral-large-latest' | 'mistral-large-2402' | 'mistral-embed'
-    | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-sonnet-20240229' | 'claude-3-opus-20240229'
+    | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-sonnet-20240229' | 'claude-3-opus-20240229' | 'claude-3-5-sonnet-20240620'
     | 'deepseek-coder' | 'deepseek-chat';
 
 /**
@@ -757,6 +891,7 @@ export class TokenCount {
         'cla-2.1 ': { prompt: 0.00800, completion: 0.02400, },
         'cla-3-hk': { prompt: 0.00025, completion: 0.00125, },
         'cla-3-sn': { prompt: 0.00300, completion: 0.01500, },
+        'cla-35sn': { prompt: 0.00300, completion: 0.01500, },
         'cla-3-op': { prompt: 0.01500, completion: 0.07500, },
         'g-mxl-87': { prompt: 0.00027, completion: 0.00027, },
         'g-lm2-70': { prompt: 0.00070, completion: 0.00080, },
@@ -767,6 +902,10 @@ export class TokenCount {
         'msl-lg  ': { prompt: 0.00870, completion: 0.02400, },
         'dps-code': { prompt: 0.00000, completion: 0.00000, },
         'dps-chat': { prompt: 0.00000, completion: 0.00000, },
+        'gem-15fl': { prompt: 0.000125, completion: 0.00025, },
+        'gem-15pr': { prompt: 0.00250, completion: 0.00250, },
+        'gem-10pr': { prompt: 0.000125, completion: 0.00025, },
+        'gem-10pv': { prompt: 0.000125, completion: 0.000125, },
     };
 
     static SHORT_NAME: { [key: string]: string } = {
@@ -832,6 +971,7 @@ export class TokenCount {
         'claude-3-haiku-20240307': 'cla-3-hk',
         'claude-3-sonnet-20240229': 'cla-3-sn',
         'claude-3-opus-20240229': 'cla-3-op',
+        'claude-3-5-sonnet-20240620': 'cla-35sn',
         'mistral-tiny-2312': 'msl-tiny',
         'mistral-tiny': 'msl-tiny',
         'open-mixtral-8x7b': 'msl-87b ',
@@ -847,6 +987,14 @@ export class TokenCount {
         'mistral-embed': 'msl-em  ',
         'deepseek-coder': 'dps-code',
         'deepseek-chat': 'dps-chat',
+        'gemini-1.5-flash-001': 'gem-15fl',
+        'gemini-1.5-pro-001': 'gem-15pr',
+        'gemini-1.0-pro-001': 'gem-10pr',
+        'gemini-1.0-pro-vision-001': 'gem-10pv',
+        'gemini-1.5-flash': 'gem-15fl',
+        'gemini-1.5-pro': 'gem-15pr',
+        'gemini-1.0-pro': 'gem-10pr',
+        'gemini-1.0-pro-vision': 'gem-10pv',
     };
 
     // コスト
