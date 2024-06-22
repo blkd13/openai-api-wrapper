@@ -402,8 +402,8 @@ class RunBit {
                 }
             });
 
-            console.dir(generativeModel, { depth: null });
-            console.dir(req, { depth: null });
+            // console.dir(generativeModel, { depth: null });
+            // console.dir(req, { depth: null });
             runPromise = generativeModel.generateContentStream(req).then((streamingResp) => {
 
                 // vertexaiの場合はレスポンスヘッダーが取れない
