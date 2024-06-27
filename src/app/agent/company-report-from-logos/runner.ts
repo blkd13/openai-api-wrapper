@@ -1,8 +1,9 @@
 import { fileURLToPath } from 'url';
 import * as  fs from 'fs';
-import { BaseStep, MultiStep, StepOutputFormat } from "../../common/base-step.js";
+import { BaseStep, MultiStep, PromptLang, StepOutputFormat, aiApi } from "../../common/base-step.js";
 import { GPTModels } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
+aiApi.wrapperOptions.provider = 'vertexai';
 
 /**
  * このエージェント用の共通設定。
@@ -10,8 +11,9 @@ import { Utils } from '../../common/utils.js';
  */
 abstract class BaseStepCompanyReportFromLogos extends BaseStep {
     agentName: string = Utils.basename(Utils.dirname(import.meta.url));
-    model: GPTModels = 'gpt-4-1106-preview';
-    systemMessage = 'Experts in AI-related businesses'; // AIビジネスの専門家
+    model: GPTModels = 'gemini-1.5-flash';
+    systemMessageJa = 'Experts in AI-related businesses'; // AIビジネスの専門家
+    lang: PromptLang = 'ja';
     format = StepOutputFormat.MARKDOWN;
 }
 
@@ -23,19 +25,20 @@ class Step0000_ImageDetection extends MultiStep {
         super();
         // 画像認識の子ステップ
         class Step0000_ImageDetectionChil extends BaseStepCompanyReportFromLogos {
-            model: GPTModels = 'gpt-4-vision-preview';
+            // model: GPTModels = 'gpt-4-vision-preview';
             format = StepOutputFormat.JSON;
-            constructor(public visionPath: string) {
+            constructor(filePath: string) {
                 super();
-                this.label = `${this.constructor.name}_${Utils.basename(visionPath)}`;
+                this.label = `${this.constructor.name}`;
                 this.chapters = [
                     { content: `List the names of the companies or the services listed in this image. output JSON format.{"nameList":[...]}` },
                 ];
+                this.documents.push(filePath);
             }
         }
         // 画像ファイルのパスを指定する。
         const files = [
-            'assets/ai-business-experts.png',
+            'file:///Users/user/Downloads/sample.jpg',
         ];
         this.childStepList = files.map(filePath => new Step0000_ImageDetectionChil(filePath));
     }

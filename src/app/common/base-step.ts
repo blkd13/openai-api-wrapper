@@ -1,6 +1,6 @@
 import * as  fs from 'fs';
 import { Observable, defer, finalize, forkJoin, map, of, tap, toArray } from 'rxjs';
-import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import { ChatCompletionContentPart, ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 import fss from './fss.js';
 import { GPTModels, OpenAIApiWrapper } from "./openai-api-wrapper.js";
@@ -19,6 +19,7 @@ export interface StructuredPrompt {
     titleEn?: string;
     contentJa?: string;
     contentEn?: string;
+    document?: string;
 }
 export type PromptLang = 'ja' | 'en';
 export type Prompt = string | Partial<Record<PromptLang, string>>;
@@ -33,7 +34,7 @@ function toString(prompt: Prompt, lang: PromptLang) {
  * @param {number} layer
  * @returns {string}
  */
-function toMarkdown(chapter: StructuredPrompt, lang: PromptLang, layer: number = 1) {
+function toMarkdown(chapter: StructuredPrompt, lang: PromptLang, layer: number = 1): string {
     let sb = '';
     let title;
     title = (lang === 'ja' ? chapter.titleJa : chapter.titleEn) || chapter.title || '';
@@ -109,7 +110,6 @@ export abstract class BaseStep extends BaseStepInterface<string> {
     assistantMessageJa = '';
     assistantMessageEn = '';
     assistantMessage = '';
-    visionPath = ''; // 画像読み込ませるとき用のパス。現状は1ステップ1画像のみにしておく。
     temperature = 0.0;
     format: StepOutputFormat = StepOutputFormat.MARKDOWN;
     presetMessages: ChatCompletionMessageParam[] = []; // presetMessagesを使うと、presetMessagesをpromptの前にそのまま付与する。これはセルフリファインのために使う。
@@ -117,6 +117,8 @@ export abstract class BaseStep extends BaseStepInterface<string> {
 
     /** create prompt */
     chapters: StructuredPrompt[] = []; // {title: string, content: string, children: chapters[]}
+    // 画像とかメディアファイル読ませるとき用
+    documents: string[] = []; // {title: string, content: string, children: chapters[]}
 
     /** io */
     get promptPath() { return `./prompts_and_responses/${this.agentName}/${this.labelPrefix}${Utils.safeFileName(this.label)}.prompt.md`; }
@@ -183,18 +185,9 @@ export abstract class BaseStep extends BaseStepInterface<string> {
                     messages.push(...this.presetMessages);
                 } else { }
 
-                if (this.visionPath) {
-                    // 画像を読み込ませるときはモデルを変える。
-                    this.model = 'gpt-4-vision-preview';
-                    messages.push({
-                        role: 'user', content: [
-                            { type: 'text', text: prompt },
-                            { type: 'image_url', image_url: { url: this.visionPath } }
-                        ]
-                    });
-                } else {
-                    messages.push({ role: 'user', content: prompt });
-                }
+                const contents: ChatCompletionContentPart[] = [{ type: 'text', text: prompt }];
+                messages.push({ role: 'user', content: contents });
+                for (const doc of this.documents) { contents.push({ type: 'image_url', image_url: { url: doc } }); }
 
                 this.assistantMessage = (this.lang === 'ja' ? this.assistantMessageJa : this.assistantMessageEn) || this.assistantMessage || '';
                 if (this.assistantMessage) {
@@ -273,18 +266,9 @@ export abstract class BaseStep extends BaseStepInterface<string> {
                     messages.push(...this.presetMessages);
                 } else { }
 
-                if (this.visionPath) {
-                    // 画像を読み込ませるときはモデルを変える。
-                    this.model = 'gpt-4-vision-preview';
-                    messages.push({
-                        role: 'user', content: [
-                            { type: 'text', text: prompt },
-                            { type: 'image_url', image_url: { url: this.visionPath } }
-                        ]
-                    });
-                } else {
-                    messages.push({ role: 'user', content: prompt });
-                }
+                const contents: ChatCompletionContentPart[] = [{ type: 'text', text: prompt }];
+                messages.push({ role: 'user', content: contents });
+                for (const doc of this.documents) { contents.push({ type: 'image_url', image_url: { url: doc } }); }
 
                 this.assistantMessage = (this.lang === 'ja' ? this.assistantMessageJa : this.assistantMessageEn) || this.assistantMessage || '';
                 if (this.assistantMessage) {

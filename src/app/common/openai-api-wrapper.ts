@@ -4,8 +4,13 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import sizeOf from 'image-size';
 
+// configureGlobalFetchを読み込むとfetchのproxyが効くようになるので、VertexAI用にただ読み込むだけ。
+import * as configureGlobalFetch from './configureGlobalFetch.js'; configureGlobalFetch;
+
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, VertexAI } from '@google-cloud/vertexai';
+
 import { APIPromise, RequestOptions } from 'openai/core';
 import { ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionCreateParamsStreaming } from 'openai/resources/chat/completions';
 import { Stream } from 'openai/streaming';
@@ -75,6 +80,9 @@ export const azureDeployTpmMap: Record<string, number> = {
     'gpt-4-vision-preview': 10000,
 };
 
+// Initialize Vertex with your Cloud project and location
+const vertex_ai = new VertexAI({ project: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', location: process.env['GCP_REGION'] || 'asia-northeast1' });
+
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
  */
@@ -94,7 +102,7 @@ function getEncoder(model: TiktokenModel): Tiktoken {
 
 export interface WrapperOptions {
     allowLocalFiles: boolean;
-    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local';
+    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai';
 }
 
 // Uint8Arrayを文字列に変換
@@ -334,13 +342,136 @@ class RunBit {
                 // console.log('readStreamStart');
                 return readStream();
             });
+        } else if (this.openApiWrapper.wrapperOptions.provider === 'vertexai') {
+            // 'gemini-1.5-flash-001'
+            // Instantiate the models
+            const generativeModel = vertex_ai.preview.getGenerativeModel({
+                model: args.model,
+                generationConfig: {
+                    maxOutputTokens: args.max_tokens || 8192,
+                    temperature: args.top_p || 0.1,
+                    topP: args.temperature || 0,
+                },
+                safetySettings: [
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, }
+                ],
+            });
+            args.messages[0].content = args.messages[0].content || '';
+            const req: GenerateContentRequest = {
+                contents: [
+                    // {
+                    //     role: 'user', parts: [
+                    //         { text: `konnichiha` },
+                    //         {
+                    //             inlineData: {
+                    //                 mimeType: 'image/jpeg',
+                    //                 data: fs.readFileSync('./sample.jpg').toString('base64')
+                    //             }
+                    //         }
+                    //     ]
+                    // }
+                ],
+            };
+            args.messages.forEach(message => {
+                if (typeof message.content === 'string') {
+                    if (message.role === 'system') {
+                        req.systemInstruction = message.content;
+                    } else {
+                        req.contents.push({ role: message.role, parts: [{ text: message.content }] });
+                    }
+                } else if (Array.isArray(message.content)) {
+                    req.contents.push({
+                        role: message.role,
+                        parts:
+                            message.content.map(content => {
+                                if (content.type === 'image_url') {
+                                    // TODO URLには対応していない
+                                    if (content.image_url.url.startsWith('data:')) {
+                                        return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, };
+                                    } else {
+                                        return { file_data: { file_uri: content.image_url.url } };
+                                    }
+                                } else if (content.type === 'text') {
+                                    return { text: content.text as string };
+                                } else {
+                                    console.log('unknown sub message type');
+                                    return null;
+                                }
+                            }).filter(is => is) as Part[],
+                    });
+                } else {
+                    console.log('unknown message type');
+                }
+            });
+            // console.dir(req, { depth: null });
+            // console.dir(generativeModel, { depth: null });
+            // console.dir(req, { depth: null });
+            runPromise = generativeModel.generateContentStream(req).then((streamingResp) => {
+
+                let tokenBuilder: string = '';
+
+                const _that = this;
+
+                // ストリームからデータを読み取る非同期関数
+                async function readStream() {
+                    while (true) {
+                        const { value, done } = await streamingResp.stream.next();
+                        if (done) {
+
+                            // ストリームが終了したらループを抜ける
+                            tokenCount.cost = tokenCount.calcCost();
+                            console.log(logObject.output('fine', ''));
+                            observer.complete();
+
+                            _that.openApiWrapper.fire();
+
+                            // ファイルに書き出す
+                            const trg = args.response_format?.type === 'json_object' ? 'json' : 'md';
+                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
+                            break;
+                        }
+
+                        // 中身を取り出す
+                        const content = value;
+                        // console.log(content);
+
+                        // 中身がない場合はスキップ
+                        if (!content || !content.candidates) { continue; }
+                        // ファイルに書き出す
+                        fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, JSON.stringify(content) || '', {}, () => { });
+
+                        // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
+                        const text = content.candidates[0].content.parts[0].text || '';
+                        tokenBuilder += text;
+
+                        if (content.usageMetadata) {
+                            tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
+                            tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
+
+                            // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
+                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response: content }, Utils.genJsonSafer()), {}, (err) => { });
+                        } else { }
+                        // streamHandlerを呼び出す
+                        observer.next(text);
+                    }
+                    return;
+                }
+                // ストリームの読み取りを開始
+                return readStream();
+
+            }).catch(error => {
+                throw error;
+            });
         } else {
             const client =
                 this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq
                     : this.openApiWrapper.wrapperOptions.provider === 'mistral' ? mistral
                         : this.openApiWrapper.wrapperOptions.provider === 'deepseek' ? deepSeek
                             : this.openApiWrapper.wrapperOptions.provider === 'local' ? local
-                        : openai;
+                                : openai;
             runPromise = (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
                 .withResponse().then((response) => {
                     response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
@@ -442,6 +573,10 @@ class RunBit {
     };
 }
 
+
+const VISION_MODELS = ['gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-vision-preview', 'gemini-1.5-flash-001', 'gemini-1.5-pro-001', 'gemini-1.0-pro-vision-001', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro-vision'];
+const JSON_MODELS = ['gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'];
+const GPT4_MODELS = ['gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview'];
 /**
  * OpenAIのAPIを呼び出すラッパークラス
  */
@@ -463,12 +598,13 @@ export class OpenAIApiWrapper {
     // レートリミット情報
     currentRatelimit: { [key: string]: Ratelimit } = {
         // openai
-        'gpt3.5  ': { limitRequests: 3500, limitTokens: 160000, remainingRequests: 1, remainingTokens: 4000, resetRequests: '0ms', resetTokens: '0s', },
-        'gpt3-16k': { limitRequests: 3500, limitTokens: 160000, remainingRequests: 1, remainingTokens: 16000, resetRequests: '0ms', resetTokens: '0s', },
-        'gpt4    ': { limitRequests: 5000, limitTokens: 80000, remainingRequests: 1, remainingTokens: 8000, resetRequests: '0ms', resetTokens: '0s', },
-        'gpt4-32k': { limitRequests: 5000, limitTokens: 80000, remainingRequests: 1, remainingTokens: 32000, resetRequests: '0ms', resetTokens: '0s', },
-        'gpt4-128': { limitRequests: 500, limitTokens: 300000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
-        'gpt4-vis': { limitRequests: 5, limitTokens: 300000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+        'gpt3.5  ': { limitRequests: 10000, limitTokens: 1000000, remainingRequests: 1, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+        'gpt3-16k': { limitRequests: 10000, limitTokens: 1000000, remainingRequests: 1, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+        'gpt4    ': { limitRequests: 10000, limitTokens: 300000, remainingRequests: 1, remainingTokens: 8000, resetRequests: '0ms', resetTokens: '0s', },
+        'gpt4-32k': { limitRequests: 10000, limitTokens: 300000, remainingRequests: 1, remainingTokens: 32000, resetRequests: '0ms', resetTokens: '0s', },
+        'gpt4-128': { limitRequests: 10000, limitTokens: 800000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+        'gpt4-vis': { limitRequests: 10000, limitTokens: 800000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+        'gpt4-o  ': { limitRequests: 10000, limitTokens: 800000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         // groq
         'g-mxl-87': { limitRequests: 10, limitTokens: 100000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         'g-lm2-70': { limitRequests: 10, limitTokens: 100000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
@@ -484,9 +620,16 @@ export class OpenAIApiWrapper {
         'cla-2.1 ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-3-hk': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-3-sn': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'cla-35sn': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-3-op': { limitRequests: 5, limitTokens: 100000, remainingRequests: 5, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
         'dps-code': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
         'dps-chat': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+
+        'gem-15fl': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'gem-15pr': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'gem-10pr': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'gem-10pv': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+
         // 'anthropic-ratelimit-requests-limit': '50',
         // 'anthropic-ratelimit-requests-remaining': '46',
         // 'anthropic-ratelimit-requests-reset': '2024-03-09T08:35:00Z',
@@ -496,7 +639,7 @@ export class OpenAIApiWrapper {
     };
 
     constructor(
-        public wrapperOptions: WrapperOptions = { allowLocalFiles: false, provider: 'openai' }
+        public wrapperOptions: WrapperOptions = { allowLocalFiles: false, provider: 'vertexai' }
     ) {
         this.options = options;
         this.options.stream = true;
@@ -527,7 +670,7 @@ export class OpenAIApiWrapper {
             args.stream = true;
 
             // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
-            if (args.response_format?.type == 'json_object' && ['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'].indexOf(args.model) !== -1) {
+            if (args.response_format?.type == 'json_object' && JSON_MODELS.indexOf(args.model) !== -1) {
                 const userMessage = args.messages.filter(message => message.role === 'user');
                 const lastUserMessage = args.messages[args.messages.indexOf(userMessage[userMessage.length - 1])];
                 if (!(lastUserMessage.content as string).includes('json')) {
@@ -549,18 +692,21 @@ export class OpenAIApiWrapper {
             } else { }
 
             let imagePrompt = 0;
-            if (['gpt-4-vision-preview', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09'].indexOf(args.model) !== -1) {
+            if (VISION_MODELS.indexOf(args.model) !== -1) {
                 args.messages.forEach(message => {
                     if (Array.isArray(message.content)) {
                         message.content.forEach((content: ChatCompletionContentPart) => {
                             if (content.type === 'image_url' && content.image_url && content.image_url.url) {
                                 // DANGER!!! ローカルファイルを読み込むのでオンラインから使わせるときはセキュリティ的に問題がある。
                                 // ファイルの種類を判定して、画像の場合はbase64に変換してcontent.image_url.urlにセットする。
+                                // TODO 外のURLには対応していない。
+                                console.log(content.image_url.url);
                                 if (content.image_url.url.startsWith('file:///')) {
                                     if (this.wrapperOptions.allowLocalFiles) {
                                         const filePath = content.image_url.url.substring('file://'.length);
                                         const data = fs.readFileSync(filePath);
                                         const metaInfo = sizeOf(data);
+                                        console.log(metaInfo);
                                         content.image_url.url = `data:image/${metaInfo.type === 'jpg' ? 'jpeg' : metaInfo.type};base64,${data.toString('base64')}`;
                                         // 画像のトークン数を計算する。
                                         imagePrompt += calculateTokenCost(metaInfo.width || 0, metaInfo.height || 0);
@@ -568,7 +714,7 @@ export class OpenAIApiWrapper {
                                         // エラー
                                         throw new Error(`ローカルファイルアクセスは禁止`);
                                     }
-                                } else if (content.image_url.url.startsWith('data:image/')) {
+                                } else if (content.image_url.url.startsWith('data:')) {
                                     // データURLからデータを取り出してサイズを判定する。
                                     const data = Buffer.from(content.image_url.url.substring(content.image_url.url.indexOf(',') + 1), 'base64');
                                     const metaInfo = sizeOf(data);
@@ -605,14 +751,17 @@ export class OpenAIApiWrapper {
             let attempts = 0;
 
             // ログ出力用オブジェクト
-            const prompt = args.messages.map(message => `<im_start>${message.role}\n${message.content}<im_end>`).join('\n');
+            const prompt = args.messages.map(message => `<im_start>${message.role}\n${typeof message.content === 'string' ? message.content : message.content?.map(content => content.type === 'text' ? content.text : content.image_url.url)}<im_end>`).join('\n');
             const tokenCount = new TokenCount(args.model as GPTModels, 0, 0);
             // gpt-4-1106-preview に未対応のため、gpt-4に置き換え。プロンプトのトークンを数えるだけなのでモデルはどれにしてもしても同じだと思われるが。。。
             if (args.model.startsWith('claude-')) {
                 // 本当はAPIの戻りでトークン数を出したいけど、API投げる前にトークン数表示するログにしてしまったので、やむなくtiktokenのトークン数を表示する。APIで入力トークン数がわかったらそれを上書きするようにした。
-                tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+            } else if (args.model.startsWith('gemini-')) {
+                // 本当はAPIの戻りでトークン数を出したいけど、API投げる前にトークン数表示するログにしてしまったので、やむなくtiktokenのトークン数を表示する。APIで入力トークン数がわかったらそれを上書きするようにした。
+                tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             } else {
-                tokenCount.prompt_tokens = getEncoder((['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             }
             // tokenCount.prompt_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
             tokenCount.prompt_tokens += imagePrompt;
@@ -625,11 +774,11 @@ export class OpenAIApiWrapper {
                     this.baseTime = Date.now(); // baseTimeを更新しておく。
                     const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
                     // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
-                    // tokenCount.completion_tokens = encoding_for_model((['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
-                    if (args.model.startsWith('claude-')) {
+                    // tokenCount.completion_tokens = encoding_for_model((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                    if (args.model.startsWith('claude-') || args.model.startsWith('gemini-')) {
                         // claudeの場合はAPIレスポンスでトークン数がわかっているのでそれを使う。
                     } else {
-                        tokenCount.completion_tokens = getEncoder((['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                        tokenCount.completion_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
                     }
                     const completion_tokens = numForm(tokenCount.completion_tokens, 6);
 
@@ -727,10 +876,13 @@ export class OpenAIApiWrapper {
 // TiktokenModelが新モデルに追いつくまでは自己定義で対応する。
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
 export type GPTModels = TiktokenModel
+    | 'gpt-4o-2024-05-13' | 'gpt-4o'
     | 'llama2-70b-4096'
+    | 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' | 'gemini-1.0-pro-001' | 'gemini-1.0-pro-vision-001'
+    | 'gemini-1.5-flash' | 'gemini-1.5-pro' | 'gemini-1.0-pro' | 'gemini-1.0-pro-vision'
     | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b'
     | 'mistral-small-2312' | 'mistral-small' | 'mistral-small-2402' | 'mistral-small-latest' | 'mistral-medium-latest' | 'mistral-medium-2312' | 'mistral-medium' | 'mistral-large-latest' | 'mistral-large-2402' | 'mistral-embed'
-    | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-sonnet-20240229' | 'claude-3-opus-20240229'
+    | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-sonnet-20240229' | 'claude-3-opus-20240229' | 'claude-3-5-sonnet-20240620'
     | 'deepseek-coder' | 'deepseek-chat';
 
 /**
@@ -747,11 +899,13 @@ export class TokenCount {
         'gpt4-32k': { prompt: 0.06000, completion: 0.12000, },
         'gpt4-vis': { prompt: 0.01000, completion: 0.03000, },
         'gpt4-128': { prompt: 0.01000, completion: 0.03000, },
+        'gpt4-o  ': { prompt: 0.00500, completion: 0.01500, },
         'cla-1.2 ': { prompt: 0.00800, completion: 0.02400, },
         'cla-2   ': { prompt: 0.00800, completion: 0.02400, },
         'cla-2.1 ': { prompt: 0.00800, completion: 0.02400, },
         'cla-3-hk': { prompt: 0.00025, completion: 0.00125, },
         'cla-3-sn': { prompt: 0.00300, completion: 0.01500, },
+        'cla-35sn': { prompt: 0.00300, completion: 0.01500, },
         'cla-3-op': { prompt: 0.01500, completion: 0.07500, },
         'g-mxl-87': { prompt: 0.00027, completion: 0.00027, },
         'g-lm2-70': { prompt: 0.00070, completion: 0.00080, },
@@ -762,6 +916,10 @@ export class TokenCount {
         'msl-lg  ': { prompt: 0.00870, completion: 0.02400, },
         'dps-code': { prompt: 0.00000, completion: 0.00000, },
         'dps-chat': { prompt: 0.00000, completion: 0.00000, },
+        'gem-15fl': { prompt: 0.000125, completion: 0.00025, },
+        'gem-15pr': { prompt: 0.00250, completion: 0.00250, },
+        'gem-10pr': { prompt: 0.000125, completion: 0.00025, },
+        'gem-10pv': { prompt: 0.000125, completion: 0.000125, },
     };
 
     static SHORT_NAME: { [key: string]: string } = {
@@ -807,6 +965,8 @@ export class TokenCount {
         'gpt-4-1106-preview': 'gpt4-128',
         'gpt-4-0125-preview': 'gpt4-128',
         'gpt-4-vision-preview': 'gpt4-vis',
+        'gpt-4o': 'gpt4-o  ',
+        'gpt-4o-2024-05-13': 'gpt4-o  ',
         'gpt-3.5-turbo': 'gpt3-16k',
         'gpt-3.5-turbo-0125': 'gpt3-16k',
         'gpt-3.5-turbo-0301': 'gpt3.5  ',
@@ -825,6 +985,7 @@ export class TokenCount {
         'claude-3-haiku-20240307': 'cla-3-hk',
         'claude-3-sonnet-20240229': 'cla-3-sn',
         'claude-3-opus-20240229': 'cla-3-op',
+        'claude-3-5-sonnet-20240620': 'cla-35sn',
         'mistral-tiny-2312': 'msl-tiny',
         'mistral-tiny': 'msl-tiny',
         'open-mixtral-8x7b': 'msl-87b ',
@@ -840,6 +1001,14 @@ export class TokenCount {
         'mistral-embed': 'msl-em  ',
         'deepseek-coder': 'dps-code',
         'deepseek-chat': 'dps-chat',
+        'gemini-1.5-flash-001': 'gem-15fl',
+        'gemini-1.5-pro-001': 'gem-15pr',
+        'gemini-1.0-pro-001': 'gem-10pr',
+        'gemini-1.0-pro-vision-001': 'gem-10pv',
+        'gemini-1.5-flash': 'gem-15fl',
+        'gemini-1.5-pro': 'gem-15pr',
+        'gemini-1.0-pro': 'gem-10pr',
+        'gemini-1.0-pro-vision': 'gem-10pv',
     };
 
     // コスト
