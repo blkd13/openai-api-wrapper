@@ -625,10 +625,10 @@ export class OpenAIApiWrapper {
         'dps-code': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
         'dps-chat': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
 
-        'gem-15fl': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
-        'gem-15pr': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
-        'gem-10pr': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
-        'gem-10pv': { limitRequests: 5, limitTokens: 50000, remainingRequests: 1, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+        'gem-15fl': { limitRequests: 100, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
+        'gem-15pr': { limitRequests: 100, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
+        'gem-10pr': { limitRequests: 100, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
+        'gem-10pv': { limitRequests: 100, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
 
         // 'anthropic-ratelimit-requests-limit': '50',
         // 'anthropic-ratelimit-requests-remaining': '46',

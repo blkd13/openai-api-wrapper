@@ -465,7 +465,7 @@ export class MultiStep extends BaseStepInterface<string[]> {
     get formed() { return fs.readFileSync(this.formedPath, 'utf-8'); }
 
     async run(isForce: boolean = false, refineIndex: number = 0): Promise<string[]> {
-        this.agentName = this.childStepList[0]?.agentName;
+        this.agentName = this.childStepList[0]?.agentName || this.agentName;
         if (this.isSkip) {
             // スキップ指定されていたら空文字を返す。
             return new Promise<string[]>((resolve, reject) => {
