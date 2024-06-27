@@ -121,7 +121,7 @@ npm run cli generate <agentName>
 
 - VertexAI 用の環境変数を設定する
 - gcloud コマンドで認証を通す
-- useAzure フラグを立てる
+- provider を vertexai にする
 
 ### gloud コマンドで認証を通す
 
@@ -159,7 +159,7 @@ aiApi.wrapperOptions.provider = "vertexai";
 - Azure 用の環境変数を設定する
 - Azure のライブラリを改造
 - デプロイ名を設定する
-- useAzure フラグを立てる
+- provider を azure にする
 
 ### Azure 用の環境変数を設定する
 
