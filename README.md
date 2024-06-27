@@ -22,11 +22,11 @@ OpenAI の API をラップして使いやすくしたものです。
 ├── package.json
 ├── prompts_and_responses (投げつけたプロンプトと結果が溜まるところ)
 │   ├── (agent name)/ (エージェント毎にディレクトリが分かれている)
-│   │   ├── ...
-│   │   └── ...
+│ │   ├── ...
+│ │   └── ...
 │   └── ...
-│       ├── ...
-│       └── ...
+│    ├── ...
+│    └── ...
 ├── results
 ├── src （ソースコード）
 │   └── app
@@ -43,10 +43,10 @@ OpenAI の API をラップして使いやすくしたものです。
 │   │   ├── openai-api-wrapper.ts
 │   │   └── utils.ts
 │   └── main (メイン実行系)
-│       ├── main-batch.ts
-│       ├── main-generate.ts
-│       ├── main-server.ts
-│       └── main-vision-plain.ts
+│    ├── main-batch.ts
+│   ├── main-generate.ts
+│   ├── main-server.ts
+│   └── main-vision-plain.ts
 └── tsconfig.json
 ```
 
@@ -115,6 +115,43 @@ npm run cli generate <agentName>
 `src/app/agent/${agentName}`配下に`runner.ts`という名前でひな型が作成されるので、それを元に作る。
 ※細かいことはひな型のコメントに書いてあります。
 
+## VertexAI(GoogleCloud) を使う場合
+
+以下の 3 手順を行う。
+
+- VertexAI 用の環境変数を設定する
+- gcloud コマンドで認証を通す
+- useAzure フラグを立てる
+
+### gloud コマンドで認証を通す
+
+事前に会社メールアドレスで GCP にアカウントを作って GCP プロジェクト管理者に権限をもらっておく必要がある。
+権限がある状態でこのコマンドで認証を通す。（認証を通すとしばらくはトークンが有効になるので、切れたらまた認証を通す）
+
+```bash
+gcloud auth application-default print-access-token
+```
+
+### VertexAI 用の環境変数を設定する
+
+```bash
+# GCP のプロジェクトID（デフォルトはgcp-cloud-shosys-ai-002）。※プロジェクト名ではなくプロジェクトIDであることに注意
+export GCP_PROCJET_ID="${YOUR_GCP_PROCJET_ID}"
+
+# GCP のリージョン（デフォルトはasia-northeast1）
+export GCP_REGION="${YOUR_GCP_REGION}"
+```
+
+### aiApi.wrapperOptions.provider で vertexai を設定する
+
+runner 等のプログラムの頭で aiApi の aiApi.wrapperOptions.provider を vertexai にする。
+※デフォルトが vertexai なのでやらなくてもよい。
+
+```typescript
+// vertexai に向ける
+aiApi.wrapperOptions.provider = "vertexai";
+```
+
 ## Azure を使う場合
 
 以下の 4 手順を行う。
@@ -160,9 +197,8 @@ runner 等のプログラムの頭で aiApi の aiApi.wrapperOptions.provider �
 
 ```typescript
 // Azure に向ける
-aiApi.wrapperOptions.provider = 'azure';
+aiApi.wrapperOptions.provider = "azure";
 ```
-
 
 ## Groq を使う場合
 
@@ -180,5 +216,5 @@ runner 等のプログラムの頭で aiApi の aiApi.wrapperOptions.provider �
 
 ```typescript
 // Groq に向ける
-aiApi.wrapperOptions.provider = 'groq';
+aiApi.wrapperOptions.provider = "groq";
 ```
