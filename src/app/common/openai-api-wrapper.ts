@@ -81,7 +81,7 @@ export const azureDeployTpmMap: Record<string, number> = {
 };
 
 // Initialize Vertex with your Cloud project and location
-const vertex_ai = new VertexAI({ project: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', location: process.env['GCP_REGION'] || 'asia-northeast1' });
+export const vertex_ai = new VertexAI({ project: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', location: process.env['GCP_REGION'] || 'asia-northeast1' });
 
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
@@ -141,9 +141,6 @@ class RunBit {
         const ratelimitObj = this.openApiWrapper.currentRatelimit[this.tokenCount.modelShort];
         // 使用例: callAPI関数を最大5回までリトライする
         // console.log(this.logString('call', ''));
-        // リクエストをファイルに書き出す
-        fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
-
         let runPromise = null;
 
         console.log(logObject.output('start', ''));
@@ -180,6 +177,8 @@ class RunBit {
             //   },
             runPromise = new Promise<void>((resolve, reject) => {
                 try {
+                    // リクエストをファイルに書き出す
+                    fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
                     const response = (anthropic.messages.stream(args as any).toReadableStream());
                     // console.log('res');
                     // ratelimitObj.limitRequests = 5; // 適当に5にしておく。
@@ -269,7 +268,10 @@ class RunBit {
                 args.max_tokens = 4096;
             }
             // console.log('shot');
-            runPromise = (azureClient.streamChatCompletions(azureDeployNameMap[args.model] || args.model, args.messages as any, { ...args as any })).then((response) => {
+            // リクエストをファイルに書き出す
+            const reqDto = [azureDeployNameMap[args.model] || args.model, args.messages as any, { ...args as any }];
+            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify(reqDto, Utils.genJsonSafer()), {}, (err) => { });
+            runPromise = (azureClient.streamChatCompletions(reqDto[0], reqDto[1], reqDto[2])).then((response) => {
                 // console.log('res');
                 ratelimitObj.limitRequests = 5; // 適当に5にしておく。
                 ratelimitObj.limitTokens = azureDeployTpmMap[args.model];
@@ -406,9 +408,16 @@ class RunBit {
                     console.log('unknown message type');
                 }
             });
+            // const _dum = JSON.parse(JSON.stringify(req))
+            // _dum.contents = req.contents.filter(obj => obj.role !== 'system');
+            // generativeModel.countTokens(_dum).then(obj => {
+            //     console.log(obj);
+            // });
+            // return;
             // console.dir(req, { depth: null });
             // console.dir(generativeModel, { depth: null });
             // console.dir(req, { depth: null });
+            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify(req, Utils.genJsonSafer()), {}, (err) => { });
             runPromise = generativeModel.generateContentStream(req).then((streamingResp) => {
 
                 let tokenBuilder: string = '';
@@ -472,6 +481,7 @@ class RunBit {
                         : this.openApiWrapper.wrapperOptions.provider === 'deepseek' ? deepSeek
                             : this.openApiWrapper.wrapperOptions.provider === 'local' ? local
                                 : openai;
+            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
             runPromise = (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
                 .withResponse().then((response) => {
                     response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
@@ -700,7 +710,7 @@ export class OpenAIApiWrapper {
                                 // DANGER!!! ローカルファイルを読み込むのでオンラインから使わせるときはセキュリティ的に問題がある。
                                 // ファイルの種類を判定して、画像の場合はbase64に変換してcontent.image_url.urlにセットする。
                                 // TODO 外のURLには対応していない。
-                                console.log(content.image_url.url);
+                                // console.log(content.image_url.url);
                                 if (content.image_url.url.startsWith('file:///')) {
                                     if (this.wrapperOptions.allowLocalFiles) {
                                         const filePath = content.image_url.url.substring('file://'.length);
