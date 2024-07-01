@@ -765,7 +765,7 @@ export class OpenAIApiWrapper {
                                     const data = Buffer.from(content.image_url.url.substring(content.image_url.url.indexOf(',') + 1), 'base64');
                                     const label = (content.image_url as any)['label'] as string;
                                     const trg = label.toLocaleLowerCase().replace(/.*\./g, '');
-                                    const textTrgList = ['java', 'md', 'csh', 'sh', 'pl', 'php', 'rs', 'py', 'ipynb', 'cob', 'cbl', 'pco', 'copy', 'cpy', 'c', 'pc', 'h', 'cpp', 'hpp', 'yaml', 'yml', 'xml', 'properties', 'kt', 'sql', 'ddl'];
+                                    const textTrgList = ['java', 'md', 'csh', 'sh', 'pl', 'php', 'rs', 'py', 'ipynb', 'cob', 'cbl', 'pco', 'copy', 'cpy', 'c', 'pc', 'h', 'cpp', 'hpp', 'yaml', 'yml', 'xml', 'properties', 'kt', 'sql', 'ddl', 'awk'];
                                     if (content.image_url.url.startsWith('data:image/')) {
                                         const metaInfo = sizeOf(data);
                                         // 画像のトークン数を計算する。
