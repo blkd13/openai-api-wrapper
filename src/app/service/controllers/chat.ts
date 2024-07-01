@@ -247,8 +247,9 @@ export const geminiCountTokens = [
                             // データURLからデータを取り出してサイズを判定する。
                             const data = Buffer.from(content.image_url.url.substring(content.image_url.url.indexOf(',') + 1), 'base64');
                             const label = (content.image_url as any)['label'] as string;
-                            const trg = label.toLocaleLowerCase();
-                            if (content.image_url.url.startsWith('data:text/') || trg.endsWith('.java') || trg.endsWith('.md') || trg.endsWith('.csh')) {
+                            const trg = label.toLocaleLowerCase().replace(/.*\./g, '');
+                            const textTrgList = ['java', 'md', 'csh', 'sh', 'pl', 'php', 'rs', 'py', 'ipynb', 'cob', 'cbl', 'pco', 'copy', 'cpy', 'c', 'pc', 'h', 'cpp', 'hpp', 'yaml', 'yml', 'xml', 'properties', 'kt'];
+                            if (content.image_url.url.startsWith('data:text/') || textTrgList.includes(trg)) {
                                 // テキストファイルの場合はデコードしてテキストにしてしまう。
                                 const detectedEncoding = detect(data);
                                 if (detectedEncoding.encoding === 'ISO-8859-2') {
