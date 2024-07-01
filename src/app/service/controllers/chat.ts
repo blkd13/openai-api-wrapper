@@ -248,7 +248,7 @@ export const geminiCountTokens = [
                             const data = Buffer.from(content.image_url.url.substring(content.image_url.url.indexOf(',') + 1), 'base64');
                             const label = (content.image_url as any)['label'] as string;
                             const trg = label.toLocaleLowerCase().replace(/.*\./g, '');
-                            const textTrgList = ['java', 'md', 'csh', 'sh', 'pl', 'php', 'rs', 'py', 'ipynb', 'cob', 'cbl', 'pco', 'copy', 'cpy', 'c', 'pc', 'h', 'cpp', 'hpp', 'yaml', 'yml', 'xml', 'properties', 'kt'];
+                            const textTrgList = ['java', 'md', 'csh', 'sh', 'pl', 'php', 'rs', 'py', 'ipynb', 'cob', 'cbl', 'pco', 'copy', 'cpy', 'c', 'pc', 'h', 'cpp', 'hpp', 'yaml', 'yml', 'xml', 'properties', 'kt', 'sql', 'ddl'];
                             if (content.image_url.url.startsWith('data:text/') || textTrgList.includes(trg)) {
                                 // テキストファイルの場合はデコードしてテキストにしてしまう。
                                 const detectedEncoding = detect(data);
