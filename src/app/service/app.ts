@@ -6,14 +6,16 @@ import cors from 'cors';
 import morgan from 'morgan';
 import moment, { Moment } from "moment-timezone";
 
-import { authInviteRouter, authNoneRouter, authUserRouter } from './routes.js';
+import { authDummyRouter, authInviteRouter, authNoneRouter, authUserRouter } from './routes.js';
 
 // .envファイルを読み込む
 dotenv.config();
 
 const app = express();
 
-app.use(bodyParser.json()); // JSONパーサー
+// body-parser の設定を変更して、リクエストボディのサイズ制限を拡大する
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+app.use(bodyParser.json({ limit: '50mb' })); // JSONパーサー
 
 // これはデバッグ用
 app.use(cors()); // CORS許可
@@ -32,6 +34,9 @@ rootRouter.use('/', authNoneRouter);
 rootRouter.use('/user', authUserRouter);
 // ワンタイムトークン認証が必要なルート
 rootRouter.use('/invite', authInviteRouter);
+
+// 認証無視ルート（テスト用）
+rootRouter.use('/dummy', authDummyRouter);
 
 app.use('/api', rootRouter);
 // 認証系ルート設定終了

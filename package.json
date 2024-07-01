@@ -52,6 +52,7 @@
         "iconv-lite": "^0.6.3",
         "image-size": "^1.0.2",
         "inquirer": "^9.2.12",
+        "jschardet": "^3.1.3",
         "jsonwebtoken": "^9.0.2",
         "moment": "^2.29.4",
         "moment-timezone": "^0.5.43",

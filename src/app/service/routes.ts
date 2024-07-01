@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { changePassword, deleteUser, getUser, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
-import { authenticateInviteToken, authenticateUserToken } from './middleware/authenticate.js';
-import { chatCompletion, initEvent } from './controllers/chat.js';
+import { authenticateDummyToken, authenticateInviteToken, authenticateUserToken } from './middleware/authenticate.js';
+import { chatCompletion, geminiCountTokens, initEvent } from './controllers/chat.js';
 import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
 import { getDirectoryTree, getFile, saveFile } from './controllers/directory-tree.js';
 
@@ -11,10 +11,12 @@ import { getDirectoryTree, getFile, saveFile } from './controllers/directory-tre
 export const authNoneRouter = Router();
 export const authUserRouter = Router();
 export const authInviteRouter = Router();
+export const authDummyRouter = Router();
 
 // 認証種別ごとのミドルウェアを設定
 authUserRouter.use(authenticateUserToken);
 authInviteRouter.use(authenticateInviteToken);
+authDummyRouter.use(authenticateDummyToken)
 
 
 // 個別コントローラーの設定
@@ -32,6 +34,11 @@ authUserRouter.delete('/user', deleteUser);
 authUserRouter.get('/event', initEvent);
 authUserRouter.post('/chat-completion', chatCompletion);
 
+// チャット系（認証不要）
+authDummyRouter.get('/event', initEvent);
+authDummyRouter.post('/chat-completion', chatCompletion);
+authDummyRouter.post('/count-tokens', geminiCountTokens);
+authNoneRouter.post('/count-tokens', geminiCountTokens);
 
 // プロジェクト系
 authUserRouter.post('/project', createProject);

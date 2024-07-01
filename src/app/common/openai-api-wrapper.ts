@@ -3,6 +3,7 @@ import { Observable, Subscriber } from 'rxjs';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import sizeOf from 'image-size';
+import { detect } from 'jschardet';
 
 // configureGlobalFetchを読み込むとfetchのproxyが効くようになるので、VertexAI用にただ読み込むだけ。
 import * as configureGlobalFetch from './configureGlobalFetch.js'; configureGlobalFetch;
@@ -10,9 +11,11 @@ import * as configureGlobalFetch from './configureGlobalFetch.js'; configureGlob
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, VertexAI } from '@google-cloud/vertexai';
+// import { GoogleGenerativeAI } from "@google/generative-ai";
+// import { GoogleAICacheManager, GoogleAIFileManager } from "@google/generative-ai/server";
 
 import { APIPromise, RequestOptions } from 'openai/core';
-import { ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionCreateParamsStreaming } from 'openai/resources/chat/completions';
+import { ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { Stream } from 'openai/streaming';
 import { Tiktoken, TiktokenModel, encoding_for_model } from 'tiktoken';
 
@@ -377,15 +380,42 @@ class RunBit {
                     // }
                 ],
             };
-            args.messages.forEach(message => {
+
+            args.messages.reduce((prev, curr) => {
+                // ロールが連続する場合は1つのコンテンツとしてさまる（こうしないとGeminiがエラーになるので。）
+                if (prev.length === 0 || prev[prev.length - 1].role !== curr.role) {
+                    prev.push(curr);
+                } else {
+                    const prevContent = prev[prev.length - 1].content;
+                    if (typeof prevContent === 'string') {
+                        // 1個前の同じロールのコンテンツがstring型だと連結できないので構造化配列にしておく。
+                        prev[prev.length - 1].content = [{ type: 'text', text: prevContent }];
+                    } else {
+                        // 元々配列なので何もしない
+                    }
+                    const prevContentArray = prev[prev.length - 1].content;
+                    if (Array.isArray(prevContentArray)) {
+                        if (typeof curr.content === 'string') {
+                            prevContentArray.push({ type: 'text', text: curr.content });
+                        } else if (curr.content) {
+                            curr.content.forEach(obj => prevContentArray.push(obj));
+                        } else {
+                            // エラー
+                        }
+                    }
+                }
+                return prev;
+            }, [] as ChatCompletionMessageParam[]).forEach(message => {
+                // 画像ファイルなどが入ってきたとき用の整理
                 if (typeof message.content === 'string') {
                     if (message.role === 'system') {
+                        // systemはsystemInstructionに入れる
                         req.systemInstruction = message.content;
                     } else {
                         req.contents.push({ role: message.role, parts: [{ text: message.content }] });
                     }
                 } else if (Array.isArray(message.content)) {
-                    req.contents.push({
+                    const remappedContent = {
                         role: message.role,
                         parts:
                             message.content.map(content => {
@@ -403,7 +433,13 @@ class RunBit {
                                     return null;
                                 }
                             }).filter(is => is) as Part[],
-                    });
+                    };
+                    if (message.role === 'system') {
+                        // systemはsystemInstructionに入れる
+                        req.systemInstruction = remappedContent;
+                    } else {
+                        req.contents.push(remappedContent);
+                    }
                 } else {
                     console.log('unknown message type');
                 }
@@ -461,7 +497,7 @@ class RunBit {
                             tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
 
                             // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
-                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response: content }, Utils.genJsonSafer()), {}, (err) => { });
+                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
                         } else { }
                         // streamHandlerを呼び出す
                         observer.next(text);
@@ -727,14 +763,36 @@ export class OpenAIApiWrapper {
                                 } else if (content.image_url.url.startsWith('data:')) {
                                     // データURLからデータを取り出してサイズを判定する。
                                     const data = Buffer.from(content.image_url.url.substring(content.image_url.url.indexOf(',') + 1), 'base64');
-                                    const metaInfo = sizeOf(data);
-                                    // 画像のトークン数を計算する。
-                                    imagePrompt += calculateTokenCost(metaInfo.width || 0, metaInfo.height || 0);
+                                    const label = (content.image_url as any)['label'] as string;
+                                    const trg = label.toLocaleLowerCase();
+                                    if (content.image_url.url.startsWith('data:image/')) {
+                                        const metaInfo = sizeOf(data);
+                                        // 画像のトークン数を計算する。
+                                        imagePrompt += calculateTokenCost(metaInfo.width || 0, metaInfo.height || 0);
+                                    } else if (content.image_url.url.startsWith('data:text/') || trg.endsWith('.java') || trg.endsWith('.md') || trg.endsWith('.csh')) {
+                                        // テキストファイルの場合はデコードしてテキストにしてしまう。
+                                        (content.type as any) = 'text';
+                                        const detectedEncoding = detect(data);
+                                        if (detectedEncoding.encoding === 'ISO-8859-2') {
+                                            detectedEncoding.encoding = 'SHIFT_JIS'; // 文字コード自動判定でSJISがISO-8859-2ことがあるので
+                                        }
+                                        const decoder = new TextDecoder(detectedEncoding.encoding);
+                                        const decodedString = decoder.decode(data);
+                                        if ('label' in (content.image_url as any) && !trg.endsWith('.md')) {
+                                            // label項目でファイル名が来ているときはmarkdownとして埋め込む。
+                                            const label = (content.image_url as any).label as string;
+                                            const trg = label.replace(/.*\./g, '');
+                                            (content as any).text = '```' + trg + ' ' + label + '\n' + decodedString + '\n```';
+                                        } else {
+                                            (content as any).text = decodedString;
+                                        }
+                                        delete (content as any).image_url;
+                                    }
                                 } else {
                                     // 外部URLの場合は何もしない。トークン計算もしない。
                                 }
                                 // visionAPIはmax_tokenを指定しないと凄く短く終わるので最大化しておく。visionAPIのmax_tokenは4096が最大。
-                                args.max_tokens = Math.min(args.max_tokens || 4096, 4096);
+                                args.max_tokens = Math.max(args.max_tokens || 4096, 4096);
                             } else { /* それ以外は何もしない */ }
                         });
                     } else { /* それ以外は何もしない */ }

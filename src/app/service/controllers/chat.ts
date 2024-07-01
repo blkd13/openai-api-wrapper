@@ -1,20 +1,23 @@
 import * as http from 'http';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";
+import { detect } from 'jschardet';
 
-import { OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
+import { OpenAIApiWrapper, vertex_ai } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam } from "openai/resources/index.js";
 import { ds } from '../db.js';
 import { DiscussionEntity, TaskEntity, StatementEntity } from '../entity/project-models.entity.js';
 import { enqueueGenerator, qSubject } from './project-models.js';
+import { GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part } from '@google-cloud/vertexai';
 
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
 
 // OpenAI APIラッパー
 export const aiApi = new OpenAIApiWrapper();
+aiApi.wrapperOptions.provider = 'vertexai';
 
 /**
  * [user認証] イベントの初期化
@@ -185,5 +188,104 @@ export const chatCompletion = [
 
         // clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
         res.end(JSON.stringify({ status: 'ok' }));
+    }
+];
+
+/**
+ * [認証不要] トークンカウント
+ */
+export const geminiCountTokens = [
+    // 雑に作ってしまった。。
+    body('args').notEmpty(),
+    validationErrorHandler,
+    (_req: Request, res: Response) => {
+        const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
+        const args = inDto.args;
+        const generativeModel = vertex_ai.preview.getGenerativeModel({
+            model: args.model,
+            generationConfig: {
+                maxOutputTokens: args.max_tokens || 8192,
+                temperature: args.top_p || 0.1,
+                topP: args.temperature || 0,
+            },
+            safetySettings: [
+                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, }
+            ],
+        });
+        args.messages[0].content = args.messages[0].content || '';
+        const req: GenerateContentRequest = {
+            contents: [
+                // {
+                //     role: 'user', parts: [
+                //         { text: `konnichiha` },
+                //         {
+                //             inlineData: {
+                //                 mimeType: 'image/jpeg',
+                //                 data: fs.readFileSync('./sample.jpg').toString('base64')
+                //             }
+                //         }
+                //     ]
+                // }
+            ],
+        };
+        args.messages.forEach(message => {
+            if (typeof message.content === 'string') {
+                if (message.role === 'system') {
+                    // countTokensにsystemは入れてはいけない。  
+                    // req.systemInstruction = message.content;
+                } else {
+                    req.contents.push({ role: message.role, parts: [{ text: message.content }] });
+                }
+            } else if (Array.isArray(message.content)) {
+                req.contents.push({
+                    role: message.role,
+                    parts: message.content.map(content => {
+                        if (content.type === 'image_url') {
+                            // データURLからデータを取り出してサイズを判定する。
+                            const data = Buffer.from(content.image_url.url.substring(content.image_url.url.indexOf(',') + 1), 'base64');
+                            const label = (content.image_url as any)['label'] as string;
+                            const trg = label.toLocaleLowerCase();
+                            if (content.image_url.url.startsWith('data:text/') || trg.endsWith('.java') || trg.endsWith('.md') || trg.endsWith('.csh')) {
+                                // テキストファイルの場合はデコードしてテキストにしてしまう。
+                                const detectedEncoding = detect(data);
+                                if (detectedEncoding.encoding === 'ISO-8859-2') {
+                                    detectedEncoding.encoding = 'SHIFT_JIS';
+                                }
+                                const decoder = new TextDecoder(detectedEncoding.encoding);
+                                const decodedString = decoder.decode(data);
+                                if ('label' in (content.image_url as any) && !trg.endsWith('.md')) {
+                                    // label項目でファイル名が来ているときはmarkdownとして埋め込む。
+                                    const label = (content.image_url as any).label as string;
+                                    const trg = label.replace(/.*\./g, '');
+                                    return { text: '```' + trg + ' ' + label + '\n' + decodedString + '\n```' };
+                                } else {
+                                    return { text: decodedString };
+                                }
+                            } else if (content.image_url.url.startsWith('data:')) {
+                                // TODO URLには対応していない
+                                return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, };
+                            } else {
+                                return { file_data: { file_uri: content.image_url.url } };
+                            }
+                        } else if (content.type === 'text') {
+                            return { text: content.text as string };
+                        } else {
+                            console.log('unknown sub message type');
+                            return null;
+                        }
+                    }).filter(is => is) as Part[],
+                });
+            } else {
+                console.log('unknown message type');
+            }
+        });
+
+        // console.dir(req, { depth: null });
+        generativeModel.countTokens(req).then(tokenObject => {
+            res.end(JSON.stringify(tokenObject));
+        });
     }
 ];
