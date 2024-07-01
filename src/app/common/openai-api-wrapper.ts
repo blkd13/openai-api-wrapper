@@ -770,7 +770,7 @@ export class OpenAIApiWrapper {
                                         const metaInfo = sizeOf(data);
                                         // 画像のトークン数を計算する。
                                         imagePrompt += calculateTokenCost(metaInfo.width || 0, metaInfo.height || 0);
-                                    } else if (content.image_url.url.startsWith('data:text/') || content.image_url.url.startsWith('data:application/octet-stream;base64,IyEvYmluLw==') || textTrgList.includes(trg)) {
+                                    } else if (content.image_url.url.startsWith('data:text/') || content.image_url.url.startsWith('data:application/octet-stream;base64,IyEvYmluL') || textTrgList.includes(trg)) {
                                         // テキストファイルの場合はデコードしてテキストにしてしまう。
                                         (content.type as any) = 'text';
                                         const detectedEncoding = detect(data);

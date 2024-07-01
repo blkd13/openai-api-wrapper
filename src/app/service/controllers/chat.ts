@@ -249,7 +249,7 @@ export const geminiCountTokens = [
                             const label = (content.image_url as any)['label'] as string;
                             const trg = label.toLocaleLowerCase().replace(/.*\./g, '');
                             const textTrgList = ['java', 'md', 'csh', 'sh', 'pl', 'php', 'rs', 'py', 'ipynb', 'cob', 'cbl', 'pco', 'copy', 'cpy', 'c', 'pc', 'h', 'cpp', 'hpp', 'yaml', 'yml', 'xml', 'properties', 'kt', 'sql', 'ddl'];
-                            if (content.image_url.url.startsWith('data:text/') || content.image_url.url.startsWith('data:application/octet-stream;base64,IyEvYmluLw==') || textTrgList.includes(trg)) {
+                            if (content.image_url.url.startsWith('data:text/') || content.image_url.url.startsWith('data:application/octet-stream;base64,IyEvYmluL') || textTrgList.includes(trg)) {
                                 // テキストファイルの場合はデコードしてテキストにしてしまう。
                                 const detectedEncoding = detect(data);
                                 if (detectedEncoding.encoding === 'ISO-8859-2') {
