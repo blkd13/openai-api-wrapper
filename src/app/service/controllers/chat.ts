@@ -93,7 +93,7 @@ export const chatCompletion = [
             },
             error: error => {
                 console.log(error);
-                clients[clientId]?.response.end(error);
+                clients[clientId]?.response.end(`error: ${req.query.threadId} ${error}\n\n`);
             },
             complete: () => {
                 if (req.body.taskId) {

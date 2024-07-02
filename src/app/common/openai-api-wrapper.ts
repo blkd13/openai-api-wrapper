@@ -354,16 +354,17 @@ class RunBit {
                 model: args.model,
                 generationConfig: {
                     maxOutputTokens: args.max_tokens || 8192,
-                    temperature: args.top_p || 0.1,
-                    topP: args.temperature || 0,
+                    temperature: args.temperature || 0.1,
+                    topP: args.top_p || 0.95,
                 },
                 safetySettings: [
-                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, }
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE, },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE, },
+                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE, },
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE, }
                 ],
             });
+            // console.log(generativeModel);
             args.messages[0].content = args.messages[0].content || '';
             const req: GenerateContentRequest = {
                 contents: [
@@ -392,7 +393,7 @@ class RunBit {
                             if (curr.type === 'text') {
                                 prev += curr.text.length;
                             } else {
-                                prev += curr.image_url.url.length;
+                                prev += 1024; // 画像音声系は良く分からないけど1000にしてしまう。
                             }
                             return prev;
                         }, countChars);
@@ -479,7 +480,11 @@ class RunBit {
             // console.dir(req, { depth: null });
             // console.dir(generativeModel, { depth: null });
             // console.dir(req, { depth: null });
-            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify(req, Utils.genJsonSafer()), {}, (err) => { });
+            const model = Object.keys(generativeModel).filter(key => key !== 'googleAuth').reduce((prev, currKey) => {
+                prev[currKey] = (generativeModel as any)[currKey];
+                return prev;
+            }, {} as Record<string, any>);
+            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ model, req }, Utils.genJsonSafer()), {}, (err) => { });
             runPromise = generativeModel.generateContentStream(req).then((streamingResp) => {
 
                 let tokenBuilder: string = '';
@@ -490,8 +495,11 @@ class RunBit {
                 tokenCount.completion_tokens = 0;
                 // ストリームからデータを読み取る非同期関数
                 async function readStream() {
+                    let safetyRatings;
                     while (true) {
                         const { value, done } = await streamingResp.stream.next();
+                        // console.dir(value, { depth: null });
+
                         if (done) {
                             // ストリームが終了したらループを抜ける
                             tokenCount.cost = tokenCount.calcCost();
@@ -515,28 +523,39 @@ class RunBit {
                         // ファイルに書き出す
                         fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, JSON.stringify(content) || '', {}, () => { });
 
+                        if (content.candidates[0] && content.candidates[0].safetyRatings) {
+                            safetyRatings = content.candidates[0] && content.candidates[0].safetyRatings;
+                        }
                         // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
-                        const text = content.candidates[0].content.parts[0].text || '';
-                        tokenBuilder += text;
-                        tokenCount.completion_tokens += text.length;
+                        if (content.candidates[0] && content.candidates[0].content && content.candidates[0].content.parts && content.candidates[0].content.parts[0] && content.candidates[0].content.parts[0].text) {
+                            const text = content.candidates[0].content.parts[0].text || '';
+                            tokenBuilder += text;
+                            tokenCount.completion_tokens += text.length;
 
+                            // streamHandlerを呼び出す
+                            observer.next(text);
+                        } else { }
                         if (content.usageMetadata) {
                             // tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
                             // tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
 
                             // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
-                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
+                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ model, req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
                         } else { }
-                        // streamHandlerを呼び出す
-                        observer.next(text);
+                        // [1]   candidates: [ { finishReason: 'OTHER', index: 0, content: [Object] } ],
+                        if (content.candidates[0] && content.candidates[0].finishReason && content.candidates[0].finishReason !== 'STOP') {
+                            // finishReasonが指定されている、かつSTOPではない場合はエラー終了させる。
+                            // ストリームが終了したらループを抜ける
+                            tokenCount.cost = tokenCount.calcCost();
+                            throw JSON.stringify({ safetyRatings, candidate: content.candidates[0] });
+                        } else { }
+                        // candidates: [ { finishReason: 'OTHER', index: 0, content: [Object] } ],
                     }
                     return;
                 }
                 // ストリームの読み取りを開始
                 return readStream();
 
-            }).catch(error => {
-                throw error;
             });
         } else {
             const client =
@@ -642,6 +661,10 @@ class RunBit {
                 console.log(logObject.output('wait', `wait ${waitMs}ms ${waitS}s`));
                 setTimeout(() => { this.executeCall(); }, waitMs);
             } else { }
+
+            observer.error(error);
+            this.openApiWrapper.fire(); // キューに着火
+            // throw error; // TODO 本当は throw error しても大丈夫なように作るべきだが、 Unhandled Error になるので一旦エラー出さない。
         });
         return runPromise;
     };
