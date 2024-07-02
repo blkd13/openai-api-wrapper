@@ -381,6 +381,27 @@ class RunBit {
                 ],
             };
 
+            let promptChars = 0;
+            function countTokens(contents: ChatCompletionContentPart[] | string | null | undefined): number {
+                let countChars = 0;
+                if (contents) {
+                    if (typeof contents === 'string') {
+                        countChars += contents.length;
+                    } else {
+                        countChars += contents.reduce((prev, curr, index) => {
+                            if (curr.type === 'text') {
+                                prev += curr.text.length;
+                            } else {
+                                prev += curr.image_url.url.length;
+                            }
+                            return prev;
+                        }, countChars);
+                    }
+                } else {
+                    // 
+                }
+                return countChars;
+            }
             args.messages.reduce((prev, curr) => {
                 // ロールが連続する場合は1つのコンテンツとしてさまる（こうしないとGeminiがエラーになるので。）
                 if (prev.length === 0 || prev[prev.length - 1].role !== curr.role) {
@@ -406,6 +427,9 @@ class RunBit {
                 }
                 return prev;
             }, [] as ChatCompletionMessageParam[]).forEach(message => {
+                // 文字数カウント
+                promptChars += countTokens(message.content);
+
                 // 画像ファイルなどが入ってきたとき用の整理
                 if (typeof message.content === 'string') {
                     if (message.role === 'system') {
@@ -444,6 +468,8 @@ class RunBit {
                     console.log('unknown message type');
                 }
             });
+
+            // console.log(`promptChars=${promptChars}`);
             // const _dum = JSON.parse(JSON.stringify(req))
             // _dum.contents = req.contents.filter(obj => obj.role !== 'system');
             // generativeModel.countTokens(_dum).then(obj => {
@@ -460,12 +486,13 @@ class RunBit {
 
                 const _that = this;
 
+                tokenCount.prompt_tokens = promptChars;
+                tokenCount.completion_tokens = 0;
                 // ストリームからデータを読み取る非同期関数
                 async function readStream() {
                     while (true) {
                         const { value, done } = await streamingResp.stream.next();
                         if (done) {
-
                             // ストリームが終了したらループを抜ける
                             tokenCount.cost = tokenCount.calcCost();
                             console.log(logObject.output('fine', ''));
@@ -491,10 +518,11 @@ class RunBit {
                         // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
                         const text = content.candidates[0].content.parts[0].text || '';
                         tokenBuilder += text;
+                        tokenCount.completion_tokens += text.length;
 
                         if (content.usageMetadata) {
-                            tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
-                            tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
+                            // tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
+                            // tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
 
                             // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
                             fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
