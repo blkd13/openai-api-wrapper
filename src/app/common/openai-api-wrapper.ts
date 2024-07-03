@@ -358,10 +358,10 @@ class RunBit {
                     topP: args.top_p || 0.95,
                 },
                 safetySettings: [
-                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE, },
-                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE, },
-                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE, },
-                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE, }
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE, },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE, },
+                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE, },
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE, }
                 ],
             });
             // console.log(generativeModel);
@@ -821,7 +821,7 @@ export class OpenAIApiWrapper {
                                         const metaInfo = sizeOf(data);
                                         // 画像のトークン数を計算する。
                                         imagePrompt += calculateTokenCost(metaInfo.width || 0, metaInfo.height || 0);
-                                    } else if (content.image_url.url.startsWith('data:text/') || content.image_url.url.startsWith('data:application/octet-stream;base64,IyEvYmluL') || textTrgList.includes(trg)) {
+                                    } else if (content.image_url.url.startsWith('data:text/') || content.image_url.url.startsWith('data:application/octet-stream;base64,') || textTrgList.includes(trg)) {
                                         // テキストファイルの場合はデコードしてテキストにしてしまう。
                                         (content.type as any) = 'text';
                                         const detectedEncoding = detect(data);

@@ -249,7 +249,7 @@ export const geminiCountTokens = [
                             const label = (content.image_url as any)['label'] as string;
                             const trg = label.toLocaleLowerCase().replace(/.*\./g, '');
                             const textTrgList = ['java', 'md', 'csh', 'sh', 'pl', 'php', 'rs', 'py', 'ipynb', 'cob', 'cbl', 'pco', 'copy', 'cpy', 'c', 'pc', 'h', 'cpp', 'hpp', 'yaml', 'yml', 'xml', 'properties', 'kt', 'sql', 'ddl', 'awk'];
-                            if (content.image_url.url.startsWith('data:text/') || content.image_url.url.startsWith('data:application/octet-stream;base64,IyEvYmluL') || textTrgList.includes(trg)) {
+                            if (content.image_url.url.startsWith('data:text/') || content.image_url.url.startsWith('data:application/octet-stream;base64,') || textTrgList.includes(trg)) {
                                 // テキストファイルの場合はデコードしてテキストにしてしまう。
                                 const detectedEncoding = detect(data);
                                 if (detectedEncoding.encoding === 'ISO-8859-2') {
@@ -284,9 +284,38 @@ export const geminiCountTokens = [
             }
         });
 
+        const countChars = req.contents.reduce((prev0, curr0) =>
+            Object.assign(prev0, curr0.parts.reduce((prev1, curr1) => {
+                if (curr1.text) {
+                    prev1.text += curr1.text.length;
+                } else if (curr1.fileData) {
+                    const mediaType = curr1.fileData.mimeType.split('/')[0];
+                    switch (mediaType) {
+                        case 'audio':
+                            // TODO audioの長さから測定する
+                            prev1.audio += 0;
+                            break;
+                        case 'video':
+                            // TODO videoの長さから測定する
+                            prev1.video += 0;
+                            break;
+                        case 'image':
+                            prev1.image += 1000;
+                            break;
+                        default:
+                            console.log(`unkown type: ${JSON.stringify(curr1)}`);
+                            break;
+                    }
+                } else {
+                    console.log(`unkown obj:${JSON.stringify(curr1)}`);
+                }
+                return prev1;
+            }, prev0)), { image: 0, text: 0, video: 0, audio: 0 }
+        );
+
         // console.dir(req, { depth: null });
         generativeModel.countTokens(req).then(tokenObject => {
-            res.end(JSON.stringify(tokenObject));
+            res.end(JSON.stringify(Object.assign(tokenObject, countChars)));
         });
     }
 ];
