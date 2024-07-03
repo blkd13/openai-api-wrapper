@@ -288,8 +288,8 @@ export const geminiCountTokens = [
             Object.assign(prev0, curr0.parts.reduce((prev1, curr1) => {
                 if (curr1.text) {
                     prev1.text += curr1.text.length;
-                } else if (curr1.fileData) {
-                    const mediaType = curr1.fileData.mimeType.split('/')[0];
+                } else if (curr1.inlineData) {
+                    const mediaType = curr1.inlineData.mimeType.split('/')[0];
                     switch (mediaType) {
                         case 'audio':
                             // TODO audioの長さから測定する
@@ -303,11 +303,12 @@ export const geminiCountTokens = [
                             prev1.image += 1000;
                             break;
                         default:
-                            console.log(`unkown type: ${JSON.stringify(curr1)}`);
+                            const contentUrlType = curr1.inlineData.data.split(',')[0];
+                            console.log(`unkown type: ${contentUrlType}`);
                             break;
                     }
                 } else {
-                    console.log(`unkown obj:${JSON.stringify(curr1)}`);
+                    console.log(`unkown obj ${Object.keys(curr1)}`);
                 }
                 return prev1;
             }, prev0)), { image: 0, text: 0, video: 0, audio: 0 }

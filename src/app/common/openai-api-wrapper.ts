@@ -446,7 +446,9 @@ class RunBit {
                             message.content.map(content => {
                                 if (content.type === 'image_url') {
                                     // TODO URLには対応していない
-                                    if (content.image_url.url.startsWith('data:')) {
+                                    if (content.image_url.url.startsWith('data:video/')) {
+                                        return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, video_metadata: {} };
+                                    } else if (content.image_url.url.startsWith('data:')) {
                                         return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, };
                                     } else {
                                         return { file_data: { file_uri: content.image_url.url } };
@@ -498,8 +500,15 @@ class RunBit {
                     let safetyRatings;
                     while (true) {
                         const { value, done } = await streamingResp.stream.next();
+                        // console.log('0000000000000000------------------------=========================')
                         // console.dir(value, { depth: null });
-
+                        // console.log('5555555555555555------------------------=========================')
+                        // console.dir(done, { depth: null });
+                        // console.log('3333333333333333------------------------=========================')
+                        // [1] {
+                        // [1]   promptFeedback: { blockReason: 'PROHIBITED_CONTENT' },
+                        // [1]   usageMetadata: { promptTokenCount: 43643, totalTokenCount: 43643 }
+                        // [1] }
                         if (done) {
                             // ストリームが終了したらループを抜ける
                             tokenCount.cost = tokenCount.calcCost();
@@ -519,7 +528,26 @@ class RunBit {
                         // console.log(content);
 
                         // 中身がない場合はスキップ
-                        if (!content || !content.candidates) { continue; }
+                        if (!content) { continue; }
+
+                        // 
+                        if (content.usageMetadata) {
+                            // tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
+                            // tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
+
+                            // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
+                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ model, req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
+                        } else { }
+
+                        if (content.promptFeedback && content.promptFeedback.blockReason) {
+                            // finishReasonが指定されている、かつSTOPではない場合はエラー終了させる。
+                            // ストリームが終了したらループを抜ける
+                            tokenCount.cost = tokenCount.calcCost();
+                            throw JSON.stringify({ promptFeedback: content.promptFeedback });
+                        } else { }
+
+                        // 中身がない場合はスキップ
+                        if (!content.candidates) { continue; }
                         // ファイルに書き出す
                         fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, JSON.stringify(content) || '', {}, () => { });
 
@@ -534,13 +562,6 @@ class RunBit {
 
                             // streamHandlerを呼び出す
                             observer.next(text);
-                        } else { }
-                        if (content.usageMetadata) {
-                            // tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
-                            // tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
-
-                            // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
-                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ model, req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
                         } else { }
                         // [1]   candidates: [ { finishReason: 'OTHER', index: 0, content: [Object] } ],
                         if (content.candidates[0] && content.candidates[0].finishReason && content.candidates[0].finishReason !== 'STOP') {
