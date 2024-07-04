@@ -10,6 +10,7 @@ import * as configureGlobalFetch from './configureGlobalFetch.js'; configureGlob
 
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 import { GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, VertexAI } from '@google-cloud/vertexai';
 // import { GoogleGenerativeAI } from "@google/generative-ai";
 // import { GoogleAICacheManager, GoogleAIFileManager } from "@google/generative-ai/server";
@@ -69,6 +70,7 @@ const local = new OpenAI({
 });
 
 import { AzureKeyCredential, OpenAIClient } from "@azure/openai";
+import { MessageCreateParams } from '@anthropic-ai/sdk/resources/messages.js';
 
 const azureClient = new OpenAIClient(
     process.env['AZURE_OPENAI_ENDPOINT'] as string || 'dummy',
@@ -85,6 +87,7 @@ export const azureDeployTpmMap: Record<string, number> = {
 
 // Initialize Vertex with your Cloud project and location
 export const vertex_ai = new VertexAI({ project: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', location: process.env['GCP_REGION'] || 'asia-northeast1' });
+export const anthropicVertex = new AnthropicVertex({ projectId: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', region: process.env['GCP_REGION'] || 'asia-northeast1' });
 
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
@@ -403,74 +406,120 @@ class RunBit {
                 }
                 return countChars;
             }
-            args.messages.reduce((prev, curr) => {
-                // ロールが連続する場合は1つのコンテンツとしてさまる（こうしないとGeminiがエラーになるので。）
-                if (prev.length === 0 || prev[prev.length - 1].role !== curr.role) {
-                    prev.push(curr);
-                } else {
-                    const prevContent = prev[prev.length - 1].content;
-                    if (typeof prevContent === 'string') {
-                        // 1個前の同じロールのコンテンツがstring型だと連結できないので構造化配列にしておく。
-                        prev[prev.length - 1].content = [{ type: 'text', text: prevContent }];
-                    } else {
-                        // 元々配列なので何もしない
+            function blankTruncateFilter(message: ChatCompletionMessageParam) {
+                // 空オブジェクトが混ざらないように消すやつ
+                if (message.content) {
+                    if (typeof message.content === 'string') {
+                        return message.content;
+                    } else if (Array.isArray(message.content)) {
+                        message.content = message.content.filter(parts => {
+                            if (parts.type === 'text') {
+                                return parts.text && parts.text.length;
+                            } else if (parts.type === 'image_url') {
+                                return parts.image_url && parts.image_url.url;
+                            } else {
+                                return false;
+                            }
+                        })
+                        return message.content.length;
                     }
-                    const prevContentArray = prev[prev.length - 1].content;
-                    if (Array.isArray(prevContentArray)) {
-                        if (typeof curr.content === 'string') {
-                            prevContentArray.push({ type: 'text', text: curr.content });
-                        } else if (curr.content) {
-                            curr.content.forEach(obj => prevContentArray.push(obj));
+                } else {
+                    return false;
+                }
+                return message.content;
+            }
+            args.messages
+                .filter(blankTruncateFilter)
+                .reduce((prev, curr) => {
+                    // ロールが連続する場合は1つのコンテンツとしてさまる（こうしないとGeminiがエラーになるので。）
+                    if (prev.length === 0 || prev[prev.length - 1].role !== curr.role) {
+                        prev.push(curr);
+                    } else {
+                        const prevContent = prev[prev.length - 1].content;
+                        if (typeof prevContent === 'string') {
+                            if (prevContent) {
+                                // 1個前の同じロールのコンテンツがstring型だと連結できないので構造化配列にしておく。
+                                prev[prev.length - 1].content = [{ type: 'text', text: prevContent }];
+                                return prev;
+                            } else {
+                                // 空文字は無視する
+                                return prev;
+                            }
                         } else {
-                            // エラー
+                            // 元々配列なので何もしない
+                        }
+                        const prevContentArray = prev[prev.length - 1].content;
+                        if (Array.isArray(prevContentArray)) {
+                            if (typeof curr.content === 'string') {
+                                if (curr.content) {
+                                    prevContentArray.push({ type: 'text', text: curr.content });
+                                } else {
+                                    // 中身がないものは削ってしまう。
+                                }
+                            } else if (curr.content) {
+                                curr.content.forEach(obj => {
+                                    if (obj.type === 'text' && obj.text) {
+                                        // 中身があれば追加
+                                        prevContentArray.push(obj);
+                                    } else if (obj.type === 'image_url' && obj.image_url && obj.image_url.url) {
+                                        // 中身があれば追加
+                                        prevContentArray.push(obj);
+                                    } else {
+                                        // 中身がないので追加しない。
+                                    }
+                                });
+                            } else {
+                                // エラー
+                            }
                         }
                     }
-                }
-                return prev;
-            }, [] as ChatCompletionMessageParam[]).forEach(message => {
-                // 文字数カウント
-                promptChars += countTokens(message.content);
+                    return prev;
+                }, [] as ChatCompletionMessageParam[])
+                .filter(blankTruncateFilter)
+                .forEach(message => {
+                    // 文字数カウント
+                    promptChars += countTokens(message.content);
 
-                // 画像ファイルなどが入ってきたとき用の整理
-                if (typeof message.content === 'string') {
-                    if (message.role === 'system') {
-                        // systemはsystemInstructionに入れる
-                        req.systemInstruction = message.content;
-                    } else {
-                        req.contents.push({ role: message.role, parts: [{ text: message.content }] });
-                    }
-                } else if (Array.isArray(message.content)) {
-                    const remappedContent = {
-                        role: message.role,
-                        parts:
-                            message.content.map(content => {
-                                if (content.type === 'image_url') {
-                                    // TODO URLには対応していない
-                                    if (content.image_url.url.startsWith('data:video/')) {
-                                        return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, video_metadata: {} };
-                                    } else if (content.image_url.url.startsWith('data:')) {
-                                        return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, };
+                    // 画像ファイルなどが入ってきたとき用の整理
+                    if (typeof message.content === 'string') {
+                        if (message.role === 'system') {
+                            // systemはsystemInstructionに入れる
+                            req.systemInstruction = message.content;
+                        } else {
+                            req.contents.push({ role: message.role, parts: [{ text: message.content }] });
+                        }
+                    } else if (Array.isArray(message.content)) {
+                        const remappedContent = {
+                            role: message.role,
+                            parts:
+                                message.content.map(content => {
+                                    if (content.type === 'image_url') {
+                                        // TODO URLには対応していない
+                                        if (content.image_url.url.startsWith('data:video/')) {
+                                            return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, video_metadata: {} };
+                                        } else if (content.image_url.url.startsWith('data:')) {
+                                            return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, };
+                                        } else {
+                                            return { file_data: { file_uri: content.image_url.url } };
+                                        }
+                                    } else if (content.type === 'text') {
+                                        return { text: content.text as string };
                                     } else {
-                                        return { file_data: { file_uri: content.image_url.url } };
+                                        console.log('unknown sub message type');
+                                        return null;
                                     }
-                                } else if (content.type === 'text') {
-                                    return { text: content.text as string };
-                                } else {
-                                    console.log('unknown sub message type');
-                                    return null;
-                                }
-                            }).filter(is => is) as Part[],
-                    };
-                    if (message.role === 'system') {
-                        // systemはsystemInstructionに入れる
-                        req.systemInstruction = remappedContent;
+                                }).filter(is => is) as Part[],
+                        };
+                        if (message.role === 'system') {
+                            // systemはsystemInstructionに入れる
+                            req.systemInstruction = remappedContent;
+                        } else {
+                            req.contents.push(remappedContent);
+                        }
                     } else {
-                        req.contents.push(remappedContent);
+                        console.log('unknown message type');
                     }
-                } else {
-                    console.log('unknown message type');
-                }
-            });
+                });
 
             // console.log(`promptChars=${promptChars}`);
             // const _dum = JSON.parse(JSON.stringify(req))
