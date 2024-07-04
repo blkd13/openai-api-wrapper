@@ -15,10 +15,6 @@ import { GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part } from '
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
 
-// OpenAI APIラッパー
-export const aiApi = new OpenAIApiWrapper();
-aiApi.wrapperOptions.provider = 'vertexai';
-
 /**
  * [user認証] イベントの初期化
  */
@@ -79,6 +75,12 @@ export const chatCompletion = [
 
         let text = '';
         const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.threadId}`;
+        const aiApi = new OpenAIApiWrapper();
+        if (inDto.args.model.startsWith('gemini-')) {
+            aiApi.wrapperOptions.provider = 'vertexai';
+        } else if (inDto.args.model.startsWith('claude-')) {
+            aiApi.wrapperOptions.provider = 'anthropic_vertexai';
+        }
         aiApi.chatCompletionObservableStream(
             inDto.args, {
             label: label,
@@ -202,7 +204,8 @@ export const geminiCountTokens = [
         const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
         const args = inDto.args;
         const generativeModel = vertex_ai.preview.getGenerativeModel({
-            model: args.model,
+            // model: args.model,
+            model: 'gemini-1.5-flash',
             generationConfig: {
                 maxOutputTokens: args.max_tokens || 8192,
                 temperature: args.top_p || 0.1,

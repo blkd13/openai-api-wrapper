@@ -70,7 +70,6 @@ const local = new OpenAI({
 });
 
 import { AzureKeyCredential, OpenAIClient } from "@azure/openai";
-import { MessageCreateParams } from '@anthropic-ai/sdk/resources/messages.js';
 
 const azureClient = new OpenAIClient(
     process.env['AZURE_OPENAI_ENDPOINT'] as string || 'dummy',
@@ -87,7 +86,7 @@ export const azureDeployTpmMap: Record<string, number> = {
 
 // Initialize Vertex with your Cloud project and location
 export const vertex_ai = new VertexAI({ project: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', location: process.env['GCP_REGION'] || 'asia-northeast1' });
-export const anthropicVertex = new AnthropicVertex({ projectId: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', region: process.env['GCP_REGION'] || 'asia-northeast1' });
+export const anthropicVertex = new AnthropicVertex({ projectId: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', region: 'europe-west1', httpAgent: options.httpAgent }); //TODO 他で使えるようになったら変える。
 
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
@@ -108,7 +107,7 @@ function getEncoder(model: TiktokenModel): Tiktoken {
 
 export interface WrapperOptions {
     allowLocalFiles: boolean;
-    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai';
+    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai' | 'anthropic_vertexai';
 }
 
 // Uint8Arrayを文字列に変換
@@ -150,8 +149,8 @@ class RunBit {
         let runPromise = null;
 
         console.log(logObject.output('start', ''));
-        if (this.openApiWrapper.wrapperOptions.provider === 'anthropic') {
-            args.max_tokens = args.max_tokens || 4096;
+        if (this.openApiWrapper.wrapperOptions.provider === 'anthropic' || this.openApiWrapper.wrapperOptions.provider === 'anthropic_vertexai') {
+            args.max_tokens = Math.min(args.max_tokens || 4096, 4096);
             // console.log('shot');
             // claudeはsystemプロンプトが無い。
             const systemcPrompt = args.messages.find(m => m.role === 'system');
@@ -185,7 +184,8 @@ class RunBit {
                 try {
                     // リクエストをファイルに書き出す
                     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
-                    const response = (anthropic.messages.stream(args as any).toReadableStream());
+                    const client = this.openApiWrapper.wrapperOptions.provider === 'anthropic' ? anthropic : anthropicVertex;
+                    const response = (client.messages.stream(args as any).toReadableStream());
                     // console.log('res');
                     // ratelimitObj.limitRequests = 5; // 適当に5にしておく。
                     // ratelimitObj.limitTokens = azureDeployTpmMap[args.model];
@@ -1072,7 +1072,7 @@ export type GPTModels = TiktokenModel
     | 'gemini-1.5-flash' | 'gemini-1.5-pro' | 'gemini-1.0-pro' | 'gemini-1.0-pro-vision'
     | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b'
     | 'mistral-small-2312' | 'mistral-small' | 'mistral-small-2402' | 'mistral-small-latest' | 'mistral-medium-latest' | 'mistral-medium-2312' | 'mistral-medium' | 'mistral-large-latest' | 'mistral-large-2402' | 'mistral-embed'
-    | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-sonnet-20240229' | 'claude-3-opus-20240229' | 'claude-3-5-sonnet-20240620'
+    | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-sonnet-20240229' | 'claude-3-opus-20240229' | 'claude-3-5-sonnet-20240620' | 'claude-3-5-sonnet@20240620'
     | 'deepseek-coder' | 'deepseek-chat';
 
 /**
@@ -1199,6 +1199,7 @@ export class TokenCount {
         'gemini-1.5-pro': 'gem-15pr',
         'gemini-1.0-pro': 'gem-10pr',
         'gemini-1.0-pro-vision': 'gem-10pv',
+        'claude-3-5-sonnet@20240620': 'cla-35sn',
     };
 
     // コスト

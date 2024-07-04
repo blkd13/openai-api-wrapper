@@ -38,6 +38,7 @@
     },
     "dependencies": {
         "@anthropic-ai/sdk": "^0.17.1",
+        "@anthropic-ai/vertex-sdk": "^0.4.0",
         "@azure/openai": "^1.0.0-beta.11",
         "@google-cloud/vertexai": "^1.2.0",
         "bcrypt": "^5.1.1",
