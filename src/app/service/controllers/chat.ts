@@ -311,7 +311,10 @@ export const geminiCountTokens = [
                             break;
                     }
                 } else {
-                    console.log(`unkown obj ${Object.keys(curr1)}`);
+                    if ('text' in curr1) {
+                    } else {
+                        console.log(`unkown obj ${Object.keys(curr1)}`);
+                    }
                 }
                 return prev1;
             }, prev0)), { image: 0, text: 0, video: 0, audio: 0 }

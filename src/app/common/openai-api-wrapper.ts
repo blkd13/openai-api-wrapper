@@ -220,8 +220,9 @@ class RunBit {
                                     _that.openApiWrapper.fire();
                                     break;
                                 }
-                                // console.log(JSON.stringify(value));
-                                // // 中身を取り出す
+                                // console.log(typeof value);
+                                // console.log(value);
+                                // let decoder = new TextDecoder('utf-8'); // 例：UTF-8エンコーディングを指定
                                 const content = decoder.decode(value);
                                 // console.log(content);
 
