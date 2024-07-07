@@ -1,20 +1,21 @@
 import * as http from 'http';
+import * as  fs from 'fs';
+import { execSync } from 'child_process';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";
+import axios from 'axios';
 
-import { OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
+import { OpenAIApiWrapper, countChars, mapForGemini, normalizeMessage, vertex_ai, vertex_ai_context_cache } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
-import { ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam } from "openai/resources/index.js";
+import { ChatCompletionCreateParamsStreaming } from "openai/resources/index.js";
 import { ds } from '../db.js';
 import { DiscussionEntity, TaskEntity, StatementEntity } from '../entity/project-models.entity.js';
 import { enqueueGenerator, qSubject } from './project-models.js';
+import { GenerateContentRequest, HarmBlockThreshold, HarmCategory } from '@google-cloud/vertexai';
 
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
-
-// OpenAI APIラッパー
-export const aiApi = new OpenAIApiWrapper();
 
 /**
  * [user認証] イベントの初期化
@@ -76,6 +77,12 @@ export const chatCompletion = [
 
         let text = '';
         const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.threadId}`;
+        const aiApi = new OpenAIApiWrapper();
+        if (inDto.args.model.startsWith('gemini-')) {
+            aiApi.wrapperOptions.provider = 'vertexai';
+        } else if (inDto.args.model.startsWith('claude-')) {
+            aiApi.wrapperOptions.provider = 'anthropic_vertexai';
+        }
         aiApi.chatCompletionObservableStream(
             inDto.args, {
             label: label,
@@ -90,7 +97,7 @@ export const chatCompletion = [
             },
             error: error => {
                 console.log(error);
-                clients[clientId]?.response.end(error);
+                clients[clientId]?.response.end(`error: ${req.query.threadId} ${error}\n\n`);
             },
             complete: () => {
                 if (req.body.taskId) {
@@ -187,3 +194,208 @@ export const chatCompletion = [
         res.end(JSON.stringify({ status: 'ok' }));
     }
 ];
+
+/**
+ * [認証不要] トークンカウント
+ */
+export const geminiCountTokens = [
+    body('args').notEmpty(),
+    validationErrorHandler,
+    (_req: Request, res: Response) => {
+        const start = Date.now();
+        // console.log('geminiCountTokens');
+        const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
+        const args = inDto.args;
+        const generativeModel = vertex_ai.preview.getGenerativeModel({
+            model: args.model,
+            // model: 'gemini-1.5-flash',
+            generationConfig: {
+                maxOutputTokens: args.max_tokens || 8192,
+                temperature: args.top_p || 0.1,
+                topP: args.temperature || 0,
+            },
+            safetySettings: [
+                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE, },
+                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE, },
+                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE, },
+                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE, }
+            ],
+        });
+
+        normalizeMessage(args, false).subscribe({
+            next: next => {
+                const args = next.args;
+                const req: GenerateContentRequest = { contents: [], };
+                mapForGemini(args, req);
+                const countCharsObj = countChars(args);
+                // console.log(countCharsObj);
+                // console.dir(req, { depth: null });
+                generativeModel.countTokens(req).then(tokenObject => {
+                    res.end(JSON.stringify(Object.assign(tokenObject, countCharsObj)));
+                });
+            },
+            // complete: () => {
+            //     console.log('complete');
+            // },
+        });
+    }
+];
+
+// Eventクライアントリスト
+export const global: Record<string, { id: string; response: http.ServerResponse; }> = {};
+
+let accessToken: string = '';
+
+/**
+ * [ユーザー認証] コンテキストキャッシュ作成
+ */
+export const geminiCreateContextCache = [
+    body('args').notEmpty(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
+        const args = inDto.args;
+        const location: string = 'us-central1'; // コンテキストキャッシュはus-central1固定
+        const projectId: string = process.env.PROJECT_ID || 'rock-task-159120';
+        const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
+        // const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${modelId}/cachedContents`;
+        const url = `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents`;
+        normalizeMessage(args, false).subscribe({
+            next: next => {
+                const args = next.args;
+                const req: GenerateContentRequest = { contents: [], };
+                mapForGemini(args, req);
+
+                // モデルの説明文を書いておく？？
+                req.contents.push({ role: 'model', parts: [{ text: 'これはキャッシュ機能のサンプルです。' }] });
+
+                // // システムプロンプトを先頭に戻しておく
+                // if (req.systemInstruction && typeof req.systemInstruction !== 'string') {
+                //     req.contents.unshift(req.systemInstruction);
+                // } else { }
+
+                // リクエストボディ
+                const requestBody = {
+                    model: `projects/${projectId}/locations/${location}/publishers/google/models/${modelId}`,
+                    contents: req.contents,
+                };
+
+                fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
+
+                // アクセストークンを取得してリクエスト
+                (accessToken ? Promise.resolve(accessToken) : getAccessToken())
+                    .then(_accessToken => {
+                        // アクセストークンをストック
+                        accessToken = _accessToken;
+                        // リクエスト
+                        return axios.post(url, requestBody, {
+                            headers: {
+                                'Authorization': `Bearer ${accessToken}`,
+                                'Content-Type': 'application/json',
+                            },
+                        });
+                    })
+                    .then(response => {
+                        res.end(JSON.stringify(Object.assign(response.data)));
+                        // console.log(response.headers);
+                        // console.log(response.data);
+                    })
+                    .catch(error => {
+                        // 有効期限が切れてるかもしれないのでアクセストークンを再取得する。
+                        console.error(error);
+                        getAccessToken();
+                    });
+
+            },
+            // complete: () => {
+            //     console.log('complete');
+            // },
+        });
+    }
+];
+
+
+// const url = `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/publishers/google/models/${modelId}:generateContent`;
+// GET https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents
+// PATCH https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents/CACHE_ID
+// {
+//   "seconds":"SECONDS",
+//   "nanos":"NANOSECONDS"
+// }
+// DELETE https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents/CACHE_ID
+
+
+/**
+ * [ユーザー認証] コンテキストキャッシュ作成
+ */
+export const geminiUpdateContextCache = [
+    body('args').notEmpty(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
+        const args = inDto.args;
+        const location: string = 'us-central1'; // コンテキストキャッシュはus-central1固定
+        const projectId: string = process.env.PROJECT_ID || 'rock-task-159120';
+        const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
+        // const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${modelId}/cachedContents`;
+        // const url = `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents`;
+        const url = `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/publishers/google/models/${modelId}:generateContent`;
+
+        normalizeMessage(args, false).subscribe({
+            next: next => {
+                const args = next.args;
+                const req: GenerateContentRequest = { contents: [], };
+                mapForGemini(args, req);
+
+                // モデルの説明文を書いておく？？
+                req.contents.push({ role: 'model', parts: [{ text: 'これはキャッシュ機能のサンプルです。' }] });
+
+                // リクエストボディ
+                const requestBody = {
+                    model: `projects/${projectId}/locations/${location}/publishers/google/models/${modelId}`,
+                    contents: req.contents,
+                };
+
+                fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
+
+                // アクセストークンを取得してリクエスト
+                (accessToken ? Promise.resolve(accessToken) : getAccessToken())
+                    .then(_accessToken => {
+                        // アクセストークンをストック
+                        accessToken = _accessToken;
+                        // リクエスト
+                        return axios.post(url, requestBody, {
+                            headers: {
+                                'Authorization': `Bearer ${accessToken}`,
+                                'Content-Type': 'application/json',
+                            },
+                        });
+                    })
+                    .then(response => {
+                        res.end(JSON.stringify(Object.assign(response.data)));
+                        // console.log(response.headers);
+                        // console.log(response.data);
+                    })
+                    .catch(error => {
+                        // 有効期限が切れてるかもしれないのでアクセストークンを再取得する。
+                        console.error(error);
+                        getAccessToken();
+                    });
+
+            },
+            // complete: () => {
+            //     console.log('complete');
+            // },
+        });
+    }
+];
+
+
+const getAccessToken = async (): Promise<string> => {
+    try {
+        const result = execSync('gcloud auth print-access-token').toString().trim();
+        return result;
+    } catch (error) {
+        throw new Error('Failed to get access token. Make sure you are authenticated with gcloud.');
+    }
+};
