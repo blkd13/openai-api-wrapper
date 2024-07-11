@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { changePassword, deleteUser, getUser, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
 import { authenticateDummyToken, authenticateInviteToken, authenticateUserToken } from './middleware/authenticate.js';
-import { chatCompletion, geminiCountTokens, initEvent } from './controllers/chat.js';
+import { chatCompletion, geminiCountTokens, geminiCreateContextCache, initEvent } from './controllers/chat.js';
 import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
 import { getDirectoryTree, getFile, saveFile } from './controllers/directory-tree.js';
 
@@ -33,12 +33,14 @@ authUserRouter.delete('/user', deleteUser);
 // チャット系
 authUserRouter.get('/event', initEvent);
 authUserRouter.post('/chat-completion', chatCompletion);
-
+authUserRouter.post('/create-cache', geminiCreateContextCache);
 // チャット系（認証不要）
+authNoneRouter.post('/count-tokens', geminiCountTokens);
+
+// ダミー
 authDummyRouter.get('/event', initEvent);
 authDummyRouter.post('/chat-completion', chatCompletion);
 authDummyRouter.post('/count-tokens', geminiCountTokens);
-authNoneRouter.post('/count-tokens', geminiCountTokens);
 
 // プロジェクト系
 authUserRouter.post('/project', createProject);

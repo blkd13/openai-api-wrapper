@@ -12,6 +12,10 @@ import { validationErrorHandler } from '../middleware/validation.js';
 import { MoreThan } from 'typeorm';
 import { ds } from '../db.js';
 
+import * as dotenv from 'dotenv';
+dotenv.config();
+const { SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN } = process.env;
+
 /**
  * [認証不要] ユーザーログイン
  * @param req 
@@ -96,10 +100,14 @@ export const requestForPasswordReset = [
         inviteEntity.save();
 
         // メール送信
-        sendMail(req.body.email, 'パスワード設定依頼', `以下のURLからパスワード設定を完了してください。\nhttp://localhost:3000/invite/emailConfirm?token=${onetimeToken}`);
-
-        // res.json({ message: 'パスワード設定依頼を受け付けました。' });
-        res.json({ onetimeToken });
+        sendMail(req.body.email, 'パスワード設定依頼', `以下のURLからパスワード設定を完了してください。\n${FRONT_BASE_URL}/?onetimeToken=${onetimeToken}#/login`)
+            .then(_ => {
+                res.json({ message: 'パスワード設定依頼メールを送信しました。' });
+            })
+            .catch(error => {
+                res.json({ message: error });
+            });
+        // res.json({ onetimeToken }); // デバッグ用：メールサーバー無いときはレスポンスでワンタイムトークンを渡してしまう。セキュリティホール。
     }
 ];
 
@@ -116,9 +124,9 @@ export const passwordReset = [
     (_req: Request, res: Response) => {
         const req = _req as InviteRequest;
 
-        const passwordValidateionMessage = passwordValidateion(req.body.password, req.body.passwordConfirm);
-        if (passwordValidateionMessage) {
-            res.status(401).json({ message: passwordValidateionMessage });
+        const passwordValidationMessage = passwordValidation(req.body.password, req.body.passwordConfirm);
+        if (!passwordValidationMessage.isValid) {
+            res.status(401).json(passwordValidationMessage);
             return;
         } else {
             // 継続
@@ -217,9 +225,9 @@ export const changePassword = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const passwordValidateionMessage = passwordValidateion(req.body.password, req.body.passwordConfirm);
-        if (passwordValidateionMessage) {
-            res.status(401).json({ message: passwordValidateionMessage });
+        const passwordValidationMessage = passwordValidation(req.body.password, req.body.passwordConfirm);
+        if (!passwordValidationMessage.isValid) {
+            res.status(401).json(passwordValidationMessage);
             return;
         } else {
             // 継続
@@ -264,29 +272,30 @@ export const deleteUser = [
     }
 ];
 
-
-
-
 /**
  * メール送信
  * @param to 
  * @param subject 
  * @param text 
  */
-function sendMail(to: string, subject: string, text: string): void {
-    const myAddress = `my@adress.com`;
-    const transporter = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true, // SSL
+function sendMail(to: string, subject: string, text: string): Promise<void> {
+    // SMTPサーバーの設定
+    let transporter = nodemailer.createTransport({
+        host: SMTP_SERVER,
+        port: Number(SMTP_PORT),
+        secure: false, // true for 465, false for other ports
         auth: {
-            user: myAddress,
-            pass: `password`,
-        }
+            user: SMTP_USER, // Outlookメールアドレス
+            pass: SMTP_PASSWORD, // Outlookパスワード
+        },
+        tls: {
+            ciphers: 'SSLv3', // 暗号化方式を指定
+        },
     });
-    return;
-    transporter.sendMail({
-        from: `"${myAddress}" <${myAddress}>`,
+
+    // メールを送信
+    return transporter.sendMail({
+        from: `"${SMTP_ALIAS}" <${SMTP_USER}@${SMTP_DOMAIN}>`,
         to,
         subject,
         text,
@@ -311,14 +320,35 @@ function generateOnetimeToken(length: number = 16): string {
  * @param passwordConfirm 
  * @returns 
  */
-function passwordValidateion(password: string, passwordConfirm: string): string | null {
+function passwordValidation(password: string, passwordConfirm: string): { isValid: boolean, errors: string[] } {
+    const minLength = 8;
+    const hasUpperCase = /[A-Z]/.test(password);
+    const hasLowerCase = /[a-z]/.test(password);
+    const hasNumbers = /[0-9]/.test(password);
+    const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+
+    const errors: string[] = [];
+
     if (password != passwordConfirm) {
-        return 'パスワードが一致しません。';
-    } else if (password.length < 8) {
-        return 'パスワードは8文字以上にしてください。';
-    } else if (password.match(/[^a-zA-Z0-9\.\-\_]/)) {
-        return 'パスワードは半角英数字記号(.-_)のみ使用できます。';
-    } else {
-        return null;
+        errors.push('パスワードが一致しません。');
+        return { isValid: false, errors: errors }
     }
+
+    if (password.length < minLength) {
+        errors.push(`パスワードは ${minLength} 文字以上にしてください。`);
+    }
+    if (!hasUpperCase) {
+        errors.push('パスワードには少なくとも1つの大文字を含めてください。');
+    }
+    if (!hasLowerCase) {
+        errors.push('パスワードには少なくとも1つの小文字を含めてください。');
+    }
+    if (!hasNumbers) {
+        errors.push('パスワードには少なくとも1つの数字を含めてください。');
+    }
+    if (!hasSpecialChar) {
+        errors.push('パスワードには少なくとも1つの特殊文字を含めてください。');
+    }
+
+    return { isValid: errors.length > 0, errors: [] };
 }

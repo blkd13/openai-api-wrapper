@@ -1,9 +1,16 @@
 import { HttpsProxyAgent } from 'https-proxy-agent';
-import { Observable, Subscriber } from 'rxjs';
+import { Observable, Subscriber, forkJoin, map, of, tap, toArray } from 'rxjs';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import sizeOf from 'image-size';
 import { detect } from 'jschardet';
+
+import * as dotenv from 'dotenv';
+dotenv.config();
+const { GCP_PROJECT_ID, GCP_REGION } = process.env;
+// if (!PROJECT_ID || !LOCATION) {
+//     throw new Error('Missing required environment variables');
+// }
 
 // configureGlobalFetchを読み込むとfetchのproxyが効くようになるので、VertexAI用にただ読み込むだけ。
 import * as configureGlobalFetch from './configureGlobalFetch.js'; configureGlobalFetch;
@@ -11,7 +18,8 @@ import * as configureGlobalFetch from './configureGlobalFetch.js'; configureGlob
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, VertexAI } from '@google-cloud/vertexai';
+import { Content, GenerateContentRequest, GenerateContentResult, HarmBlockThreshold, HarmCategory, Part, StreamGenerateContentResult, VertexAI } from '@google-cloud/vertexai';
+import { generateContentStream } from '@google-cloud/vertexai/build/src/functions/generate_content.js';
 // import { GoogleGenerativeAI } from "@google/generative-ai";
 // import { GoogleAICacheManager, GoogleAIFileManager } from "@google/generative-ai/server";
 
@@ -66,10 +74,13 @@ const deepSeek = new OpenAI({
 });
 
 const local = new OpenAI({
+    apiKey: 'dummy',
     baseURL: 'http://localhost:8913/v1',
 });
 
-import { AzureKeyCredential, OpenAIClient } from "@azure/openai";
+import { AzureKeyCredential, ChatMessageContentItem, ChatRequestMessage, OpenAIClient } from "@azure/openai";
+import { getMetaDataFromDataURL } from './funcs.js';
+import { execSync } from 'child_process';
 
 const azureClient = new OpenAIClient(
     process.env['AZURE_OPENAI_ENDPOINT'] as string || 'dummy',
@@ -352,192 +363,33 @@ class RunBit {
                 return readStream();
             });
         } else if (this.openApiWrapper.wrapperOptions.provider === 'vertexai') {
-            // 'gemini-1.5-flash-001'
-            // Instantiate the models
-            const generativeModel = vertex_ai.preview.getGenerativeModel({
-                model: args.model,
-                generationConfig: {
-                    maxOutputTokens: args.max_tokens || 8192,
-                    temperature: args.temperature || 0.1,
-                    topP: args.top_p || 0.95,
-                },
-                safetySettings: [
-                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE, },
-                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE, },
-                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE, },
-                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE, }
-                ],
-            });
             // console.log(generativeModel);
             args.messages[0].content = args.messages[0].content || '';
-            const req: GenerateContentRequest = {
-                contents: [
-                    // {
-                    //     role: 'user', parts: [
-                    //         { text: `konnichiha` },
-                    //         {
-                    //             inlineData: {
-                    //                 mimeType: 'image/jpeg',
-                    //                 data: fs.readFileSync('./sample.jpg').toString('base64')
-                    //             }
-                    //         }
-                    //     ]
-                    // }
-                ],
-            };
+            // argsをGemini用に変換
+            const req: GenerateContentRequestExtended = mapForGeminiExtend(args, mapForGemini(args));
+            // 文字数をカウント
+            const countCharsObj = countChars(args);
+            let promptChars = countCharsObj.audio + countCharsObj.text + countCharsObj.image + countCharsObj.video;
+            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify(req, Utils.genJsonSafer()), {}, (err) => { });
+            const generativeModel = vertex_ai.preview.getGenerativeModel({
+                model: args.model,
+                generationConfig: req.generationConfig,
+                safetySettings: req.safetySettings,
+            });
 
-            let promptChars = 0;
-            function countTokens(contents: ChatCompletionContentPart[] | string | null | undefined): number {
-                let countChars = 0;
-                if (contents) {
-                    if (typeof contents === 'string') {
-                        countChars += contents.length;
-                    } else {
-                        countChars += contents.reduce((prev, curr, index) => {
-                            if (curr.type === 'text') {
-                                prev += curr.text.length;
-                            } else {
-                                prev += 1024; // 画像音声系は良く分からないけど1000にしてしまう。
-                            }
-                            return prev;
-                        }, countChars);
-                    }
-                } else {
-                    // 
-                }
-                return countChars;
+            // `${req.region}-aiplatform.googleapis.com`
+            const _req: GenerateContentRequest = { contents: req.contents, tools: req.tools || [], systemInstruction: req.systemInstruction };
+            if (req.cached_content) { (_req as any).cached_content = req.cached_content; }
+            // console.log(`cache=${JSON.stringify((args as any).cachedContent)}`);
+            // console.log(`_req=${JSON.stringify(_req)}`);
+            if (req.cached_content) {
+                runPromise = generateContentStream(req.region, req.resourcePath, getAccessTokenGemini(), _req, undefined, req.generationConfig, req.safetySettings, undefined, {});
+            } else {
+                runPromise = generativeModel.generateContentStream(_req);
             }
-            function blankTruncateFilter(message: ChatCompletionMessageParam) {
-                // 空オブジェクトが混ざらないように消すやつ
-                if (message.content) {
-                    if (typeof message.content === 'string') {
-                        return message.content;
-                    } else if (Array.isArray(message.content)) {
-                        message.content = message.content.filter(parts => {
-                            if (parts.type === 'text') {
-                                return parts.text && parts.text.length;
-                            } else if (parts.type === 'image_url') {
-                                return parts.image_url && parts.image_url.url;
-                            } else {
-                                return false;
-                            }
-                        })
-                        return message.content.length;
-                    }
-                } else {
-                    return false;
-                }
-                return message.content;
-            }
-            args.messages
-                .filter(blankTruncateFilter)
-                .reduce((prev, curr) => {
-                    // ロールが連続する場合は1つのコンテンツとしてさまる（こうしないとGeminiがエラーになるので。）
-                    if (prev.length === 0 || prev[prev.length - 1].role !== curr.role) {
-                        prev.push(curr);
-                    } else {
-                        const prevContent = prev[prev.length - 1].content;
-                        if (typeof prevContent === 'string') {
-                            if (prevContent) {
-                                // 1個前の同じロールのコンテンツがstring型だと連結できないので構造化配列にしておく。
-                                prev[prev.length - 1].content = [{ type: 'text', text: prevContent }];
-                                return prev;
-                            } else {
-                                // 空文字は無視する
-                                return prev;
-                            }
-                        } else {
-                            // 元々配列なので何もしない
-                        }
-                        const prevContentArray = prev[prev.length - 1].content;
-                        if (Array.isArray(prevContentArray)) {
-                            if (typeof curr.content === 'string') {
-                                if (curr.content) {
-                                    prevContentArray.push({ type: 'text', text: curr.content });
-                                } else {
-                                    // 中身がないものは削ってしまう。
-                                }
-                            } else if (curr.content) {
-                                curr.content.forEach(obj => {
-                                    if (obj.type === 'text' && obj.text) {
-                                        // 中身があれば追加
-                                        prevContentArray.push(obj);
-                                    } else if (obj.type === 'image_url' && obj.image_url && obj.image_url.url) {
-                                        // 中身があれば追加
-                                        prevContentArray.push(obj);
-                                    } else {
-                                        // 中身がないので追加しない。
-                                    }
-                                });
-                            } else {
-                                // エラー
-                            }
-                        }
-                    }
-                    return prev;
-                }, [] as ChatCompletionMessageParam[])
-                .filter(blankTruncateFilter)
-                .forEach(message => {
-                    // 文字数カウント
-                    promptChars += countTokens(message.content);
-
-                    // 画像ファイルなどが入ってきたとき用の整理
-                    if (typeof message.content === 'string') {
-                        if (message.role === 'system') {
-                            // systemはsystemInstructionに入れる
-                            req.systemInstruction = message.content;
-                        } else {
-                            req.contents.push({ role: message.role, parts: [{ text: message.content }] });
-                        }
-                    } else if (Array.isArray(message.content)) {
-                        const remappedContent = {
-                            role: message.role,
-                            parts:
-                                message.content.map(content => {
-                                    if (content.type === 'image_url') {
-                                        // TODO URLには対応していない
-                                        if (content.image_url.url.startsWith('data:video/')) {
-                                            return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, video_metadata: {} };
-                                        } else if (content.image_url.url.startsWith('data:')) {
-                                            return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, };
-                                        } else {
-                                            return { file_data: { file_uri: content.image_url.url } };
-                                        }
-                                    } else if (content.type === 'text') {
-                                        return { text: content.text as string };
-                                    } else {
-                                        console.log('unknown sub message type');
-                                        return null;
-                                    }
-                                }).filter(is => is) as Part[],
-                        };
-                        if (message.role === 'system') {
-                            // systemはsystemInstructionに入れる
-                            req.systemInstruction = remappedContent;
-                        } else {
-                            req.contents.push(remappedContent);
-                        }
-                    } else {
-                        console.log('unknown message type');
-                    }
-                });
-
-            // console.log(`promptChars=${promptChars}`);
-            // const _dum = JSON.parse(JSON.stringify(req))
-            // _dum.contents = req.contents.filter(obj => obj.role !== 'system');
-            // generativeModel.countTokens(_dum).then(obj => {
-            //     console.log(obj);
-            // });
-            // return;
-            // console.dir(req, { depth: null });
-            // console.dir(generativeModel, { depth: null });
-            // console.dir(req, { depth: null });
-            const model = Object.keys(generativeModel).filter(key => key !== 'googleAuth').reduce((prev, currKey) => {
-                prev[currKey] = (generativeModel as any)[currKey];
-                return prev;
-            }, {} as Record<string, any>);
-            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ model, req }, Utils.genJsonSafer()), {}, (err) => { });
-            runPromise = generativeModel.generateContentStream(req).then((streamingResp) => {
+            runPromise = (runPromise).then(streamingResp => {
+                // runPromise = client.generateContentStream((args as any).cachedContents as any, req).then(streamingResp => {
+                // runPromise = generativeModel.generateContentStream(req).then((streamingResp) => {
 
                 let tokenBuilder: string = '';
 
@@ -550,11 +402,6 @@ class RunBit {
                     let safetyRatings;
                     while (true) {
                         const { value, done } = await streamingResp.stream.next();
-                        // console.log('0000000000000000------------------------=========================')
-                        // console.dir(value, { depth: null });
-                        // console.log('5555555555555555------------------------=========================')
-                        // console.dir(done, { depth: null });
-                        // console.log('3333333333333333------------------------=========================')
                         // [1] {
                         // [1]   promptFeedback: { blockReason: 'PROHIBITED_CONTENT' },
                         // [1]   usageMetadata: { promptTokenCount: 43643, totalTokenCount: 43643 }
@@ -586,7 +433,7 @@ class RunBit {
                             // tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
 
                             // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
-                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ model, req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
+                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
                         } else { }
 
                         if (content.promptFeedback && content.promptFeedback.blockReason) {
@@ -741,8 +588,7 @@ class RunBit {
     };
 }
 
-
-const VISION_MODELS = ['gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-vision-preview', 'gemini-1.5-flash-001', 'gemini-1.5-pro-001', 'gemini-1.0-pro-vision-001', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro-vision'];
+const VISION_MODELS = ['gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-vision-preview', 'gemini-1.5-flash-001', 'gemini-1.5-pro-001', 'gemini-1.0-pro-vision-001', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro-vision', 'claude-3-haiku-20240307', 'claude-3-sonnet-20240229', 'claude-3-opus-20240229', 'claude-3-5-sonnet-20240620', 'claude-3-5-sonnet@20240620'];
 const JSON_MODELS = ['gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'];
 const GPT4_MODELS = ['gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview'];
 /**
@@ -837,157 +683,77 @@ export class OpenAIApiWrapper {
             // 強制的にストリームモードにする。
             args.stream = true;
 
-            // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
-            if (args.response_format?.type == 'json_object' && JSON_MODELS.indexOf(args.model) !== -1) {
-                const userMessage = args.messages.filter(message => message.role === 'user');
-                const lastUserMessage = args.messages[args.messages.indexOf(userMessage[userMessage.length - 1])];
-                if (!(lastUserMessage.content as string).includes('json')) {
-                    lastUserMessage.content += '\n\n# Output format\njson';
-                } else { /* それ以外は何もしない */ }
-            } else {
-                // それ以外はjson_object使えないのでフォーマットを削除する。
-                delete args.response_format;
-            }
+            // 入力を整形しておく。
+            normalizeMessage(args, this.wrapperOptions.allowLocalFiles).subscribe((obj) => {
+                args = obj.args;
 
-            if (args.temperature && typeof args.temperature === 'string') {
-                args.temperature = Number(args.temperature) || 0.7;
-            } else { }
-            if (args.top_p && typeof args.top_p === 'string') {
-                args.top_p = Number(args.top_p) || 1;
-            } else { }
-            if (args.n && typeof args.n === 'string') {
-                args.n = Number(args.n);
-            } else { }
+                // idempotencyKey の先頭にタイムスタンプをつける。（idempotencyKeyで履歴ファイルを作るので、時系列で履歴ファイルが並ぶようにと、あと単純に）
+                const timestamp = Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS');
 
-            let imagePrompt = 0;
-            if (VISION_MODELS.indexOf(args.model) !== -1) {
-                args.messages.forEach(message => {
-                    if (Array.isArray(message.content)) {
-                        message.content.forEach((content: ChatCompletionContentPart) => {
-                            if (content.type === 'image_url' && content.image_url && content.image_url.url) {
-                                // DANGER!!! ローカルファイルを読み込むのでオンラインから使わせるときはセキュリティ的に問題がある。
-                                // ファイルの種類を判定して、画像の場合はbase64に変換してcontent.image_url.urlにセットする。
-                                // TODO 外のURLには対応していない。
-                                // console.log(content.image_url.url);
-                                if (content.image_url.url.startsWith('file:///')) {
-                                    if (this.wrapperOptions.allowLocalFiles) {
-                                        const filePath = content.image_url.url.substring('file://'.length);
-                                        const data = fs.readFileSync(filePath);
-                                        const metaInfo = sizeOf(data);
-                                        console.log(metaInfo);
-                                        content.image_url.url = `data:image/${metaInfo.type === 'jpg' ? 'jpeg' : metaInfo.type};base64,${data.toString('base64')}`;
-                                        // 画像のトークン数を計算する。
-                                        imagePrompt += calculateTokenCost(metaInfo.width || 0, metaInfo.height || 0);
-                                    } else {
-                                        // エラー
-                                        throw new Error(`ローカルファイルアクセスは禁止`);
-                                    }
-                                } else if (content.image_url.url.startsWith('data:')) {
-                                    // データURLからデータを取り出してサイズを判定する。
-                                    const data = Buffer.from(content.image_url.url.substring(content.image_url.url.indexOf(',') + 1), 'base64');
-                                    const label = (content.image_url as any)['label'] as string;
-                                    const trg = label.toLocaleLowerCase().replace(/.*\./g, '');
-                                    const textTrgList = ['java', 'md', 'csh', 'sh', 'pl', 'php', 'rs', 'py', 'ipynb', 'cob', 'cbl', 'pco', 'copy', 'cpy', 'c', 'pc', 'h', 'cpp', 'hpp', 'yaml', 'yml', 'xml', 'properties', 'kt', 'sql', 'ddl', 'awk'];
-                                    if (content.image_url.url.startsWith('data:image/')) {
-                                        const metaInfo = sizeOf(data);
-                                        // 画像のトークン数を計算する。
-                                        imagePrompt += calculateTokenCost(metaInfo.width || 0, metaInfo.height || 0);
-                                    } else if (content.image_url.url.startsWith('data:text/') || content.image_url.url.startsWith('data:application/octet-stream;base64,') || textTrgList.includes(trg)) {
-                                        // テキストファイルの場合はデコードしてテキストにしてしまう。
-                                        (content.type as any) = 'text';
-                                        const detectedEncoding = detect(data);
-                                        if (detectedEncoding.encoding === 'ISO-8859-2') {
-                                            detectedEncoding.encoding = 'SHIFT_JIS'; // 文字コード自動判定でSJISがISO-8859-2ことがあるので
-                                        }
-                                        const decoder = new TextDecoder(detectedEncoding.encoding);
-                                        const decodedString = decoder.decode(data);
-                                        if ('label' in (content.image_url as any) && !trg.endsWith('.md')) {
-                                            // label項目でファイル名が来ているときはmarkdownとして埋め込む。
-                                            const label = (content.image_url as any).label as string;
-                                            const trg = label.replace(/.*\./g, '');
-                                            (content as any).text = '```' + trg + ' ' + label + '\n' + decodedString + '\n```';
-                                        } else {
-                                            (content as any).text = decodedString;
-                                        }
-                                        delete (content as any).image_url;
-                                    }
-                                } else {
-                                    // 外部URLの場合は何もしない。トークン計算もしない。
-                                }
-                                // visionAPIはmax_tokenを指定しないと凄く短く終わるので最大化しておく。visionAPIのmax_tokenは4096が最大。
-                                args.max_tokens = Math.max(args.max_tokens || 4096, 4096);
-                            } else { /* それ以外は何もしない */ }
-                        });
-                    } else { /* それ以外は何もしない */ }
-                });
-            } else { /* それ以外は何もしない */ }
-
-            // idempotencyKey の先頭にタイムスタンプをつける。（idempotencyKeyで履歴ファイルを作るので、時系列で履歴ファイルが並ぶようにと、あと単純に）
-            const timestamp = Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS');
-
-            let label = ''; // タイムスタンプをつける前のidempotencyKey。
-            // idempotencyKeyが設定されてい無い場合は入力のhashを使う。
-            const reqOptions: RequestOptions = {};
-            const argsHash = crypto.createHash('MD5').update(JSON.stringify(args)).digest('hex');
-            // const argsHash = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
-            if (options && options.label) {
-                // idempotencyKeyが設定されている場合。
-                label = options.label;
-                reqOptions.idempotencyKey = `${timestamp}-${argsHash}-${Utils.safeFileName(options.label)}`;
-            } else {
-                label = argsHash;
-                reqOptions.idempotencyKey = `${timestamp}-${argsHash}`;
-            }
-
-            let attempts = 0;
-
-            // ログ出力用オブジェクト
-            const prompt = args.messages.map(message => `<im_start>${message.role}\n${typeof message.content === 'string' ? message.content : message.content?.map(content => content.type === 'text' ? content.text : content.image_url.url)}<im_end>`).join('\n');
-            const tokenCount = new TokenCount(args.model as GPTModels, 0, 0);
-            // gpt-4-1106-preview に未対応のため、gpt-4に置き換え。プロンプトのトークンを数えるだけなのでモデルはどれにしてもしても同じだと思われるが。。。
-            if (args.model.startsWith('claude-')) {
-                // 本当はAPIの戻りでトークン数を出したいけど、API投げる前にトークン数表示するログにしてしまったので、やむなくtiktokenのトークン数を表示する。APIで入力トークン数がわかったらそれを上書きするようにした。
-                tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
-            } else if (args.model.startsWith('gemini-')) {
-                // 本当はAPIの戻りでトークン数を出したいけど、API投げる前にトークン数表示するログにしてしまったので、やむなくtiktokenのトークン数を表示する。APIで入力トークン数がわかったらそれを上書きするようにした。
-                tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
-            } else {
-                tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
-            }
-            // tokenCount.prompt_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
-            tokenCount.prompt_tokens += imagePrompt;
-            this.tokenCountList.push(tokenCount);
-
-            class LogObject {
-                constructor(public baseTime: number) { }
-                output(stepName: string, error: any = ''): string {
-                    const take = numForm(Date.now() - this.baseTime, 10);
-                    this.baseTime = Date.now(); // baseTimeを更新しておく。
-                    const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
-                    // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
-                    // tokenCount.completion_tokens = encoding_for_model((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
-                    if (args.model.startsWith('claude-') || args.model.startsWith('gemini-')) {
-                        // claudeの場合はAPIレスポンスでトークン数がわかっているのでそれを使う。
-                    } else {
-                        tokenCount.completion_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
-                    }
-                    const completion_tokens = numForm(tokenCount.completion_tokens, 6);
-
-                    const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
-                    const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} ${attempts} ${take} ${prompt_tokens} ${completion_tokens} ${tokenCount.modelShort} ${costStr} ${label} ${error}`;
-                    fss.appendFile(`history.log`, `${logString}\n`, {}, () => { });
-                    return logString;
+                let label = ''; // タイムスタンプをつける前のidempotencyKey。
+                // idempotencyKeyが設定されてい無い場合は入力のhashを使う。
+                const reqOptions: RequestOptions = {};
+                const argsHash = crypto.createHash('MD5').update(JSON.stringify(args)).digest('hex');
+                // const argsHash = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
+                if (options && options.label) {
+                    // idempotencyKeyが設定されている場合。
+                    label = options.label;
+                    reqOptions.idempotencyKey = `${timestamp}-${argsHash}-${Utils.safeFileName(options.label)}`;
+                } else {
+                    label = argsHash;
+                    reqOptions.idempotencyKey = `${timestamp}-${argsHash}`;
                 }
-            }
-            const logObject = new LogObject(Date.now());
-            console.log(logObject.output('enque'));
-            // console.log(logString('enque'));
 
-            const runBit = new RunBit(logObject, tokenCount, args, { ...reqOptions, ...this.options }, this, observer);
-            // 未知モデル名の場合は空queueを追加しておく
-            if (!this.waitQueue[tokenCount.modelShort]) this.waitQueue[tokenCount.modelShort] = [], this.inProgressQueue[tokenCount.modelShort] = [];
-            this.waitQueue[tokenCount.modelShort].push(runBit);
-            this.fire();
+                let attempts = 0;
+
+                // ログ出力用オブジェクト
+                const prompt = args.messages.map(message => `<im_start>${message.role}\n${typeof message.content === 'string' ? message.content : message.content?.map(content => content.type === 'text' ? content.text : content.image_url.url)}<im_end>`).join('\n');
+                const tokenCount = new TokenCount(args.model as GPTModels, 0, 0);
+                // gpt-4-1106-preview に未対応のため、gpt-4に置き換え。プロンプトのトークンを数えるだけなのでモデルはどれにしてもしても同じだと思われるが。。。
+                if (args.model.startsWith('claude-')) {
+                    // 本当はAPIの戻りでトークン数を出したいけど、API投げる前にトークン数表示するログにしてしまったので、やむなくtiktokenのトークン数を表示する。APIで入力トークン数がわかったらそれを上書きするようにした。
+                    tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                } else if (args.model.startsWith('gemini-')) {
+                    // 本当はAPIの戻りでトークン数を出したいけど、API投げる前にトークン数表示するログにしてしまったので、やむなくtiktokenのトークン数を表示する。APIで入力トークン数がわかったらそれを上書きするようにした。
+                    tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                } else {
+                    tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                }
+                // tokenCount.prompt_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                tokenCount.prompt_tokens += obj.countObject.image;
+                this.tokenCountList.push(tokenCount);
+
+                class LogObject {
+                    constructor(public baseTime: number) { }
+                    output(stepName: string, error: any = ''): string {
+                        const take = numForm(Date.now() - this.baseTime, 10);
+                        this.baseTime = Date.now(); // baseTimeを更新しておく。
+                        const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
+                        // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
+                        // tokenCount.completion_tokens = encoding_for_model((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                        if (args.model.startsWith('claude-') || args.model.startsWith('gemini-')) {
+                            // claudeの場合はAPIレスポンスでトークン数がわかっているのでそれを使う。
+                        } else {
+                            tokenCount.completion_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(tokenCount.tokenBuilder ? `<im_start>${tokenCount.tokenBuilder}` : '').length;
+                        }
+                        const completion_tokens = numForm(tokenCount.completion_tokens, 6);
+
+                        const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
+                        const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} ${attempts} ${take} ${prompt_tokens} ${completion_tokens} ${tokenCount.modelShort} ${costStr} ${label} ${error}`;
+                        fss.appendFile(`history.log`, `${logString}\n`, {}, () => { });
+                        return logString;
+                    }
+                }
+                const logObject = new LogObject(Date.now());
+                console.log(logObject.output('enque'));
+                // console.log(logString('enque'));
+
+                const runBit = new RunBit(logObject, tokenCount, args, { ...reqOptions, ...this.options }, this, observer);
+                // 未知モデル名の場合は空queueを追加しておく
+                if (!this.waitQueue[tokenCount.modelShort]) this.waitQueue[tokenCount.modelShort] = [], this.inProgressQueue[tokenCount.modelShort] = [];
+                this.waitQueue[tokenCount.modelShort].push(runBit);
+                this.fire();
+            });
         });
     }
 
@@ -1063,6 +829,310 @@ export class OpenAIApiWrapper {
         }, { 'all': new TokenCount('all' as any, 0, 0) });
     }
 }
+
+export function countChars(args: ChatCompletionCreateParamsBase): { image: number, text: number, video: number, audio: number } {
+    return args.messages.reduce((prev0, curr0) => {
+        if (curr0.content) {
+            if (typeof curr0.content === 'string') {
+                prev0.text += curr0.content.length;
+            } else {
+                curr0.content.reduce((prev1, curr1) => {
+                    if (curr1.type === 'text') {
+                        prev1.text += curr1.text.length;
+                    } else if (curr1.type === 'image_url') {
+
+                        const mediaType = curr1.image_url.url.split(/[/:]/g)[1];
+                        switch (mediaType) {
+                            case 'audio':
+                                prev1.audio += (curr1.image_url as any).second * 0.000125 / 0.00125 * 1000;
+                                break;
+                            case 'video':
+                                prev1.video += (curr1.image_url as any).second * 0.001315 / 0.00125 * 1000;
+                                break;
+                            case 'image':
+                                prev1.image += 0.001315 / 0.00125 * 1000;
+                                break;
+                            default:
+                                const contentUrlType = curr1.image_url.url.split(',')[0];
+                                console.log(`unkown type: ${contentUrlType}`);
+                                break;
+                        }
+                    } else {
+                        console.log(`unkown obj ${Object.keys(curr1)}`);
+                    }
+                    return prev1;
+                }, prev0);
+            }
+        } else {
+            // null
+        }
+        return prev0;
+    }, { image: 0, text: 0, video: 0, audio: 0 });
+}
+export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateContentRequest {
+    const req: GenerateContentRequest = {
+        contents: [],
+        // systemInstruction: undefined,
+    };
+    // 中身無ければ即返し。
+    if (args.messages.length == 0) return req;
+    args.messages[0].content = args.messages[0].content || '';
+    // argsをGemini用に変換
+    args.messages.forEach(message => {
+        // 画像ファイルなどが入ってきたとき用の整理
+        if (typeof message.content === 'string') {
+            if (message.role === 'system') {
+                // systemはsystemInstructionに入れる
+                req.systemInstruction = message.content;
+            } else {
+                req.contents.push({ role: message.role, parts: [{ text: message.content }] });
+            }
+        } else if (Array.isArray(message.content)) {
+            const remappedContent = {
+                role: message.role,
+                parts:
+                    message.content.map(content => {
+                        if (content.type === 'image_url') {
+                            // TODO URLには対応していない
+                            if (content.image_url.url.startsWith('data:video/')) {
+                                return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, video_metadata: {} };
+                            } else if (content.image_url.url.startsWith('data:')) {
+                                return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, };
+                            } else {
+                                return { file_data: { file_uri: content.image_url.url } };
+                            }
+                        } else if (content.type === 'text') {
+                            return { text: content.text as string };
+                        } else {
+                            console.log('unknown sub message type');
+                            return null;
+                        }
+                    }).filter(is => is) as Part[],
+            };
+            if (message.role === 'system') {
+                // systemはsystemInstructionに入れる
+                req.systemInstruction = remappedContent;
+            } else {
+                req.contents.push(remappedContent);
+            }
+        } else {
+            console.log('unknown message type');
+        }
+    });
+    return req;
+}
+export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req: GenerateContentRequest): GenerateContentRequestExtended {
+    const req: GenerateContentRequestExtended = _req as any;
+    req.generationConfig = {
+        maxOutputTokens: args.max_tokens || 8192,
+        temperature: args.temperature || 0.1,
+        topP: args.top_p || 0.95,
+    };
+    req.safetySettings = [
+        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE, },
+        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE, },
+        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE, },
+        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE, }
+    ];
+
+    const cachedContent = (args as any).cachedContent as CachedContent;
+    // console.dir(cachedContent);
+    if (cachedContent) {
+        req.region = 'us-central1'; // コンテキストキャッシュ機能は us-central1 で固定
+        req.resourcePath = cachedContent.model;
+        req.cached_content = cachedContent.name;
+    } else {
+        req.region = GCP_REGION || 'asia-northeast1';
+        req.resourcePath = `/projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/publishers/google/models/${args.model}`;
+    }
+    return req;
+}
+export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, allowLocalFiles: boolean): Observable<{ args: ChatCompletionCreateParamsStreaming, countObject: { image: number, audio: number, video: number } }> {
+    const args = { ..._args };
+    // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
+    if (args.response_format?.type == 'json_object' && JSON_MODELS.indexOf(args.model) !== -1) {
+        const userMessage = args.messages.filter(message => message.role === 'user');
+        const lastUserMessage = args.messages[args.messages.indexOf(userMessage[userMessage.length - 1])];
+        if (!(lastUserMessage.content as string).includes('json')) {
+            lastUserMessage.content += '\n\n# Output format\njson';
+        } else { /* それ以外は何もしない */ }
+    } else {
+        // それ以外はjson_object使えないのでフォーマットを削除する。
+        delete args.response_format;
+    }
+
+    if (args.temperature && typeof args.temperature === 'string') {
+        args.temperature = Number(args.temperature) || 0.7;
+    } else { }
+    if (args.top_p && typeof args.top_p === 'string') {
+        args.top_p = Number(args.top_p) || 1;
+    } else { }
+    if (args.n && typeof args.n === 'string') {
+        args.n = Number(args.n);
+    } else { }
+
+    const countObject = { image: 0, audio: 0, video: 0 };
+    return (VISION_MODELS.indexOf(args.model) !== -1 ? forkJoin(args.messages.map(message => {
+        if (Array.isArray(message.content)) {
+            // メディアモデルの場合のトークン計測とか
+            return forkJoin(message.content.map((content: ChatCompletionContentPart): Observable<ChatCompletionContentPart> => {
+                if (content.type === 'image_url' && content.image_url && content.image_url.url) {
+                    // DANGER!!! ローカルファイルを読み込むのでオンラインから使わせるときはセキュリティ的に問題がある。
+                    // ファイルの種類を判定して、画像の場合はbase64に変換してcontent.image_url.urlにセットする。
+                    // TODO 外のURLには対応していない。
+                    // console.log(content.image_url.url);
+                    if (content.image_url.url.startsWith('file:///')) {
+                        if (allowLocalFiles) {
+                            const filePath = content.image_url.url.substring('file://'.length);
+                            const data = fs.readFileSync(filePath);
+                            const metaInfo = sizeOf(data);
+                            console.log(metaInfo);
+                            content.image_url.url = `data:image/${metaInfo.type === 'jpg' ? 'jpeg' : metaInfo.type};base64,${data.toString('base64')}`;
+                            // 画像のトークン数を計算する。
+                            countObject.image += calculateTokenCost(metaInfo.width || 0, metaInfo.height || 0);
+                        } else {
+                            // エラー
+                            throw new Error(`ローカルファイルアクセスは禁止`);
+                        }
+                    } else if (content.image_url.url.startsWith('data:')) {
+                        // データURLからデータを取り出してサイズを判定する。
+                        const label = (content.image_url as any)['label'] as string;
+                        const trg = label.toLocaleLowerCase().replace(/.*\./g, '');
+                        if (content.image_url.url.startsWith('data:image/') || imageExtensions.includes(trg)) {
+                            const data = Buffer.from(content.image_url.url.substring(content.image_url.url.indexOf(',') + 1), 'base64');
+                            const metaInfo = sizeOf(data);
+                            // 画像のトークン数を計算する。
+                            countObject.image += calculateTokenCost(metaInfo.width || 0, metaInfo.height || 0);
+                        } else if (content.image_url.url.startsWith('data:audio/') || audioExtensions.includes(trg)) {
+                            // 音声
+                            return getMetaDataFromDataURL(content.image_url.url).pipe(map(metaData => {
+                                (content.image_url as any).second = metaData.format.duration;
+                                countObject.audio += metaData.format.duration || 0;
+                                return content;
+                            }));
+                        } else if (content.image_url.url.startsWith('data:video/') || videoExtensions.includes(trg)) {
+                            // 動画
+                            return getMetaDataFromDataURL(content.image_url.url).pipe(map(metaData => {
+                                (content.image_url as any).second = metaData.format.duration;
+                                countObject.video += metaData.format.duration || 0;
+                                return content;
+                            }));
+                        } else if (content.image_url.url.startsWith('data:text/') || plainExtensions.includes(trg) || content.image_url.url.startsWith('data:application/octet-stream;base64,IyEv')) {
+                            const data = Buffer.from(content.image_url.url.substring(content.image_url.url.indexOf(',') + 1), 'base64');
+                            // テキストファイルの場合はデコードしてテキストにしてしまう。
+                            (content.type as any) = 'text';
+                            const detectedEncoding = detect(data);
+                            if (detectedEncoding.encoding === 'ISO-8859-2') {
+                                detectedEncoding.encoding = 'SHIFT_JIS'; // 文字コード自動判定でSJISがISO-8859-2ことがあるので
+                            }
+                            const decoder = new TextDecoder(detectedEncoding.encoding);
+                            const decodedString = decoder.decode(data);
+                            if ('label' in (content.image_url as any) && !trg.endsWith('.md')) {
+                                // label項目でファイル名が来ているときはmarkdownとして埋め込む。
+                                const label = (content.image_url as any).label as string;
+                                const trg = label.replace(/.*\./g, '');
+                                (content as any).text = '```' + trg + ' ' + label + '\n' + decodedString + '\n```';
+                            } else {
+                                (content as any).text = decodedString;
+                            }
+                            delete (content as any).image_url;
+                        }
+                    } else {
+                        // 外部URLの場合は何もしない。トークン計算もしない。
+                    }
+                    // visionAPIはmax_tokenを指定しないと凄く短く終わるので最大化しておく。visionAPIのmax_tokenは4096が最大。
+                    args.max_tokens = Math.max(args.max_tokens || 4096, 4096);
+                } else { /* それ以外は何もしない */ }
+                return of(content);
+            })).pipe(toArray(), map(contents => message));
+        } else {
+            /* それ以外は何もしない */
+            return of(message);
+        }
+    })).pipe(toArray(), map(messages => args)) : of(args)).pipe(map(args => {
+        // ゴミメッセージを削除する。
+        args.messages = args.messages.filter(message => {
+            if (message.content) {
+                // テキストがあるか、画像があるか、どちらかがあればOKとする。
+                if (typeof message.content === 'string') {
+                    // テキストの場合は空白文字を削除してから長さが0より大きいかチェックする。
+                    return message.content.trim().length > 0;
+                } else if (Array.isArray(message.content)) {
+                    // 配列の場合は、中身の要素が存在するかをチェックする。
+                    message.content = message.content.filter(content => {
+                        // テキストがあるか、画像があるか、どちらかがあればOKとする。
+                        if (content.type === 'text') {
+                            // テキストの場合は空白文字を削除してから長さが0より大きいかチェックする。
+                            return content.text.trim().length > 0;
+                        } else if (content.type === 'image_url') {
+                            // 画像の場合はURLがあるかチェックする。
+                            return content.image_url.url.trim().length > 0;
+                        } else {
+                            // それ以外は無視する。
+                            return false;
+                        }
+                    });
+                    return message.content.length > 0; // 中身の要素が無ければfalseで返す
+                } else {
+                    // それ以外はありえないので無視する。
+                    return false;
+                }
+            } else {
+                // contentがない場合は無視する。
+                return false;
+            }
+        });
+
+        // 同一のロールが連続する場合は1つのメッセージとして纏める（こうしないとGeminiがエラーになるので。）
+        args.messages = args.messages.reduce((prev, curr) => {
+            if (prev.length === 0 || prev[prev.length - 1].role !== curr.role) {
+                prev.push(curr);
+            } else {
+                const prevContent = prev[prev.length - 1].content;
+                if (typeof prevContent === 'string') {
+                    if (prevContent) {
+                        console.log(`prevContent:${prevContent}`);
+                        // 1個前の同じロールのコンテンツがstring型だと連結できないので構造化配列にしておく。
+                        prev[prev.length - 1].content = [{ type: 'text', text: prevContent }];
+                        return prev;
+                    } else {
+                        // 空文字は無視する
+                        return prev;
+                    }
+                } else {
+                    // 元々配列なので何もしない
+                }
+                const prevContentArray = prev[prev.length - 1].content;
+                if (Array.isArray(prevContentArray)) {
+                    if (typeof curr.content === 'string') {
+                        if (curr.content) {
+                            prevContentArray.push({ type: 'text', text: curr.content });
+                        } else {
+                            // 中身がないものは削ってしまう。
+                        }
+                    } else if (curr.content) {
+                        curr.content.forEach(obj => {
+                            if (obj.type === 'text' && obj.text) {
+                                // console.log(`obj.text:${obj.text}`);
+                                // 中身があれば追加
+                                prevContentArray.push(obj);
+                            } else if (obj.type === 'image_url' && obj.image_url && obj.image_url.url) {
+                                // 中身があれば追加
+                                prevContentArray.push(obj);
+                            } else {
+                                // 中身がないので追加しない。
+                            }
+                        });
+                    } else {
+                        // エラー
+                    }
+                }
+            }
+            return prev;
+        }, [] as ChatCompletionMessageParam[]);
+    })).pipe(map(() => ({ args, countObject })))
+}
+
 
 // TiktokenModelが新モデルに追いつくまでは自己定義で対応する。
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
@@ -1293,3 +1363,38 @@ function calculateTokenCost(width: number, height: number, detail: 'low' | 'high
 
 function numForm(dec: number, len: number) { return (dec || '').toLocaleString().padStart(len, ' '); };
 async function wait(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+export const audioExtensions = ['wav', 'mp3', 'aac', 'flac', 'alac', 'ogg', 'ape', 'dts', 'ac3', 'm4a', 'm4b', 'm4p', 'mka', 'aiff', 'aif', 'au', 'snd', 'voc', 'wma', 'ra', 'ram', 'caf', 'tta', 'shn', 'dff', 'dsf', 'atrac', 'atrac3', 'atrac3plus'];
+export const videoExtensions = ['mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'ogv', 'mpg', 'mpeg', 'm4v', '3gp', '3g2', 'asf', 'dv', 'mxf', 'vob', 'ifo', 'dat', 'rm', 'rmvb', 'swf'];
+export const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'svg', 'webp', 'ico', 'cur', 'ani', 'psd', 'ai', 'eps', 'cdr', 'pcx', 'pnm', 'pbm', 'pgm', 'ppm', 'ras', 'xbm', 'xpm'];
+export const plainExtensions = ['js', 'javascript', 'ts', 'typescript', 'jsx', 'tsx', 'java', 'c', 'cpp', 'cs', 'php', 'py', 'python', 'ipynb', 'pc', 'cob', 'cbl', 'pco', 'copy', 'cpy', 'rb', 'ruby', 'swift', 'go', 'rust', 'sql', 'pl', 'pm', 'tcl', 'tk', 'lua', 'luau', 'kt', 'ddl', 'awk', 'vb', 'vbs', 'vbnet', 'asp', 'aspx', 'jsp', 'jspx', 'jspxm', 'jspxmi', 'jspxml', 'jspxmi', 'jspxml', 'html', 'htm', 'css', 'scss', 'sass', 'less', 'styl', 'xml', 'xhtml', 'xslt', 'xsd', 'xsl', 'xsd', 'wsdl', 'bash', 'sh', 'zsh', 'ksh', 'csh', 'tcsh', 'perl', 'pl', 'pm', 'tcl', 'tk', 'lua', 'luau', 'coffee', 'dart', 'elixir', 'erlang', 'groovy', 'haskell', 'kotlin', 'latex', 'matlab', 'objective-c', 'pascal', 'prolog', 'r', 'scala', 'verilog', 'vhdl', 'asm', 's', 'S', 'inc', 'h', 'hpp', 'hxx', 'cxx', 'cc', 'cpp', 'c++', 'm', 'mm', 'swift', 'go', 'makefile', 'cmake', 'gradle', 'pom', 'podfile', 'Gemfile', 'requirements', 'package', 'yaml', 'yml', 'json', 'toml', 'ini', 'conf', 'cfg', 'properties', 'prop', 'xml', 'xsd', 'xsl', 'xslt', 'txt', 'text', 'log', 'md', 'markdown', 'rst', 'restructuredtext', 'csv', 'tsv', 'tab', 'diff', 'patch'];
+
+export interface CachedContent {
+    name: string;
+    model: string;
+    createTime: string;
+    updateTime: string;
+    expireTime: string;
+}
+export interface GenerateContentRequestExtended extends GenerateContentRequest {
+    resourcePath: string;
+    region: string;
+    cached_content?: string;
+}
+
+//   {
+//     "name": "projects/458302438887/locations/us-central1/cachedContents/6723733506175795200",
+//     "model": "projects/gcp-cloud-shosys-ai-002/locations/us-central1/publishers/google/models/gemini-1.5-flash-001",
+//     "createTime": "2024-07-10T19:43:13.542566Z",
+//     "updateTime": "2024-07-10T19:43:13.542566Z",
+//     "expireTime": "2024-07-10T20:43:13.521815Z"
+//   }
+
+const getAccessTokenGemini = async (): Promise<string> => {
+    try {
+        const result = execSync('gcloud auth print-access-token').toString().trim();
+        return result;
+    } catch (error) {
+        throw new Error('Failed to get access token. Make sure you are authenticated with gcloud.');
+    }
+};
