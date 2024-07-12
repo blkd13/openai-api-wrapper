@@ -26,12 +26,15 @@ export interface GenerateContentRequestForCache extends GenerateContentRequest {
 export class MyVertexAiClient {
 
     private accessToken: string | undefined;
+    private expire: number = Date.now();
 
-    async getAccessToken(): Promise<string> {
-        if (this.accessToken) {
+    async getAccessToken(force: boolean = false): Promise<string> {
+        const now = Date.now();
+        if (this.accessToken && !force && now < this.expire) {
             return Promise.resolve(this.accessToken);
         } else {
             try {
+                this.expire = Date.now() + 60 * 60 * 1000; // 1時間
                 this.accessToken = execSync('gcloud auth print-access-token').toString().trim();
                 return this.accessToken;
             } catch (error) {
@@ -40,8 +43,8 @@ export class MyVertexAiClient {
         }
     }
 
-    async getAuthorizedHeaders(): Promise<{ headers: { Authorization: string, 'Content-Type': string } }> {
-        return this.getAccessToken().then(accessToken => ({
+    async getAuthorizedHeaders(force: boolean = false): Promise<{ headers: { Authorization: string, 'Content-Type': string } }> {
+        return this.getAccessToken(force).then(accessToken => ({
             headers: {
                 'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': 'application/json',

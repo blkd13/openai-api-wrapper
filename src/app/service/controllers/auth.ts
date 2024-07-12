@@ -321,7 +321,7 @@ function generateOnetimeToken(length: number = 16): string {
  * @returns 
  */
 function passwordValidation(password: string, passwordConfirm: string): { isValid: boolean, errors: string[] } {
-    const minLength = 8;
+    const minLength = 16;
     const hasUpperCase = /[A-Z]/.test(password);
     const hasLowerCase = /[a-z]/.test(password);
     const hasNumbers = /[0-9]/.test(password);
