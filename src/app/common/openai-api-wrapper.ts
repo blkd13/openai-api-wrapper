@@ -30,6 +30,7 @@ import { Tiktoken, TiktokenModel, encoding_for_model } from 'tiktoken';
 
 import fss from './fss.js';
 import { Utils } from "./utils.js";
+import { getMetaDataFromDataURL } from './funcs.js';
 
 const HISTORY_DIRE = `./history`;
 
@@ -79,8 +80,6 @@ const local = new OpenAI({
 });
 
 import { AzureKeyCredential, ChatMessageContentItem, ChatRequestMessage, OpenAIClient } from "@azure/openai";
-import { getMetaDataFromDataURL } from './funcs.js';
-import { execSync } from 'child_process';
 
 const azureClient = new OpenAIClient(
     process.env['AZURE_OPENAI_ENDPOINT'] as string || 'dummy',
@@ -95,7 +94,9 @@ export const azureDeployTpmMap: Record<string, number> = {
     'gpt-4-vision-preview': 10000,
 };
 
+import { CachedContent, GenerateContentRequestExtended, mapForGemini, mapForGeminiExtend, MyVertexAiClient } from './my-vertexai.js';
 // Initialize Vertex with your Cloud project and location
+export const my_vertexai = new MyVertexAiClient();
 export const vertex_ai = new VertexAI({ project: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', location: process.env['GCP_REGION'] || 'asia-northeast1' });
 export const anthropicVertex = new AnthropicVertex({ projectId: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', region: 'europe-west1', httpAgent: options.httpAgent }); //TODO 他で使えるようになったら変える。
 
@@ -371,25 +372,17 @@ class RunBit {
             const countCharsObj = countChars(args);
             let promptChars = countCharsObj.audio + countCharsObj.text + countCharsObj.image + countCharsObj.video;
             fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify(req, Utils.genJsonSafer()), {}, (err) => { });
-            const generativeModel = vertex_ai.preview.getGenerativeModel({
-                model: args.model,
-                generationConfig: req.generationConfig,
-                safetySettings: req.safetySettings,
-            });
 
-            // `${req.region}-aiplatform.googleapis.com`
+            // req は 不要な項目もまとめて保持しているので、実際のリクエスト用にスッキリさせる。
             const _req: GenerateContentRequest = { contents: req.contents, tools: req.tools || [], systemInstruction: req.systemInstruction };
-            if (req.cached_content) { (_req as any).cached_content = req.cached_content; }
-            // console.log(`cache=${JSON.stringify((args as any).cachedContent)}`);
-            // console.log(`_req=${JSON.stringify(_req)}`);
+            // コンテキストキャッシュの有無で編集を変える
             if (req.cached_content) {
-                runPromise = generateContentStream(req.region, req.resourcePath, getAccessTokenGemini(), _req, undefined, req.generationConfig, req.safetySettings, undefined, {});
+                (_req as any).cached_content = req.cached_content; // コンテキストキャッシュを足しておく
             } else {
-                runPromise = generativeModel.generateContentStream(_req);
             }
-            runPromise = (runPromise).then(streamingResp => {
-                // runPromise = client.generateContentStream((args as any).cachedContents as any, req).then(streamingResp => {
-                // runPromise = generativeModel.generateContentStream(req).then((streamingResp) => {
+            runPromise = generateContentStream(req.region, req.resourcePath, my_vertexai.getAccessToken(), _req, undefined, req.generationConfig, req.safetySettings, undefined, {}).then(streamingResp => {
+                // かつてはModelを使って投げていた。
+                // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
 
                 let tokenBuilder: string = '';
 
@@ -869,84 +862,7 @@ export function countChars(args: ChatCompletionCreateParamsBase): { image: numbe
         return prev0;
     }, { image: 0, text: 0, video: 0, audio: 0 });
 }
-export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateContentRequest {
-    const req: GenerateContentRequest = {
-        contents: [],
-        // systemInstruction: undefined,
-    };
-    // 中身無ければ即返し。
-    if (args.messages.length == 0) return req;
-    args.messages[0].content = args.messages[0].content || '';
-    // argsをGemini用に変換
-    args.messages.forEach(message => {
-        // 画像ファイルなどが入ってきたとき用の整理
-        if (typeof message.content === 'string') {
-            if (message.role === 'system') {
-                // systemはsystemInstructionに入れる
-                req.systemInstruction = message.content;
-            } else {
-                req.contents.push({ role: message.role, parts: [{ text: message.content }] });
-            }
-        } else if (Array.isArray(message.content)) {
-            const remappedContent = {
-                role: message.role,
-                parts:
-                    message.content.map(content => {
-                        if (content.type === 'image_url') {
-                            // TODO URLには対応していない
-                            if (content.image_url.url.startsWith('data:video/')) {
-                                return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, video_metadata: {} };
-                            } else if (content.image_url.url.startsWith('data:')) {
-                                return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, };
-                            } else {
-                                return { file_data: { file_uri: content.image_url.url } };
-                            }
-                        } else if (content.type === 'text') {
-                            return { text: content.text as string };
-                        } else {
-                            console.log('unknown sub message type');
-                            return null;
-                        }
-                    }).filter(is => is) as Part[],
-            };
-            if (message.role === 'system') {
-                // systemはsystemInstructionに入れる
-                req.systemInstruction = remappedContent;
-            } else {
-                req.contents.push(remappedContent);
-            }
-        } else {
-            console.log('unknown message type');
-        }
-    });
-    return req;
-}
-export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req: GenerateContentRequest): GenerateContentRequestExtended {
-    const req: GenerateContentRequestExtended = _req as any;
-    req.generationConfig = {
-        maxOutputTokens: args.max_tokens || 8192,
-        temperature: args.temperature || 0.1,
-        topP: args.top_p || 0.95,
-    };
-    req.safetySettings = [
-        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE, },
-        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE, },
-        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE, },
-        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE, }
-    ];
 
-    const cachedContent = (args as any).cachedContent as CachedContent;
-    // console.dir(cachedContent);
-    if (cachedContent) {
-        req.region = 'us-central1'; // コンテキストキャッシュ機能は us-central1 で固定
-        req.resourcePath = cachedContent.model;
-        req.cached_content = cachedContent.name;
-    } else {
-        req.region = GCP_REGION || 'asia-northeast1';
-        req.resourcePath = `/projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/publishers/google/models/${args.model}`;
-    }
-    return req;
-}
 export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, allowLocalFiles: boolean): Observable<{ args: ChatCompletionCreateParamsStreaming, countObject: { image: number, audio: number, video: number } }> {
     const args = { ..._args };
     // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
@@ -1368,33 +1284,3 @@ export const audioExtensions = ['wav', 'mp3', 'aac', 'flac', 'alac', 'ogg', 'ape
 export const videoExtensions = ['mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'ogv', 'mpg', 'mpeg', 'm4v', '3gp', '3g2', 'asf', 'dv', 'mxf', 'vob', 'ifo', 'dat', 'rm', 'rmvb', 'swf'];
 export const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'svg', 'webp', 'ico', 'cur', 'ani', 'psd', 'ai', 'eps', 'cdr', 'pcx', 'pnm', 'pbm', 'pgm', 'ppm', 'ras', 'xbm', 'xpm'];
 export const plainExtensions = ['js', 'javascript', 'ts', 'typescript', 'jsx', 'tsx', 'java', 'c', 'cpp', 'cs', 'php', 'py', 'python', 'ipynb', 'pc', 'cob', 'cbl', 'pco', 'copy', 'cpy', 'rb', 'ruby', 'swift', 'go', 'rust', 'sql', 'pl', 'pm', 'tcl', 'tk', 'lua', 'luau', 'kt', 'ddl', 'awk', 'vb', 'vbs', 'vbnet', 'asp', 'aspx', 'jsp', 'jspx', 'jspxm', 'jspxmi', 'jspxml', 'jspxmi', 'jspxml', 'html', 'htm', 'css', 'scss', 'sass', 'less', 'styl', 'xml', 'xhtml', 'xslt', 'xsd', 'xsl', 'xsd', 'wsdl', 'bash', 'sh', 'zsh', 'ksh', 'csh', 'tcsh', 'perl', 'pl', 'pm', 'tcl', 'tk', 'lua', 'luau', 'coffee', 'dart', 'elixir', 'erlang', 'groovy', 'haskell', 'kotlin', 'latex', 'matlab', 'objective-c', 'pascal', 'prolog', 'r', 'scala', 'verilog', 'vhdl', 'asm', 's', 'S', 'inc', 'h', 'hpp', 'hxx', 'cxx', 'cc', 'cpp', 'c++', 'm', 'mm', 'swift', 'go', 'makefile', 'cmake', 'gradle', 'pom', 'podfile', 'Gemfile', 'requirements', 'package', 'yaml', 'yml', 'json', 'toml', 'ini', 'conf', 'cfg', 'properties', 'prop', 'xml', 'xsd', 'xsl', 'xslt', 'txt', 'text', 'log', 'md', 'markdown', 'rst', 'restructuredtext', 'csv', 'tsv', 'tab', 'diff', 'patch'];
-
-export interface CachedContent {
-    name: string;
-    model: string;
-    createTime: string;
-    updateTime: string;
-    expireTime: string;
-}
-export interface GenerateContentRequestExtended extends GenerateContentRequest {
-    resourcePath: string;
-    region: string;
-    cached_content?: string;
-}
-
-//   {
-//     "name": "projects/458302438887/locations/us-central1/cachedContents/6723733506175795200",
-//     "model": "projects/gcp-cloud-shosys-ai-002/locations/us-central1/publishers/google/models/gemini-1.5-flash-001",
-//     "createTime": "2024-07-10T19:43:13.542566Z",
-//     "updateTime": "2024-07-10T19:43:13.542566Z",
-//     "expireTime": "2024-07-10T20:43:13.521815Z"
-//   }
-
-const getAccessTokenGemini = async (): Promise<string> => {
-    try {
-        const result = execSync('gcloud auth print-access-token').toString().trim();
-        return result;
-    } catch (error) {
-        throw new Error('Failed to get access token. Make sure you are authenticated with gcloud.');
-    }
-};

@@ -1,11 +1,9 @@
 import * as http from 'http';
-import * as  fs from 'fs';
-import { execSync } from 'child_process';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";
 import axios from 'axios';
 
-import { GenerateContentRequestExtended, OpenAIApiWrapper, countChars, mapForGemini, normalizeMessage, vertex_ai } from '../../common/openai-api-wrapper.js';
+import { OpenAIApiWrapper, countChars, my_vertexai, normalizeMessage, vertex_ai } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ChatCompletionCreateParamsStreaming } from "openai/resources/index.js";
@@ -14,10 +12,20 @@ import { DiscussionEntity, TaskEntity, StatementEntity } from '../entity/project
 import { enqueueGenerator, qSubject } from './project-models.js';
 import { GenerateContentRequest, HarmBlockThreshold, HarmCategory } from '@google-cloud/vertexai';
 
+
 import * as dotenv from 'dotenv';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 dotenv.config();
-const { GCP_PROJECT_ID, GCP_REGION, GCP_LOCATION } = process.env;
+const { GCP_PROJECT_ID, GCP_CONTEXT_CACHE_LOCATION } = process.env;
+
+const proxyObj: { [key: string]: string | undefined } = {
+    httpProxy: process.env['http_proxy'] as string || undefined,
+    httpsProxy: process.env['https_proxy'] as string || undefined,
+};
+const httpsAgent = new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || '');
+axios.defaults.httpsAgent = httpsAgent;
+
+import { GenerateContentRequestForCache, mapForGemini } from '../../common/my-vertexai.js';
 
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
@@ -246,7 +254,27 @@ export const geminiCountTokens = [
 // Eventクライアントリスト
 export const global: Record<string, { id: string; response: http.ServerResponse; }> = {};
 
-let accessToken: string = '';
+// const url = `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents`;
+// projects/458302438887/locations/us-central1/cachedContents/6723733506175795200
+
+// GET https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents
+// PATCH https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents/CACHE_ID
+//         {
+//   "seconds":"SECONDS",
+//   "nanos":"NANOSECONDS"
+//             }
+// DELETE https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents/CACHE_ID
+
+// POST https://LOCATION-aiplatform.googleapis.com/v1beta1/projects/PROJECT_ID/locations/LOCATION/publishers/google/models/gemini-1.5-pro-001:generateContent
+
+const CONTEXT_CACHE_API_ENDPOINT = `https://${GCP_CONTEXT_CACHE_LOCATION}-aiplatform.googleapis.com/v1beta1`;
+
+function errorFormat(error: any): string {
+    console.error(error);
+    delete error['config'];
+    delete error['stack'];
+    return JSON.stringify(error);
+}
 
 /**
  * [ユーザー認証] コンテキストキャッシュ作成
@@ -257,18 +285,16 @@ export const geminiCreateContextCache = [
     async (_req: Request, res: Response) => {
         const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
         const args = inDto.args;
-        const location: string = 'us-central1'; // コンテキストキャッシュはus-central1固定
         const projectId: string = GCP_PROJECT_ID || 'dummy';
         const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
-        // const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${modelId}/cachedContents`;
-        const url = `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents`;
+        const url = `${CONTEXT_CACHE_API_ENDPOINT}/projects/${projectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`;
         normalizeMessage(args, false).subscribe({
             next: next => {
                 const args = next.args;
                 const req: GenerateContentRequest = mapForGemini(args);
 
                 // モデルの説明文を書いておく？？
-                req.contents.push({ role: 'model', parts: [{ text: 'これはキャッシュ機能のサンプルです。' }] });
+                // req.contents.push({ role: 'model', parts: [{ text: 'これはキャッシュ機能のサンプルです。' }] });
 
                 // // システムプロンプトを先頭に戻しておく
                 // if (req.systemInstruction && typeof req.systemInstruction !== 'string') {
@@ -280,132 +306,80 @@ export const geminiCreateContextCache = [
                     model: `projects/${projectId}/locations/${location}/publishers/google/models/${modelId}`,
                     contents: req.contents,
                 };
-
-                fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
+                const reqCache: GenerateContentRequestForCache = req as GenerateContentRequestForCache;
+                if (reqCache.expire_time || reqCache.ttl) {
+                    // 期限設定されていれば何もしない。
+                } else {
+                    // 期限設定されていなければデフォルト15分を設定する。
+                    reqCache.expire_time = new Date(new Date().getTime() + 15 * 60 * 1000).toISOString();
+                }
+                // fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
 
                 // アクセストークンを取得してリクエスト
-                (accessToken ? Promise.resolve(accessToken) : getAccessToken())
-                    .then(_accessToken => {
-                        // アクセストークンをストック
-                        accessToken = _accessToken;
-
-                        const proxyObj: { [key: string]: string | undefined } = {
-                            httpProxy: process.env['http_proxy'] as string || undefined,
-                            httpsProxy: process.env['https_proxy'] as string || undefined,
-                        };
-                        const httpsAgent = new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || '');
-                        return axios.post(url, requestBody, {
-                            httpsAgent,
-                            headers: {
-                                'Authorization': `Bearer ${accessToken}`,
-                                'Content-Type': 'application/json',
-                            },
-                            // maxContentLength: 50 * 1024 * 1024, // 50MBに設定
-                        });
-                    })
-                    .then(response => {
-                        res.end(JSON.stringify(Object.assign(response.data)));
-                        // console.log(response.headers);
-                        // console.log(response.data);
-                    })
-                    .catch(error => {
-                        // 有効期限が切れてるかもしれないのでアクセストークンを再取得する。
-                        console.error(error);
-                        delete error['config'];
-                        delete error['stack'];
-                        res.status(503).end(JSON.stringify(error));
-                        // getAccessToken();
-                    });
-
+                my_vertexai.getAuthorizedHeaders().then(headers =>
+                    axios.post(url, requestBody, headers)
+                ).then(response => {
+                    res.end(JSON.stringify(response.data));
+                    // console.log(response.headers);
+                    // console.log(response.data);
+                }).catch(error => {
+                    res.status(503).end(errorFormat(error));
+                });
             },
-            // complete: () => {
-            //     console.log('complete');
-            // },
         });
     }
 ];
 
-// GET https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents
-// PATCH https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents/CACHE_ID
-//         {
-//   "seconds":"SECONDS",
-//   "nanos":"NANOSECONDS"
-//             }
-// DELETE https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents/CACHE_ID
-
-// POST https://LOCATION-aiplatform.googleapis.com/v1beta1/projects/PROJECT_ID/locations/LOCATION/publishers/google/models/gemini-1.5-pro-001:generateContent
 /**
- * [ユーザー認証] コンテキストキャッシュ作成
+ * [ユーザー認証] コンテキストキャッシュ時間変更
  */
 export const geminiUpdateContextCache = [
-    body('args').notEmpty(),
+    body('expire_time').notEmpty(),
+    body('cache_name').notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
-        const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
-        const args = inDto.args;
-        const location: string = 'us-central1'; // コンテキストキャッシュはus-central1固定
-        const projectId: string = process.env.PROJECT_ID || 'rock-task-159120';
-        const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
-        // const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${modelId}/cachedContents`;
-        // const url = `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/cachedContents`;
-        const url = `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/publishers/google/models/${modelId}:generateContent`;
-
-        normalizeMessage(args, false).subscribe({
-            next: next => {
-                const args = next.args;
-                const req: GenerateContentRequest = mapForGemini(args);
-
-                // モデルの説明文を書いておく？？
-                req.contents.push({ role: 'model', parts: [{ text: 'これはキャッシュ機能のサンプルです。' }] });
-
-                // リクエストボディ
-                const requestBody = {
-                    model: `projects/${projectId}/locations/${location}/publishers/google/models/${modelId}`,
-                    contents: req.contents,
-                };
-
-                fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
-
-                // アクセストークンを取得してリクエスト
-                (accessToken ? Promise.resolve(accessToken) : getAccessToken())
-                    .then(_accessToken => {
-                        // アクセストークンをストック
-                        accessToken = _accessToken;
-                        // リクエスト
-                        return axios.post(url, requestBody, {
-                            headers: {
-                                'Authorization': `Bearer ${accessToken}`,
-                                'Content-Type': 'application/json',
-                            },
-                        });
-                    })
-                    .then(response => {
-                        console.log(response.data);
-                        res.end(JSON.stringify(Object.assign(response.data)));
-                        // console.log(response.headers);
-                        // console.log(response.data);
-                    })
-                    .catch(error => {
-                        // 有効期限が切れてるかもしれないのでアクセストークンを再取得する。
-                        console.error(error);
-                        // getAccessToken();
-                        res.status(401).json({ message: error });
-                    });
-
-            },
-            // complete: () => {
-            //     console.log('complete');
-            // },
+        const inDto = _req.body as { expire_time: string, cache_name: string };
+        my_vertexai.getAuthorizedHeaders().then(headers =>
+            axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${inDto.cache_name}`, { expire_time: inDto.expire_time }, headers)
+        ).then(response => {
+            res.end(JSON.stringify(response.data));
+        }).catch(error => {
+            res.status(503).end(errorFormat(error));
         });
     }
 ];
 
 
-const getAccessToken = async (): Promise<string> => {
-    try {
-        const result = execSync('gcloud auth print-access-token').toString().trim();
-        return result;
-    } catch (error) {
-        throw new Error('Failed to get access token. Make sure you are authenticated with gcloud.');
+/**
+ * [ユーザー認証] コンテキストキャッシュ削除
+ */
+export const geminiDeleteContextCache = [
+    body('cache_name').notEmpty(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const inDto = _req.body as { cache_name: string };
+        my_vertexai.getAuthorizedHeaders().then(headers =>
+            axios.delete(`${CONTEXT_CACHE_API_ENDPOINT}/${inDto.cache_name}`, headers)
+        ).then(response => {
+            res.end(JSON.stringify(response.data));
+        }).catch(error => {
+            res.status(503).end(errorFormat(error));
+        });
     }
-};
+];
+
+/**
+ * [ユーザー認証] コンテキストキャッシュ一覧
+ */
+export const geminiGetContextCache = [
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        my_vertexai.getAuthorizedHeaders().then(headers =>
+            axios.get(`${CONTEXT_CACHE_API_ENDPOINT}/projects/${GCP_PROJECT_ID}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`, headers)
+        ).then(response => {
+            res.end(JSON.stringify(response.data));
+        }).catch(error => {
+            res.status(503).end(errorFormat(error));
+        });
+    }
+];

@@ -6,7 +6,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import moment, { Moment } from "moment-timezone";
 
-import { authDummyRouter, authInviteRouter, authNoneRouter, authUserRouter } from './routes.js';
+import { authInviteRouter, authNoneRouter, authUserRouter } from './routes.js';
 
 // .envファイルを読み込む
 dotenv.config();
@@ -34,9 +34,6 @@ rootRouter.use('/', authNoneRouter);
 rootRouter.use('/user', authUserRouter);
 // ワンタイムトークン認証が必要なルート
 rootRouter.use('/invite', authInviteRouter);
-
-// 認証無視ルート（テスト用）
-rootRouter.use('/dummy', authDummyRouter);
 
 app.use('/api', rootRouter);
 // 認証系ルート設定終了

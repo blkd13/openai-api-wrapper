@@ -91,12 +91,3 @@ export const authenticateInviteToken = (req: Request, res: Response, next: NextF
     return;
 }
 
-/**
- * ユーザー認証のダミー（認証無視）
- */
-export const authenticateDummyToken = (req: Request, res: Response, next: NextFunction) => {
-    // ダミー
-    (req as UserRequest).info = { user: { id: 0, name: 'dummy', email: 'dummy@example.com', passwordHash: 'dummy', authGeneration: 0, createdAt: new Date(), updatedAt: new Date(), } as UserEntity };
-    next();
-}
-
