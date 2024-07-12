@@ -100,7 +100,7 @@ export const requestForPasswordReset = [
         inviteEntity.save();
 
         // メール送信
-        sendMail(req.body.email, 'パスワード設定依頼', `以下のURLからパスワード設定を完了してください。\n${FRONT_BASE_URL}/?onetimeToken=${onetimeToken}#/login`)
+        sendMail(req.body.email, 'パスワード設定依頼', `以下のURLからパスワード設定を完了してください。\n${FRONT_BASE_URL}/#/invite/${onetimeToken}`)
             .then(_ => {
                 res.json({ message: 'パスワード設定依頼メールを送信しました。' });
             })
