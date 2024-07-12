@@ -61,7 +61,7 @@ export const onetimeLogin = [
             },
         }).then((onetimeModel: InviteEntity | null) => {
             if (onetimeModel == null) {
-                res.status(401).json({ message: 'ワンタイムトークンが見つかりませんでした。' });
+                res.status(403).json({ message: 'ワンタイムトークンが見つかりませんでした。' });
                 return;
             } else {
                 const inviteToken: InviteToken = {
@@ -126,7 +126,7 @@ export const passwordReset = [
 
         const passwordValidationMessage = passwordValidation(req.body.password, req.body.passwordConfirm);
         if (!passwordValidationMessage.isValid) {
-            res.status(401).json(passwordValidationMessage);
+            res.status(400).json(passwordValidationMessage);
             return;
         } else {
             // 継続
@@ -144,7 +144,7 @@ export const passwordReset = [
                     // 初期名前をメールアドレスにする。エラーにならないように。。
                     req.body.name == req.body.name || req.info.invite.email;
                     // if (req.body.name == null || req.body.name == '') {
-                    //     res.status(401).json({ message: '名前を入力してください。' });
+                    //     res.status(400).json({ message: '名前を入力してください。' });
                     //     throw new Error('名前を入力してください。');
                     // } else {
                     //     // 継続
@@ -203,7 +203,7 @@ export const updateUser = [
         const req = _req as UserRequest;
         ds.getRepository(UserEntity).findOne({ where: { id: req.info.user.id } }).then((user: UserEntity | null) => {
             if (user == null) {
-                res.status(401).json({ message: 'ユーザーが見つかりませんでした。' });
+                res.status(400).json({ message: 'ユーザーが見つかりませんでした。' });
                 return;
             } else {
                 // ユーザー情報の更新
@@ -227,7 +227,7 @@ export const changePassword = [
         const req = _req as UserRequest;
         const passwordValidationMessage = passwordValidation(req.body.password, req.body.passwordConfirm);
         if (!passwordValidationMessage.isValid) {
-            res.status(401).json(passwordValidationMessage);
+            res.status(400).json(passwordValidationMessage);
             return;
         } else {
             // 継続
@@ -236,7 +236,7 @@ export const changePassword = [
         // パスワード設定（emailが鍵のような役割）
         ds.getRepository(UserEntity).findOne({ where: { id: req.info.user.id } }).then((user: UserEntity | null) => {
             if (user == null) {
-                res.status(401).json({ message: 'ユーザーが見つかりませんでした。' });
+                res.status(400).json({ message: 'ユーザーが見つかりませんでした。' });
                 return;
             } else {
                 // パスワードのハッシュ化
@@ -260,7 +260,7 @@ export const deleteUser = [
         // ユーザー情報の削除
         ds.getRepository(UserEntity).findOne({ where: { id: req.info.user.id } }).then((user: UserEntity | null) => {
             if (user == null) {
-                res.status(401).json({ message: 'ユーザーが見つかりませんでした。' });
+                res.status(400).json({ message: 'ユーザーが見つかりませんでした。' });
                 return;
             } else {
                 // ユーザー情報の削除
@@ -331,7 +331,7 @@ function passwordValidation(password: string, passwordConfirm: string): { isVali
 
     if (password != passwordConfirm) {
         errors.push('パスワードが一致しません。');
-        return { isValid: false, errors: errors }
+        return { isValid: errors.length === 0, errors };
     }
 
     if (password.length < minLength) {
@@ -350,5 +350,5 @@ function passwordValidation(password: string, passwordConfirm: string): { isVali
         errors.push('パスワードには少なくとも1つの特殊文字を含めてください。');
     }
 
-    return { isValid: errors.length > 0, errors: [] };
+    return { isValid: errors.length === 0, errors };
 }
