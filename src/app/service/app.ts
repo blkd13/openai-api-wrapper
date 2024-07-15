@@ -13,7 +13,9 @@ dotenv.config();
 
 const app = express();
 
-app.use(bodyParser.json()); // JSONパーサー
+// body-parser の設定を変更して、リクエストボディのサイズ制限を拡大する
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+app.use(bodyParser.json({ limit: '50mb' })); // JSONパーサー
 
 // これはデバッグ用
 app.use(cors()); // CORS許可

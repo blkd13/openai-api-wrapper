@@ -7,7 +7,7 @@ import { detect } from 'jschardet';
 
 import * as dotenv from 'dotenv';
 dotenv.config();
-const { GCP_PROJECT_ID, GCP_REGION, GCP_LOCATION } = process.env;
+const { GCP_PROJECT_ID, GCP_REGION } = process.env;
 // if (!PROJECT_ID || !LOCATION) {
 //     throw new Error('Missing required environment variables');
 // }
@@ -18,7 +18,8 @@ import * as configureGlobalFetch from './configureGlobalFetch.js'; configureGlob
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { Content, GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, VertexAI } from '@google-cloud/vertexai';
+import { Content, GenerateContentRequest, GenerateContentResult, HarmBlockThreshold, HarmCategory, Part, StreamGenerateContentResult, VertexAI } from '@google-cloud/vertexai';
+import { generateContentStream } from '@google-cloud/vertexai/build/src/functions/generate_content.js';
 // import { GoogleGenerativeAI } from "@google/generative-ai";
 // import { GoogleAICacheManager, GoogleAIFileManager } from "@google/generative-ai/server";
 
@@ -29,6 +30,7 @@ import { Tiktoken, TiktokenModel, encoding_for_model } from 'tiktoken';
 
 import fss from './fss.js';
 import { Utils } from "./utils.js";
+import { getMetaDataFromDataURL } from './funcs.js';
 
 const HISTORY_DIRE = `./history`;
 
@@ -78,7 +80,6 @@ const local = new OpenAI({
 });
 
 import { AzureKeyCredential, ChatMessageContentItem, ChatRequestMessage, OpenAIClient } from "@azure/openai";
-import { getMetaDataFromDataURL } from './funcs.js';
 
 const azureClient = new OpenAIClient(
     process.env['AZURE_OPENAI_ENDPOINT'] as string || 'dummy',
@@ -93,10 +94,11 @@ export const azureDeployTpmMap: Record<string, number> = {
     'gpt-4-vision-preview': 10000,
 };
 
+import { CachedContent, GenerateContentRequestExtended, mapForGemini, mapForGeminiExtend, MyVertexAiClient } from './my-vertexai.js';
 // Initialize Vertex with your Cloud project and location
-export const vertex_ai = GCP_PROJECT_ID ? new VertexAI({ project: GCP_PROJECT_ID, location: GCP_REGION || 'asia-northeast1' }) : null as any as VertexAI;
-export const vertex_ai_context_cache = GCP_PROJECT_ID ? new VertexAI({ project: GCP_PROJECT_ID, location: 'us-central1' }) : null as any as VertexAI; // コンテキストキャッシュ用。コンテキストキャッシュはus-central1に固定されている。
-export const anthropicVertex = GCP_PROJECT_ID ? new AnthropicVertex({ projectId: GCP_PROJECT_ID, region: 'europe-west1', httpAgent: options.httpAgent }) : null as any as AnthropicVertex; //TODO 他で使えるようになったら変える。
+export const my_vertexai = new MyVertexAiClient();
+export const vertex_ai = new VertexAI({ project: process.env['GCP_PROJECT_ID'] || 'dummy', location: process.env['GCP_REGION'] || 'asia-northeast1' });
+export const anthropicVertex = new AnthropicVertex({ projectId: process.env['GCP_PROJECT_ID'] || 'dummy', region: 'europe-west1', httpAgent: options.httpAgent }); //TODO 他で使えるようになったら変える。
 
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
@@ -362,53 +364,25 @@ class RunBit {
                 return readStream();
             });
         } else if (this.openApiWrapper.wrapperOptions.provider === 'vertexai') {
-            // 'gemini-1.5-flash-001'
-            // Instantiate the models
-            const generativeModel = vertex_ai.preview.getGenerativeModel({
-                model: args.model,
-                generationConfig: {
-                    maxOutputTokens: args.max_tokens || 8192,
-                    temperature: args.temperature || 0.1,
-                    topP: args.top_p || 0.95,
-                },
-                safetySettings: [
-                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, }
-                ],
-            });
             // console.log(generativeModel);
             args.messages[0].content = args.messages[0].content || '';
-            const req: GenerateContentRequest = {
-                contents: [
-                    // {
-                    //     role: 'user', parts: [
-                    //         { text: `konnichiha` },
-                    //         {
-                    //             inlineData: {
-                    //                 mimeType: 'image/jpeg',
-                    //                 data: fs.readFileSync('./sample.jpg').toString('base64')
-                    //             }
-                    //         }
-                    //     ]
-                    // }
-                ],
-            };
             // argsをGemini用に変換
-            mapForGemini(args, req);
+            const req: GenerateContentRequestExtended = mapForGeminiExtend(args, mapForGemini(args));
             // 文字数をカウント
             const countCharsObj = countChars(args);
             let promptChars = countCharsObj.audio + countCharsObj.text + countCharsObj.image + countCharsObj.video;
-            // console.dir(generativeModel, { depth: null });
-            // console.dir(req, { depth: null });
-            // ログ出力用に認証情報を除外したmodelを作成
-            const model = Object.keys(generativeModel).filter(key => key !== 'googleAuth').reduce((prev, currKey) => {
-                prev[currKey] = (generativeModel as any)[currKey];
-                return prev;
-            }, {} as Record<string, any>);
-            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ model, req }, Utils.genJsonSafer()), {}, (err) => { });
-            runPromise = generativeModel.generateContentStream(req).then((streamingResp) => {
+            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify(req, Utils.genJsonSafer()), {}, (err) => { });
+
+            // req は 不要な項目もまとめて保持しているので、実際のリクエスト用にスッキリさせる。
+            const _req: GenerateContentRequest = { contents: req.contents, tools: req.tools || [], systemInstruction: req.systemInstruction };
+            // コンテキストキャッシュの有無で編集を変える
+            if (req.cached_content) {
+                (_req as any).cached_content = req.cached_content; // コンテキストキャッシュを足しておく
+            } else {
+            }
+            runPromise = generateContentStream(req.region, req.resourcePath, my_vertexai.getAccessToken(), _req, undefined, req.generationConfig, req.safetySettings, undefined, {}).then(streamingResp => {
+                // かつてはModelを使って投げていた。
+                // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
 
                 let tokenBuilder: string = '';
 
@@ -452,7 +426,7 @@ class RunBit {
                             // tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
 
                             // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
-                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ model, req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
+                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
                         } else { }
 
                         if (content.promptFeedback && content.promptFeedback.blockReason) {
@@ -889,49 +863,6 @@ export function countChars(args: ChatCompletionCreateParamsBase): { image: numbe
     }, { image: 0, text: 0, video: 0, audio: 0 });
 }
 
-export function mapForGemini(args: ChatCompletionCreateParamsBase, req: GenerateContentRequest): void {
-    args.messages.forEach(message => {
-        // 画像ファイルなどが入ってきたとき用の整理
-        if (typeof message.content === 'string') {
-            if (message.role === 'system') {
-                // systemはsystemInstructionに入れる
-                req.systemInstruction = message.content;
-            } else {
-                req.contents.push({ role: message.role, parts: [{ text: message.content }] });
-            }
-        } else if (Array.isArray(message.content)) {
-            const remappedContent = {
-                role: message.role,
-                parts:
-                    message.content.map(content => {
-                        if (content.type === 'image_url') {
-                            // TODO URLには対応していない
-                            if (content.image_url.url.startsWith('data:video/')) {
-                                return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, video_metadata: {} };
-                            } else if (content.image_url.url.startsWith('data:')) {
-                                return { inlineData: { mimeType: content.image_url.url.substring(5, content.image_url.url.indexOf(';')), data: content.image_url.url.substring(content.image_url.url.indexOf(',') + 1) }, };
-                            } else {
-                                return { file_data: { file_uri: content.image_url.url } };
-                            }
-                        } else if (content.type === 'text') {
-                            return { text: content.text as string };
-                        } else {
-                            console.log('unknown sub message type');
-                            return null;
-                        }
-                    }).filter(is => is) as Part[],
-            };
-            if (message.role === 'system') {
-                // systemはsystemInstructionに入れる
-                req.systemInstruction = remappedContent;
-            } else {
-                req.contents.push(remappedContent);
-            }
-        } else {
-            console.log('unknown message type');
-        }
-    });
-}
 export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, allowLocalFiles: boolean): Observable<{ args: ChatCompletionCreateParamsStreaming, countObject: { image: number, audio: number, video: number } }> {
     const args = { ..._args };
     // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
@@ -1098,7 +1029,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                     } else if (curr.content) {
                         curr.content.forEach(obj => {
                             if (obj.type === 'text' && obj.text) {
-                                console.log(`obj.text:${obj.text}`);
+                                // console.log(`obj.text:${obj.text}`);
                                 // 中身があれば追加
                                 prevContentArray.push(obj);
                             } else if (obj.type === 'image_url' && obj.image_url && obj.image_url.url) {

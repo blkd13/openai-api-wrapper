@@ -32,6 +32,7 @@
         "@types/morgan": "^1.9.9",
         "@types/node": "^20.10.2",
         "@types/nodemailer": "^6.4.14",
+        "@types/uuid": "^10.0.0",
         "@types/yargs": "^17.0.32",
         "concurrently": "^8.2.2",
         "typescript": "^5.3.2"
@@ -42,6 +43,7 @@
         "@azure/openai": "^1.0.0-beta.11",
         "@google-cloud/vertexai": "^1.2.0",
         "@types/fluent-ffmpeg": "^2.1.24",
+        "axios": "^1.7.2",
         "bcrypt": "^5.1.1",
         "body-parser": "^1.20.2",
         "chalk": "^5.3.0",
@@ -61,7 +63,6 @@
         "moment": "^2.29.4",
         "moment-timezone": "^0.5.43",
         "morgan": "^1.10.0",
-        "music-metadata": "^8.3.0",
         "nodemailer": "^6.9.7",
         "nodemon": "^3.0.1",
         "openai": "^4.19.0",
@@ -74,6 +75,7 @@
         "tree-sitter": "^0.21.1",
         "typeorm": "^0.3.17",
         "undici": "^6.19.2",
+        "uuid": "^10.0.0",
         "yargs": "^17.7.2"
     }
 }

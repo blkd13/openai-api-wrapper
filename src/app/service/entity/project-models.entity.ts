@@ -1,141 +1,181 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity, Generated } from 'typeorm';
+
 import { MyBaseEntity } from './base.js';
-import { UserEntity } from './auth.entity.js';
-import { DevelopmentStageType, DocumentSubType, DocumentType, ProjectStatus } from '../models/values.js';
+import { ContentPartType, MessageGroupType, PredictHIstoryStatus, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
+
+@Entity()
+export class TeamEntity extends MyBaseEntity {
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;
+
+    @Column({ nullable: false })
+    name!: string;
+
+    @Column({ nullable: false })
+    label!: string;
+
+    @Column({ nullable: true, type: 'text' })
+    description?: string;
+
+    @Column({ nullable: false, type: 'enum', enum: TeamType, })
+    teamType!: TeamType;
+}
+
+
+@Entity()
+export class TeamMemberEntity extends MyBaseEntity {
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;
+
+    @Column({ nullable: false })
+    teamId!: string;
+
+    @Column({ nullable: false })
+    userId!: string;
+
+    @Column({ nullable: false, type: 'enum', enum: TeamMemberRoleType, })
+    role!: TeamMemberRoleType;
+}
+
+@Entity()
+export class PredictHistoryEntity extends MyBaseEntity {
+    @PrimaryGeneratedColumn()
+    id!: number;
+
+    @Column({ nullable: true })
+    clientId?: string;
+
+    @Column({ nullable: true })
+    transactionId?: string;
+
+    @Column({ nullable: true })
+    label?: string;
+
+    @Column({ nullable: false })
+    model!: string;
+
+    @Column({ nullable: false })
+    provider!: string;
+
+    @Column({ type: 'integer' })
+    take!: number;
+
+    @Column({ type: 'integer' })
+    reqToken!: number;
+
+    @Column({ type: 'integer' })
+    resToken!: number;
+
+    @Column()
+    cost!: number;
+
+    @Column({ nullable: false, type: 'enum', enum: PredictHIstoryStatus })
+    status!: PredictHIstoryStatus;
+}
 
 @Entity()
 export class ProjectEntity extends MyBaseEntity {
-    @PrimaryGeneratedColumn()
-    id!: number;
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;
 
-    @Column()
+    @Column({ nullable: false, type: 'enum', enum: ProjectVisibility, })
+    visibility!: ProjectVisibility;
+
+    @Column({ nullable: false })
+    teamId!: string;
+
+    @Column({ nullable: false })
     name!: string;
 
-    @Column()
+    @Column({ nullable: false })
     label!: string;
 
-    @Column({ nullable: true })
+    @Column({ nullable: true, type: 'text' })
     description?: string;
 
-    @Column()
+    @Column({ nullable: false })
     status!: ProjectStatus;
-
-    @OneToMany(() => DevelopmentStageEntity, stage => stage.project)
-    stages!: DevelopmentStageEntity[];
 }
 
 @Entity()
-export class DevelopmentStageEntity extends MyBaseEntity {
-    @PrimaryGeneratedColumn()
-    id!: number;
+export class ThreadEntity extends MyBaseEntity {
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;
 
-    @Column()
-    type!: DevelopmentStageType;
+    @Column({ nullable: false })
+    projectId!: string;
 
-    @Column()
-    name!: string;
+    @Column({ nullable: false, type: 'enum', enum: ThreadVisibility, })
+    visibility!: ThreadVisibility;
 
-    @Column()
-    status!: ProjectStatus;
-
-    @ManyToOne(() => ProjectEntity, project => project.stages)
-    project!: ProjectEntity;
-
-    @OneToMany(() => TaskEntity, task => task.stage)
-    tasks!: TaskEntity[];
-
-    // @OneToMany(() => DocumentEntity)
-    // @JoinTable()
-    // documents!: DocumentEntity[];
-
-    // @OneToMany(() => DiscussionEntity)
-    // @JoinTable()
-    // discussions!: DiscussionEntity[];
-}
-
-@Entity()
-export class TaskEntity extends MyBaseEntity {
-    @PrimaryGeneratedColumn()
-    id!: number;
-
-    @Column()
-    name!: string;
-
-    @ManyToMany(() => DocumentEntity)
-    @JoinTable()
-    documents!: DocumentEntity[];
-
-    @ManyToMany(() => DiscussionEntity)
-    @JoinTable()
-    discussions!: DiscussionEntity[];
-
-    @Column()
-    status!: ProjectStatus;
-
-    @ManyToOne(() => DevelopmentStageEntity, stage => stage.tasks)
-    stage!: DevelopmentStageEntity;
-}
-
-@Entity()
-export class DocumentEntity extends MyBaseEntity {
-    @PrimaryGeneratedColumn()
-    id!: number;
-
-    @Column()
-    type!: DocumentType;
-
-    @Column()
-    subType!: DocumentSubType;
-
-    @Column()
+    @Column({ nullable: false })
     title!: string;
 
-    @Column({ type: 'text', nullable: true })
+    @Column({ nullable: false, type: 'text' })
+    description!: string;
+
+    @Column({ nullable: true, type: 'enum', enum: ThreadStatus })
+    status?: string;
+}
+
+@Entity()
+export class MessageGroupEntity extends MyBaseEntity {
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;
+
+    @Column({ nullable: false })
+    threadId!: string;
+
+    @Column({ nullable: false, type: 'enum', enum: MessageGroupType, })
+    type!: MessageGroupType;
+
+    @Column({ type: 'integer', nullable: false })
+    @Generated('increment')
+    seq!: number;
+
+    @Column({ nullable: true })
+    parentId?: string;
+
+    @Column({ nullable: false })
+    role!: string;
+
+    @Column({ nullable: false })
+    label!: string;
+}
+
+
+@Entity()
+export class MessageEntity extends MyBaseEntity {
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;
+
+    @Column({ type: 'integer', nullable: false })
+    @Generated('increment')
+    seq!: number;
+
+    @Column({ nullable: false })
+    messageGroupId!: string;
+
+    @Column({ nullable: false })
+    label!: string;
+}
+
+@Entity()
+export class ContentPartEntity extends MyBaseEntity {
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;
+
+    @Column({ type: 'integer', nullable: false })
+    @Generated('increment')
+    seq!: number;
+
+    @Column({ nullable: false })
+    messageId!: string;
+
+    @Column({ nullable: false, type: 'enum', enum: ContentPartType, })
+    type!: ContentPartType;
+
+    @Column({ nullable: true, type: 'text' })
     content?: string;
-
-    @Column()
-    status!: ProjectStatus;
 }
 
-@Entity()
-export class DiscussionEntity extends MyBaseEntity {
-    @PrimaryGeneratedColumn()
-    id!: number;
-
-    @Column({ nullable: true })
-    type?: DocumentType;
-
-    @Column({ nullable: true })
-    subType?: DocumentSubType;
-
-    @Column()
-    topic!: string;
-
-    @Column()
-    logLabel!: string;
-
-    @OneToMany(() => StatementEntity, statement => statement.discussion)
-    statements!: StatementEntity[];
-
-    @ManyToMany(() => UserEntity)
-    @JoinTable()
-    participants!: UserEntity[];
-}
-
-@Entity()
-export class StatementEntity extends MyBaseEntity {
-    @PrimaryGeneratedColumn()
-    id!: number;
-
-    @Column()
-    sequence!: number;
-
-    @Column()
-    speaker!: string;
-
-    @Column({ type: 'text' })
-    content!: string;
-
-    @ManyToOne(() => DiscussionEntity, discussion => discussion.statements)
-    discussion!: DiscussionEntity;
-}

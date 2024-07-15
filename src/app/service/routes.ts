@@ -1,8 +1,35 @@
 import { Router } from 'express';
 import { changePassword, deleteUser, getUser, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateUserToken } from './middleware/authenticate.js';
-import { chatCompletion, initEvent } from './controllers/chat.js';
-import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
+import { chatCompletion, geminiCountTokens, geminiCreateContextCache, initEvent } from './controllers/chat.js';
+import {
+    createTeam,
+    getTeamList,
+    getTeam,
+    updateTeam,
+    deleteTeam,
+    addTeamMember,
+    getTeamMembers,
+    updateTeamMember,
+    removeTeamMember,
+    createProject,
+    getProjectList,
+    getProject,
+    updateProject,
+    deleteProject,
+    createThread,
+    getThreadList,
+    getThread,
+    updateThread,
+    deleteThread,
+    getMessageGroupList,
+    deleteMessageGroup,
+    deleteMessage,
+    upsertMessageWithContents,
+    getMessageGroupDetails,
+} from './controllers/project-models.js';
+
+// import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
 import { getDirectoryTree, getFile, saveFile } from './controllers/directory-tree.js';
 
 // routers/index.ts
@@ -31,51 +58,50 @@ authUserRouter.delete('/user', deleteUser);
 // チャット系
 authUserRouter.get('/event', initEvent);
 authUserRouter.post('/chat-completion', chatCompletion);
+authUserRouter.post('/create-cache', geminiCreateContextCache);
+// チャット系（認証不要）
+authNoneRouter.post('/count-tokens', geminiCountTokens);
 
+// チーム関連
+authUserRouter.post('/team', createTeam);
+authUserRouter.get('/team', getTeamList);
+authUserRouter.get('/team/:id', getTeam);
+authUserRouter.patch('/team/:id', updateTeam);
+authUserRouter.delete('/team/:id', deleteTeam);
 
-// プロジェクト系
+// チームメンバー関連
+authUserRouter.post('/team-member', addTeamMember);
+authUserRouter.get('/team/:teamId/members', getTeamMembers);
+authUserRouter.patch('/team/:teamId/member/:userId', updateTeamMember);
+authUserRouter.delete('/team/:teamId/member/:userId', removeTeamMember);
+
+// プロジェクト関連
 authUserRouter.post('/project', createProject);
-authUserRouter.get('/project-list', getProjectList);
-authUserRouter.get('/project/deep/:id', getProjectDeep);
-authUserRouter.get('/project/:id', getProject);
 authUserRouter.patch('/project/:id', updateProject);
 authUserRouter.delete('/project/:id', deleteProject);
 
-// ステージ系
-authUserRouter.post('/project/:projectId/development-stages', addDevelopmentStages);
-authUserRouter.get('/project/:projectId/development-stage-list', getDevelopmentStageList);
-authUserRouter.get('/development-stage/:id', getDevelopmentStage);
-authUserRouter.patch('/development-stage/:id', updateDevelopmentStage);
-authUserRouter.delete('/development-stage/:id', deleteDevelopmentStage);
+// プロジェクト取得（認証あり・なし両方に対応）
+authNoneRouter.get('/project', getProjectList);
+authNoneRouter.get('/project/:id', getProject);
+authUserRouter.get('/project', getProjectList);
+authUserRouter.get('/project/:id', getProject);
 
-// タスク系
-authUserRouter.post('/development-stage/:stageId/tasks', addTasks);
-authUserRouter.get('/development-stage/:stageId/task-list', getTaskList);
-authUserRouter.get('/task/:id', getTask);
-authUserRouter.patch('/task/:id', updateTask);
-authUserRouter.delete('/task/:id', deleteTask);
+// スレッド関連
+authUserRouter.post('/thread', createThread);
+authUserRouter.get('/project/:projectId/threads', getThreadList);
+authUserRouter.get('/thread/:id', getThread);
+authUserRouter.patch('/thread/:id', updateThread);
+authUserRouter.delete('/thread/:id', deleteThread);
 
-// ドキュメント系
-authUserRouter.post('/task/:taskId/documents', addDocuments);
-authUserRouter.get('/task/:taskId/document-list', getDocumentList);
-authUserRouter.get('/document/:id', getDocument);
-authUserRouter.patch('/document/:id', updateDocument);
-authUserRouter.delete('/document/:id', deleteDocument);
+// メッセージ関連
+authUserRouter.post('/message', upsertMessageWithContents);
+authUserRouter.get('/thread/:threadId/message-groups', getMessageGroupList);
+authUserRouter.get('/message-group/:messageGroupId', getMessageGroupDetails);
+authUserRouter.delete('/message-group/:messageGroupId', deleteMessageGroup);
+authUserRouter.delete('/message/:messageId', deleteMessage);
 
-// 議事録系
-authUserRouter.post('/task/:taskId/discussions', addDiscussions);
-authUserRouter.get('/task/:taskId/discussion-list', getDiscussionList);
-authUserRouter.get('/discussion/:id', getDiscussion);
-authUserRouter.patch('/discussion/:id', updateDiscussion);
-authUserRouter.delete('/discussion/:id', deleteDiscussion);
-
-// 発言系
-authUserRouter.post('/discussion/:discussionId/statements', addStatements);
-authUserRouter.get('/discussion/:discussionId/statement-list', getStatementList);
-authUserRouter.get('/statement/:id', getStatement);
-authUserRouter.patch('/statement/:id', updateStatement);
-authUserRouter.delete('/statement/:id', deleteStatement);
-
+// 認証なしでのメッセージグループ詳細取得
+authNoneRouter.get('/message-group/:messageGroupId', getMessageGroupDetails);
 
 // ディレクトリツリー系
 authUserRouter.get('/directory-tree/:path/*', getDirectoryTree); // 最低1階層は必要
