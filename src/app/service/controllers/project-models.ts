@@ -23,6 +23,9 @@ const sequencial = false;
  */
 export const createTeam = [
     body('teamType').isIn(Object.values(TeamType)),
+    body('name').optional().isString().trim().notEmpty(),
+    body('label').optional().isString().trim().notEmpty(),
+    body('description').optional().isString().trim(),
     validationErrorHandler,
     (req: Request, res: Response) => {
         const userReq = req as UserRequest;
@@ -42,6 +45,10 @@ export const createTeam = [
                         return res.status(400).json({ message: '個人用チーム定義は既に存在します' });
                     }
                 }
+
+                team.name = userReq.body.name;
+                team.label = userReq.body.label;
+                team.description = userReq.body.description;
 
                 // チーム作成
                 team.createdBy = userReq.info.user.id;
@@ -553,6 +560,8 @@ export const createProject = [
         project.visibility = req.body.visibility;
         project.description = req.body.description || '';
         project.label = req.body.label;
+        project.createdBy = req.info.user.id;
+        project.updatedBy = req.info.user.id;
 
         // 作成トランザクション
         function create() {
@@ -758,11 +767,12 @@ export const createThread = [
     body('projectId').isUUID(),
     body('title').trim().notEmpty(),
     body('description').trim().notEmpty(),
+    body('argsJson').trim().notEmpty(),
     body('visibility').isIn(Object.values(ThreadVisibility)),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { projectId, title, description, visibility } = req.body;
+        const { projectId, title, description, argsJson, visibility } = req.body;
 
         try {
             await ds.transaction(async transactionalEntityManager => {
@@ -808,6 +818,7 @@ export const createThread = [
                 thread.projectId = projectId;
                 thread.title = title;
                 thread.description = description;
+                thread.argsJson = argsJson;
                 thread.visibility = visibility;
                 thread.createdBy = req.info.user.id;
                 thread.updatedBy = req.info.user.id;
@@ -958,12 +969,13 @@ export const updateThread = [
     param('id').isUUID(),
     body('title').optional().trim().notEmpty(),
     body('description').optional().trim().notEmpty(),
+    body('argsJson').optional().trim().notEmpty(),
     body('visibility').optional().isIn(Object.values(ThreadVisibility)),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { id } = req.params;
-        const { title, description, visibility } = req.body;
+        const { title, description, argsJson, visibility } = req.body;
 
         try {
             await ds.transaction(async transactionalEntityManager => {
@@ -991,6 +1003,9 @@ export const updateThread = [
                 }
                 if (description !== undefined) {
                     thread.description = description;
+                }
+                if (argsJson !== undefined) {
+                    thread.argsJson = argsJson;
                 }
 
                 if (visibility !== undefined) {

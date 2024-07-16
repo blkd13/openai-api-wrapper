@@ -114,6 +114,9 @@ export class ThreadEntity extends MyBaseEntity {
     @Column({ nullable: false, type: 'text' })
     description!: string;
 
+    @Column({ nullable: false, type: 'text' })
+    argsJson!: string;
+
     @Column({ nullable: true, type: 'enum', enum: ThreadStatus })
     status?: string;
 }
