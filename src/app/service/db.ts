@@ -38,7 +38,7 @@ const postgres = new DataSource({
     // logging: true,
     useUTC: true,
 })
-export const ds = sqlite;
+export const ds = postgres;
 
 await ds.initialize()
     .then(() => {
