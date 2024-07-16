@@ -1,3 +1,56 @@
+
+export enum PredictHIstoryStatus {
+    Start = 'start',
+    Queue = 'queue',
+    Fine = 'fine',
+    Error = 'error',
+}
+
+export enum ProjectVisibility {
+    Default = 'Default', // Defaultはユーザーの個人プロジェクト
+    Public = 'Public', // 公開プロジェクト（ログイン不要）
+    Team = 'Team', // チームプロジェクト
+    Login = 'Login', // ログインユーザーのみ
+}
+
+export enum TeamType {
+    Alone = 'Alone', // 個人用（一人一個）
+    Team = 'Team', // チーム用
+}
+
+export enum ThreadVisibility {
+    Public = 'Public', // 公開スレッド（ログイン不要）
+    Team = 'Team', // チーム内のみ（デフォルト）
+    Login = 'Login', // ログインユーザーのみ
+    Temporary = 'Temporary', // 一時的なスレッド（デフォルト）
+}
+
+export enum MessageGroupType {
+    Single = 'Single',
+    Parallel = 'Parallel',
+    Regenerated = 'Regenerated',
+}
+
+export enum ContentPartType {
+    TEXT = 'text',
+    BASE64 = 'base64',
+    URL = 'url',
+    FILE = 'file',
+}
+
+export enum TeamMemberRoleType {
+    Owner = 'Owner', // オーナー
+    Admin = 'Admin', // 管理者（オーナーに統合したので今は使わない）
+    Member = 'Member', // メンバー（スレッドの作成、編集、削除ができる）
+    Viewer = 'Viewer', // 閲覧者（スレッドの閲覧のみ）
+    Guest = 'Guest', // ゲスト（スレッドの閲覧のみ）
+}
+
+export enum ThreadStatus {
+    Normal = 'Normal', // 普通
+    Deleted = 'Deleted', // 削除済み
+}
+
 export enum ProjectStatus {
     NotStarted = 'NotStarted',         // 未開始
     InProgress = 'InProgress',         // 進行中

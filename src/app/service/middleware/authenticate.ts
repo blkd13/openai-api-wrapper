@@ -5,7 +5,10 @@ import { InviteEntity, UserEntity } from '../entity/auth.entity.js';
 
 import { InviteRequest, UserRequest } from '../models/info.js';
 
-export const JWT_SECRET = 'your_secret_key';
+import * as dotenv from 'dotenv';
+import { randomBytes } from 'crypto';
+dotenv.config();
+export const JWT_SECRET: string = process.env['JWT_SECRET'] || randomBytes(64).toString('hex').substring(0, 64);
 
 export interface Token {
     type: string;
@@ -16,7 +19,8 @@ export interface Token {
  */
 export interface UserToken extends Token {
     type: 'user';
-    id: number;
+    id: string;
+    // seq: number;
     authGeneration: number;
 }
 
@@ -25,7 +29,8 @@ export interface UserToken extends Token {
  */
 export interface InviteToken extends Token {
     type: 'invite';
-    id: number;
+    id: string;
+    // seq: number;
     email: string;
 }
 
@@ -38,7 +43,7 @@ export const authenticateUserToken = (req: Request, res: Response, next: NextFun
     if (token == null) return res.sendStatus(401);
     jwt.verify(token, JWT_SECRET, (err: any, _token: any) => {
         const userToken = _token as UserToken;
-        if (err) return res.sendStatus(403);
+        if (err) return res.sendStatus(401);
         if (userToken.type === 'user' && userToken.id) {
             // ユーザーが存在確認
             UserEntity.findOne<UserEntity>({
@@ -63,7 +68,7 @@ export const authenticateUserToken = (req: Request, res: Response, next: NextFun
                 }
             });
         } else {
-            return res.sendStatus(403);
+            return res.sendStatus(401);
         }
     });
 }
@@ -90,4 +95,3 @@ export const authenticateInviteToken = (req: Request, res: Response, next: NextF
     });
     return;
 }
-

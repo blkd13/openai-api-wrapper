@@ -97,6 +97,8 @@ export const requestForPasswordReset = [
         inviteEntity.status = 'unused';
         inviteEntity.data = JSON.stringify({ name: req.body.name, email: req.body.email });
         inviteEntity.limit = Date.now() + 1000 * 60 * 5; // 5分以内
+        inviteEntity.createdBy = 'dummy';
+        inviteEntity.updatedBy = 'dummy';
         inviteEntity.save();
 
         // メール送信
@@ -158,7 +160,9 @@ export const passwordReset = [
                     // パスワードのハッシュ化
                     user.passwordHash = bcrypt.hashSync(req.body.password, 10);
                     user.authGeneration = 1;
+                    user.createdBy = req.info.invite.id; // 作成者はinvite
                 }
+                user.updatedBy = req.info.invite.id; // 更新者はinvite
                 return user;
             }).then((user) => {
                 return manager.getRepository(UserEntity).save(user);
