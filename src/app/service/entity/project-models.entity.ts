@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity, Generated } from 'typeorm';
 
 import { MyBaseEntity } from './base.js';
-import { ContentPartType, MessageGroupType, PredictHIstoryStatus, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
+import { ContentPartType, MessageGroupType, PredictHistoryStatus, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
 
 @Entity()
 export class TeamEntity extends MyBaseEntity {
@@ -69,8 +69,8 @@ export class PredictHistoryEntity extends MyBaseEntity {
     @Column()
     cost!: number;
 
-    @Column({ nullable: false, type: 'enum', enum: PredictHIstoryStatus })
-    status!: PredictHIstoryStatus;
+    @Column({ nullable: false, type: 'enum', enum: PredictHistoryStatus })
+    status!: PredictHistoryStatus;
 }
 
 @Entity()

@@ -1,5 +1,5 @@
 
-export enum PredictHIstoryStatus {
+export enum PredictHistoryStatus {
     Start = 'start',
     Queue = 'queue',
     Fine = 'fine',
