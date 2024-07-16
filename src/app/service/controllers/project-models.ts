@@ -569,9 +569,6 @@ export const createProject = [
                 return tx.save(ProjectEntity, project);
             }).then(savedProject => {
                 res.status(201).json(savedProject);
-            }).catch(error => {
-                console.error(error);
-                res.status(error instanceof EntityNotFoundError ? 404 : 500).json({ message: `Error creating project` });
             });
         }
         // 権限チェック（チームメンバーかつオーナーであること）
@@ -586,13 +583,13 @@ export const createProject = [
                         return;
                     } else {
                         // 正常
+                        create();
                     }
                 });
             } else {
-                // 正常
+                // プロジェクト作成
+                create();
             }
-            // プロジェクト作成
-            create();
         }).catch((error) => {
             console.error(error);
             res.status(error instanceof EntityNotFoundError ? 404 : 500).json({ message: `Error creating project` });
