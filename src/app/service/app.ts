@@ -16,6 +16,12 @@ const app = express();
 // body-parser の設定を変更して、リクエストボディのサイズ制限を拡大する
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 app.use(bodyParser.json({ limit: '50mb' })); // JSONパーサー
+app.set('trust proxy', 1);
+// app.use((req, res, next) => {
+//     console.log(req.headers['x-real-ip']);
+//     next();
+// });
+
 
 // これはデバッグ用
 app.use(cors()); // CORS許可

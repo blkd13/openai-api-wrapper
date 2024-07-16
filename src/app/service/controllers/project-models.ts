@@ -38,8 +38,13 @@ export const createTeam = [
             try {
                 // Aloneタイプのチームは一人一つまでしか作れない
                 if (teamType === TeamType.Alone) {
+                    // ユーザーが所属しているチームのIDを取得
+                    const teamMembers = await transactionalEntityManager.getRepository(TeamMemberEntity).find({
+                        where: { userId: userReq.info.user.id }
+                    });
+                    const teamIds = teamMembers.map(member => member.teamId);
                     const existingAloneTeam = await transactionalEntityManager.findOne(TeamEntity, {
-                        where: { teamType: TeamType.Alone },
+                        where: { id: In(teamIds), teamType: TeamType.Alone },
                     });
                     if (existingAloneTeam) {
                         return res.status(400).json({ message: '個人用チーム定義は既に存在します' });
@@ -577,7 +582,7 @@ export const createProject = [
             project.teamId = req.body.teamId;
             if (project.visibility === ProjectVisibility.Default) {
                 // Defaultプロジェクトは一人一個限定なので、既存のDefaultプロジェクトがあるか確認する
-                ds.getRepository(ProjectEntity).find({ where: { visibility: ProjectVisibility.Default } }).then(projects => {
+                ds.getRepository(ProjectEntity).find({ where: { teamId: project.teamId, visibility: ProjectVisibility.Default } }).then(projects => {
                     if (projects.length > 0) {
                         res.status(400).json({ message: `Default project already exists` });
                         return;
