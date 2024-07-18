@@ -335,13 +335,32 @@ export const geminiCountTokensByProjectModel = [
         const req = _req as UserRequest;
         const { messageId } = req.query as { messageId: string };
         try {
-            let inDto;
+            const messageList = req.body as { role: 'user', content: ContentPartEntity[] }[];
+            // コンテンツIDリストからDataURLのマップを作成しておく。
+            const dataUrlMap = await buildDataUrlMap(messageList.map(message => message.content).reduce((prev, curr) => { curr.forEach(obj => prev.push(obj)); return prev; }, [] as ContentPartEntity[]));
+            // カウントしたいだけだからパラメータは適当でOK。
+            const args = { messages: [], model: 'gemini-1.5-flash', temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, } as ChatCompletionCreateParamsStreaming;
+            args.messages = messageList.map(message => {
+                return {
+                    role: message.role, content: message.content.map(content => {
+                        if (content.type === 'text') {
+                            return { type: 'text', text: content.text };
+                        } else {
+                            return {
+                                type: 'image_url', image_url: {
+                                    url: dataUrlMap[content.fileId || ''].base64,
+                                    label: dataUrlMap[content.fileId || ''].file.fileName,
+                                }
+                            };
+                        }
+                    })
+                };
+            }) as any; // TODO 無理矢理なので後で型を直す。
             if (messageId) {
-                inDto = await buildArgs(req.info.user.id, messageId);
+                const inDto = await buildArgs(req.info.user.id, messageId);
+                inDto.args.messages.forEach(message => args.messages.push(message));
             } else { }
 
-            // カウントしたいだけだからパラメータは適当でOK。
-            const args = inDto ? inDto.args : { messages: [], model: 'gemini-1.5-flash', temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, } as ChatCompletionCreateParamsStreaming;
             normalizeMessage(args, false).subscribe({
                 next: next => {
                     const args = next.args;
@@ -381,6 +400,7 @@ function errorFormat(error: any): string {
  */
 export const geminiCreateContextCacheByProjectModel = [
     query('messageId').optional().isUUID(),
+    query('model').trim().notEmpty(),
     body('*.content').isArray(),
     body('*.content.*.type').isIn(Object.values(ContentPartType)),
     body('*.content.*.text').isString(),
@@ -388,17 +408,36 @@ export const geminiCreateContextCacheByProjectModel = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { messageId } = req.query as { messageId: string };
+        const { messageId, model } = req.query as { messageId: string, model: string };
         try {
-            let inDto;
+            const messageList = req.body as { role: 'user', content: ContentPartEntity[] }[];
+            // コンテンツIDリストからDataURLのマップを作成しておく。
+            const dataUrlMap = await buildDataUrlMap(messageList.map(message => message.content).reduce((prev, curr) => { curr.forEach(obj => prev.push(obj)); return prev; }, [] as ContentPartEntity[]));
+            // カウントしたいだけだからパラメータは適当でOK。
+            const args = { messages: [], model: model, temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, } as ChatCompletionCreateParamsStreaming;
+            args.messages = messageList.map(message => {
+                return {
+                    role: message.role, content: message.content.map(content => {
+                        if (content.type === 'text') {
+                            return { type: 'text', text: content.text };
+                        } else {
+                            return {
+                                type: 'image_url', image_url: {
+                                    url: dataUrlMap[content.fileId || ''].base64,
+                                    label: dataUrlMap[content.fileId || ''].file.fileName,
+                                }
+                            };
+                        }
+                    })
+                };
+            }) as any; // TODO 無理矢理なので後で型を直す。
             if (messageId) {
-                inDto = await buildArgs(req.info.user.id, messageId);
+                const inDto = await buildArgs(req.info.user.id, messageId);
+                inDto.args.messages.forEach(message => args.messages.push(message));
             } else { }
 
-            // カウントしたいだけだからパラメータは適当でOK。
-            const args = inDto ? inDto.args : { messages: [], model: 'gemini-1.5-flash', temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, } as ChatCompletionCreateParamsStreaming;
             const projectId: string = GCP_PROJECT_ID || 'dummy';
-            const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
+            // const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
             const url = `${CONTEXT_CACHE_API_ENDPOINT}/projects/${projectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`;
             normalizeMessage(args, false).subscribe({
                 next: next => {
@@ -415,7 +454,7 @@ export const geminiCreateContextCacheByProjectModel = [
 
                     // リクエストボディ
                     const requestBody = {
-                        model: `projects/${projectId}/locations/${location}/publishers/google/models/${modelId}`,
+                        model: `projects/${projectId}/locations/${location}/publishers/google/models/${model}`,
                         contents: req.contents,
                     };
                     const reqCache: GenerateContentRequestForCache = req as GenerateContentRequestForCache;

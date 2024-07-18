@@ -64,17 +64,17 @@ const handleFileUpload = async (content: { filePath: string, base64Data: string 
     } else if (fileType.startsWith('image/')) {
         innerPath = `${pathBase}-original.${ext}`;
         await fs.rename(pathBase, innerPath);
-        innerPath = await convertAndOptimizeImage(innerPath, outPathBase);
+        // innerPath = await convertAndOptimizeImage(innerPath, outPathBase);
         meta = sizeOf(buffer);
     } else if (fileType.startsWith('video/')) {
         innerPath = `${pathBase}-original.${ext}`;
         await fs.rename(pathBase, innerPath);
-        innerPath = await minimizeVideoForMinutes(innerPath, outPathBase);
+        // innerPath = await minimizeVideoForMinutes(innerPath, outPathBase);
         meta = await lastValueFrom(getMetaDataFromFile(innerPath));
     } else if (fileType.startsWith('audio/')) {
         innerPath = `${pathBase}-original.${ext}`;
         await fs.rename(pathBase, innerPath);
-        innerPath = await normalizeAndMinimizeAudio(innerPath, outPathBase);
+        // innerPath = await normalizeAndMinimizeAudio(innerPath, outPathBase);
         meta = await lastValueFrom(getMetaDataFromFile(innerPath));
     } else {
         innerPath = `${pathBase}-plain.${ext}`;
