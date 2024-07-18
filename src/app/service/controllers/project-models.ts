@@ -25,9 +25,8 @@ export const createTeam = [
 
         const team = new TeamEntity();
         team.teamType = teamType;
-
-        ds.transaction(async (transactionalEntityManager) => {
-            try {
+        try {
+            ds.transaction(async (transactionalEntityManager) => {
                 // Aloneタイプのチームは一人一つまでしか作れない
                 if (teamType === TeamType.Alone) {
                     // ユーザーが所属しているチームのIDを取得
@@ -60,13 +59,20 @@ export const createTeam = [
                 teamMember.createdBy = userReq.info.user.id;
                 teamMember.updatedBy = userReq.info.user.id;
                 await transactionalEntityManager.save(TeamMemberEntity, teamMember);
-
+                return savedTeam;
+            }).then((savedTeam) => {
                 res.status(201).json(savedTeam);
-            } catch (error) {
+                return;
+            }).catch(error => {
                 console.error('Error creating team:', error);
                 res.status(500).json({ message: 'チームの作成中にエラーが発生しました' });
-            }
-        });
+                return;
+            });
+        } catch (error) {
+            console.error('Error creating team:', error);
+            res.status(500).json({ message: 'チームの作成中にエラーが発生しました' });
+            return;
+        }
     }
 ];
 
@@ -165,6 +171,7 @@ export const updateTeam = [
         const teamId = req.params.id;
         const { teamType, name, label, description } = req.body;
 
+        let updatedTeam;
         try {
             // ユーザーがチームのオーナーまたは管理者であるか確認
             const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
@@ -202,8 +209,7 @@ export const updateTeam = [
             team.updatedBy = req.info.user.id;
 
             // 更新を保存
-            const updatedTeam = await ds.getRepository(TeamEntity).save(team);
-
+            updatedTeam = await ds.getRepository(TeamEntity).save(team);
             res.status(200).json(updatedTeam);
         } catch (error) {
             console.error('Error updating team:', error);
@@ -257,7 +263,6 @@ export const deleteTeam = [
                 //     { teamId: teamId },
                 // );
             });
-
             res.status(200).json({ message: 'チームが正常に削除されました' });
         } catch (error) {
             console.error('Error deleting team:', error);
@@ -327,7 +332,6 @@ export const addTeamMember = [
 
                 await transactionalEntityManager.save(TeamMemberEntity, newMember);
             });
-
             res.status(201).json({ message: 'チームメンバーが正常に追加されました' });
         } catch (error) {
             console.error('Error adding team member:', error);
@@ -710,9 +714,9 @@ export const updateProject = [
                         return tx.save(ProjectEntity, project);
                     }
                 });
-            }).then(project => {
-                res.status(200).json(project);
             });
+        }).then(project => {
+            res.status(200).json(project);
         }).catch(error => {
             console.error(error);
             if (error instanceof EntityNotFoundError) {
@@ -770,6 +774,7 @@ export const createThread = [
         const { projectId } = req.params;
 
         try {
+            let savedThread;
             await ds.transaction(async transactionalEntityManager => {
                 // プロジェクトの存在確認
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
@@ -819,10 +824,10 @@ export const createThread = [
                 thread.createdBy = req.info.user.id;
                 thread.updatedBy = req.info.user.id;
 
-                const savedThread = await transactionalEntityManager.save(ThreadEntity, thread);
+                savedThread = await transactionalEntityManager.save(ThreadEntity, thread);
 
-                res.status(201).json(savedThread);
             });
+            res.status(201).json(savedThread);
         } catch (error) {
             console.error('Error creating thread:', error);
             if (error instanceof EntityNotFoundError) {
@@ -974,6 +979,7 @@ export const updateThread = [
         const { title, description, inDtoJson, visibility } = req.body;
 
         try {
+            let updatedThread;
             await ds.transaction(async transactionalEntityManager => {
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
                     where: { id: id, status: Not(ThreadStatus.Deleted) }
@@ -1016,8 +1022,8 @@ export const updateThread = [
 
                 const updatedThread = await transactionalEntityManager.save(ThreadEntity, thread);
 
-                res.status(200).json(updatedThread);
             });
+            res.status(200).json(updatedThread);
         } catch (error) {
             console.error('Error updating thread:', error);
             if (error instanceof EntityNotFoundError) {
@@ -1068,8 +1074,8 @@ export const deleteThread = [
 
                 await transactionalEntityManager.save(ThreadEntity, thread);
 
-                res.status(200).json({ message: 'スレッドが正常に削除されました' });
             });
+            res.status(200).json({ message: 'スレッドが正常に削除されました' });
         } catch (error) {
             console.error('Error deleting thread:', error);
             if (error instanceof EntityNotFoundError) {
@@ -1521,6 +1527,7 @@ export const deleteMessageGroup = [
         const { messageGroupId } = req.params;
 
         try {
+            let messageGroup;
             await ds.transaction(async transactionalEntityManager => {
                 // メッセージグループの取得
                 const messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
@@ -1600,8 +1607,8 @@ export const deleteMessageGroup = [
                 await transactionalEntityManager.delete(MessageGroupEntity, messageGroup);
                 // await transactionalEntityManager.save(MessageGroupEntity, messageGroup);
 
-                res.status(200).json({ message: 'メッセージグループが正常に削除されました', target: messageGroup });
             });
+            res.status(200).json({ message: 'メッセージグループが正常に削除されました', target: messageGroup });
         } catch (error) {
             console.error('Error deleting message group:', error);
             if (error instanceof EntityNotFoundError) {
@@ -1686,8 +1693,8 @@ export const deleteMessage = [
                     );
                 }
 
-                res.status(200).json({ message: 'メッセージが正常に削除されました' });
             });
+            res.status(200).json({ message: 'メッセージが正常に削除されました' });
         } catch (error) {
             console.error('Error deleting message:', error);
             if (error instanceof EntityNotFoundError) {
