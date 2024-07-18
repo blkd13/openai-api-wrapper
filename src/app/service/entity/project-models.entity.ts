@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity, Generated } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity, Generated, UpdateDateColumn, PrimaryColumn, Index } from 'typeorm';
 
 import { MyBaseEntity } from './base.js';
 import { ContentPartType, MessageGroupType, PredictHistoryStatus, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
@@ -27,9 +27,11 @@ export class TeamMemberEntity extends MyBaseEntity {
     @PrimaryGeneratedColumn('uuid')
     id!: string;
 
+    @Index() // インデックス
     @Column({ nullable: false })
     teamId!: string;
 
+    @Index() // インデックス
     @Column({ nullable: false })
     userId!: string;
 
@@ -81,6 +83,7 @@ export class ProjectEntity extends MyBaseEntity {
     @Column({ nullable: false, type: 'enum', enum: ProjectVisibility, })
     visibility!: ProjectVisibility;
 
+    @Index() // インデックス
     @Column({ nullable: false })
     teamId!: string;
 
@@ -102,6 +105,7 @@ export class ThreadEntity extends MyBaseEntity {
     @PrimaryGeneratedColumn('uuid')
     id!: string;
 
+    @Index() // インデックス
     @Column({ nullable: false })
     projectId!: string;
 
@@ -114,8 +118,11 @@ export class ThreadEntity extends MyBaseEntity {
     @Column({ nullable: false, type: 'text' })
     description!: string;
 
+    @UpdateDateColumn()
+    lastUpdate!: Date;
+
     @Column({ nullable: false, type: 'text' })
-    argsJson!: string;
+    inDtoJson!: string;
 
     @Column({ nullable: true, type: 'enum', enum: ThreadStatus })
     status?: string;
@@ -126,6 +133,7 @@ export class MessageGroupEntity extends MyBaseEntity {
     @PrimaryGeneratedColumn('uuid')
     id!: string;
 
+    @Index() // インデックス
     @Column({ nullable: false })
     threadId!: string;
 
@@ -136,8 +144,11 @@ export class MessageGroupEntity extends MyBaseEntity {
     @Generated('increment')
     seq!: number;
 
+    @UpdateDateColumn()
+    lastUpdate!: Date;
+
     @Column({ nullable: true })
-    parentId?: string;
+    parentMessageId?: string; // 先行するメッセージのID.メッセージグループIDではないことに注意。グループIDで紐づけるとグループ内のどのメッセージに紐づくか分からなくなってしまうので。
 
     @Column({ nullable: false })
     role!: string;
@@ -156,8 +167,15 @@ export class MessageEntity extends MyBaseEntity {
     @Generated('increment')
     seq!: number;
 
+    @UpdateDateColumn()
+    lastUpdate!: Date;
+
+    @Index() // インデックス
     @Column({ nullable: false })
     messageGroupId!: string;
+
+    @Column({ nullable: true })
+    cacheId?: string;
 
     @Column({ nullable: false })
     label!: string;
@@ -172,6 +190,7 @@ export class ContentPartEntity extends MyBaseEntity {
     @Generated('increment')
     seq!: number;
 
+    @Index() // インデックス
     @Column({ nullable: false })
     messageId!: string;
 
@@ -179,6 +198,8 @@ export class ContentPartEntity extends MyBaseEntity {
     type!: ContentPartType;
 
     @Column({ nullable: true, type: 'text' })
-    content?: string;
-}
+    text?: string;
 
+    @Column({ nullable: true })
+    fileId?: string;
+}

@@ -87,6 +87,12 @@ export const requestForPasswordReset = [
     body('email').trim().notEmpty().isEmail(),  // .withMessage('メールアドレスを入力してください。'),
     validationErrorHandler,
     (req: Request, res: Response) => {
+        if (req.body.email.endsWith('@nri.co.jp')) {
+        } else {
+            res.status(403).json({ message: `@nri.co.jp 以外のメールアドレスは受け付けられません。` });
+            return;
+        }
+
         // 一時トークンの生成
         const onetimeToken = generateOnetimeToken();
         // ワンタイムトークンの登録

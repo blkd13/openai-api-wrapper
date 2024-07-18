@@ -1,4 +1,4 @@
-import { NextFunction, Request, Response } from 'express';
+import { Request, Response } from 'express';
 
 // import { ProjectEntity, DevelopmentStageEntity, DiscussionEntity, DocumentEntity, StatementEntity, TaskEntity, } from '../entity/project-models.entity.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamEntity, TeamMemberEntity, ThreadEntity, } from '../entity/project-models.entity.js';
@@ -8,15 +8,7 @@ import { validationErrorHandler } from '../middleware/validation.js';
 import { UserRequest } from '../models/info.js';
 import { EntityNotFoundError, In, Not } from 'typeorm';
 import { ContentPartType, MessageGroupType, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
-import { Utils } from '../../common/utils.js';
-import { Subject } from 'rxjs';
-
-/**
- * Create系は動くと思うがそれ以外は未検証
- */
-// const sequencial = true;
-const sequencial = false;
-
+import { FileEntity } from '../entity/file-models.entity.js';
 
 /**
  * [user認証] チーム作成
@@ -766,15 +758,16 @@ export const deleteProject = [
  * [user認証] スレッド作成
  */
 export const createThread = [
-    body('projectId').isUUID(),
-    body('title').trim().notEmpty(),
-    body('description').trim().notEmpty(),
-    body('argsJson').trim().notEmpty(),
+    param('projectId').isUUID().notEmpty(),
+    body('title').trim().isString(),
+    body('description').trim().isString(),
+    body('inDtoJson').trim().notEmpty(),
     body('visibility').isIn(Object.values(ThreadVisibility)),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { projectId, title, description, argsJson, visibility } = req.body;
+        const { title, description, inDtoJson, visibility } = req.body;
+        const { projectId } = req.params;
 
         try {
             await ds.transaction(async transactionalEntityManager => {
@@ -819,8 +812,9 @@ export const createThread = [
                 const thread = new ThreadEntity();
                 thread.projectId = projectId;
                 thread.title = title;
+                thread.status = ThreadStatus.Normal;
                 thread.description = description;
-                thread.argsJson = argsJson;
+                thread.inDtoJson = inDtoJson;
                 thread.visibility = visibility;
                 thread.createdBy = req.info.user.id;
                 thread.updatedBy = req.info.user.id;
@@ -871,7 +865,7 @@ export const getThreadList = [
                 if (teamMember || project.visibility === ProjectVisibility.Public || project.visibility === ProjectVisibility.Login) {
                     // チームメンバー、または公開/ログインユーザー向けプロジェクトの場合
                     threads = await ds.getRepository(ThreadEntity).find({
-                        where: { projectId: projectId }
+                        where: { projectId: projectId, status: Not(ThreadStatus.Deleted) }
                     });
                 } else {
                     throw new Error('このプロジェクトのスレッド一覧を取得する権限がありません');
@@ -918,7 +912,7 @@ export const getThread = [
 
         try {
             const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
-                where: { id: id },
+                where: { id: id, status: Not(ThreadStatus.Deleted) }
             });
 
             const project = await ds.getRepository(ProjectEntity).findOneOrFail({
@@ -969,20 +963,20 @@ export const getThread = [
  */
 export const updateThread = [
     param('id').isUUID(),
-    body('title').optional().trim().notEmpty(),
-    body('description').optional().trim().notEmpty(),
-    body('argsJson').optional().trim().notEmpty(),
+    body('title').optional().trim().isString(),
+    body('description').optional().trim().isString(),
+    body('inDtoJson').optional().trim().notEmpty(),
     body('visibility').optional().isIn(Object.values(ThreadVisibility)),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { id } = req.params;
-        const { title, description, argsJson, visibility } = req.body;
+        const { title, description, inDtoJson, visibility } = req.body;
 
         try {
             await ds.transaction(async transactionalEntityManager => {
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { id: id }
+                    where: { id: id, status: Not(ThreadStatus.Deleted) }
                 });
 
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
@@ -1006,8 +1000,8 @@ export const updateThread = [
                 if (description !== undefined) {
                     thread.description = description;
                 }
-                if (argsJson !== undefined) {
-                    thread.argsJson = argsJson;
+                if (inDtoJson !== undefined) {
+                    thread.inDtoJson = inDtoJson;
                 }
 
                 if (visibility !== undefined) {
@@ -1050,7 +1044,7 @@ export const deleteThread = [
         try {
             await ds.transaction(async transactionalEntityManager => {
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { id: id }
+                    where: { id: id, status: Not(ThreadStatus.Deleted) }
                 });
 
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
@@ -1094,26 +1088,28 @@ export const deleteThread = [
  * [user認証] メッセージ、コンテンツの作成または更新
  */
 export const upsertMessageWithContents = [
-    body('threadId').isUUID(),
+    param('threadId').isUUID().notEmpty(),
     body('messageId').optional().isUUID(),
-    body('messageData.groupType').isIn(Object.values(MessageGroupType)),
-    body('messageData.role').notEmpty(),
-    body('messageData.label').notEmpty(),
-    body('messageData.parentId').optional().isUUID(),
-    body('messageData.contents').isArray(),
-    body('messageData.contents.*.id').optional().isUUID(),
-    body('messageData.contents.*.type').isIn(Object.values(ContentPartType)),
-    body('messageData.contents.*.content').notEmpty(),
+    body('groupType').isIn(Object.values(MessageGroupType)),
+    body('role').notEmpty(),
+    body('label').optional().isString(),
+    body('parentMessageId').optional().isUUID(),
+    body('cacheId').optional().isString(),
+    body('contents').isArray(),
+    body('contents.*.id').optional().isUUID(),
+    body('contents.*.type').isIn(Object.values(ContentPartType)),
+    body('contents.*.text').notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { threadId, messageId, messageData } = req.body;
+        const { messageId, groupType, role, label, parentMessageId, contents, cacheId } = req.body;
+        const { threadId } = req.params;
 
         try {
             const result = await ds.transaction(async transactionalEntityManager => {
                 // スレッドの存在確認
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { id: threadId }
+                    where: { id: threadId, status: Not(ThreadStatus.Deleted) }
                 });
 
                 // プロジェクトの取得と権限チェック
@@ -1139,7 +1135,6 @@ export const upsertMessageWithContents = [
                     // 更新の場合
                     message = await transactionalEntityManager.findOneOrFail(MessageEntity, {
                         where: { id: messageId },
-                        relations: ['messageGroup']
                     });
 
                     messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
@@ -1151,28 +1146,30 @@ export const upsertMessageWithContents = [
                     }
 
                     // MessageGroupの更新
-                    messageGroup.type = messageData.groupType;
-                    messageGroup.role = messageData.role;
-                    messageGroup.label = messageData.label;
-                    messageGroup.parentId = messageData.parentId;
+                    messageGroup.type = groupType;
+                    messageGroup.role = role;
+                    messageGroup.label = label;
+                    messageGroup.parentMessageId = parentMessageId;
                     messageGroup.updatedBy = req.info.user.id;
 
                     // Messageの更新
-                    message.label = messageData.label;
+                    message.cacheId = cacheId;
+                    message.label = label;
                     message.updatedBy = req.info.user.id;
                 } else {
                     // 新規作成の場合
                     messageGroup = new MessageGroupEntity();
                     messageGroup.threadId = threadId;
-                    messageGroup.type = messageData.groupType;
-                    messageGroup.role = messageData.role;
-                    messageGroup.label = messageData.label;
-                    messageGroup.parentId = messageData.parentId;
+                    messageGroup.type = groupType;
+                    messageGroup.role = role;
+                    messageGroup.label = label;
+                    messageGroup.parentMessageId = parentMessageId;
                     messageGroup.createdBy = req.info.user.id;
                     messageGroup.updatedBy = req.info.user.id;
 
                     message = new MessageEntity();
-                    message.label = messageData.label;
+                    message.cacheId = cacheId;
+                    message.label = label;
                     message.createdBy = req.info.user.id;
                     message.updatedBy = req.info.user.id;
                 }
@@ -1187,27 +1184,45 @@ export const upsertMessageWithContents = [
                     : [];
 
                 // ContentPartの作成、更新、削除
-                const updatedContentParts = await Promise.all((messageData.contents as ContentPartEntity[]).map(async (content, index) => {
-                    let contentPart: ContentPartEntity;
+                const updatedContentParts = await Promise.all((contents as ContentPartEntity[]).map(async (content, index) => {
 
-                    if (content.id) {
+                    let contentPart = existingContentParts.find(cp => cp.id === content.id) as ContentPartEntity;
+                    if (contentPart && content.id) {
                         // 既存のContentPartを更新
-                        contentPart = existingContentParts.find(cp => cp.id === content.id) || new ContentPartEntity();
-                        contentPart.type = content.type;
-                        contentPart.content = content.content;
-                        contentPart.updatedBy = req.info.user.id;
                     } else {
                         // 新しいContentPartを作成
                         contentPart = new ContentPartEntity();
                         contentPart.messageId = savedMessage.id;
-                        contentPart.type = content.type;
-                        contentPart.content = content.content;
                         contentPart.createdBy = req.info.user.id;
-                        contentPart.updatedBy = req.info.user.id;
                     }
 
+                    contentPart.type = content.type;
+                    contentPart.updatedBy = req.info.user.id;
+
                     contentPart.seq = index + 1;
-                    return await transactionalEntityManager.save(ContentPartEntity, contentPart);
+
+                    switch (content.type) {
+                        case ContentPartType.TEXT:
+                            // textはファイル無しなので無視
+                            contentPart.text = content.text;
+                            break;
+                        case ContentPartType.BASE64:
+                            // base64のまま来てしまうのはおかしい。事前に登録されているべき。
+                            break;
+                        case ContentPartType.URL:
+                            // TODO インターネットからコンテンツ取ってくる。後回し
+                            break;
+                        case ContentPartType.STORE:
+                            // gs:// のファイル。
+                            break;
+                        case ContentPartType.FILE:
+                            // fileは登録済みなので無視
+                            contentPart.text = content.text;
+                            contentPart.fileId = content.fileId;
+                            break;
+                    }
+                    contentPart = await transactionalEntityManager.save(ContentPartEntity, contentPart);
+                    return contentPart;
                 }));
 
                 // 不要になったContentPartsを削除
@@ -1220,7 +1235,7 @@ export const upsertMessageWithContents = [
                 return {
                     messageGroup: savedMessageGroup,
                     message: savedMessage,
-                    contentParts: updatedContentParts
+                    contentParts: updatedContentParts,
                 };
             });
 
@@ -1240,15 +1255,13 @@ export const upsertMessageWithContents = [
     }
 ];
 
-
-
 /**
  * [user認証] スレッド内のメッセージグループリスト取得
  */
 export const getMessageGroupList = [
     param('threadId').isUUID(),
     query('page').optional().isInt({ min: 1 }).toInt(),
-    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 1000 }).toInt(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -1259,7 +1272,7 @@ export const getMessageGroupList = [
         try {
             // スレッドの存在確認
             const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
-                where: { id: threadId }
+                where: { id: threadId, status: Not(ThreadStatus.Deleted) }
             });
 
             // プロジェクトの取得と権限チェック
@@ -1298,15 +1311,10 @@ export const getMessageGroupList = [
 
             // メッセージグループとメッセージを結合
             const messageGroupsWithMessageInfo = messageGroups.map(group => {
-                const relatedMessage = messages.find(message => message.messageGroupId === group.id);
+                const relatedMessages = messages.filter(message => message.messageGroupId === group.id);
                 return {
                     ...group,
-                    message: relatedMessage ? {
-                        id: relatedMessage.id,
-                        label: relatedMessage.label,
-                        createdAt: relatedMessage.createdAt,
-                        updatedAt: relatedMessage.updatedAt
-                    } : null
+                    messages: relatedMessages,
                 };
             });
 
@@ -1350,7 +1358,7 @@ export const getMessageGroupDetails = [
 
             // スレッドの取得
             const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
-                where: { id: messageGroup.threadId }
+                where: { id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
             });
 
             // プロジェクトの取得
@@ -1429,6 +1437,80 @@ export const getMessageGroupDetails = [
 ];
 
 /**
+ * [user認証] メッセージコンテンツ部分取得
+ */
+export const getMessageContentParts = [
+    param('messageId').isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const messageId = req.params.messageId;
+
+        try {
+            // メッセージの存在確認とスレッドID取得
+            const message = await ds.getRepository(MessageEntity).findOneOrFail({
+                where: { id: messageId }
+            });
+
+            // メッセージグループの取得
+            const messageGroup = await ds.getRepository(MessageGroupEntity).findOneOrFail({
+                where: { id: message.messageGroupId }
+            });
+
+            // スレッドの取得（プロジェクトIDを取得するため）
+            const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
+                where: { id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+            });
+
+            // プロジェクトの取得
+            const project = await ds.getRepository(ProjectEntity).findOneOrFail({
+                where: { id: thread.projectId }
+            });
+
+            let hasAccess = false;
+
+            if (project.visibility === ProjectVisibility.Public) {
+                // 公開プロジェクトの場合、誰でもアクセス可能
+                hasAccess = true;
+            } else if (req.info && req.info.user) {
+                // ユーザーが認証されている場合
+                if (project.visibility === ProjectVisibility.Login) {
+                    // ログインユーザー向けプロジェクトの場合、認証されていれば誰でもアクセス可能
+                    hasAccess = true;
+                } else {
+                    // TeamプロジェクトまたはDefaultプロジェクトの場合、チームメンバーシップを確認
+                    const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
+                        where: {
+                            teamId: project.teamId,
+                            userId: req.info.user.id
+                        }
+                    });
+                    hasAccess = !!teamMember;
+                }
+            }
+
+            if (!hasAccess) {
+                return res.status(403).json({ message: 'このメッセージにアクセスする権限がありません' });
+            }
+
+            // メッセージコンテンツ部分の取得
+            const contentParts = await ds.getRepository(ContentPartEntity).find({
+                where: { messageId: messageId },
+                order: { seq: 'ASC' }
+            });
+
+            res.status(200).json(contentParts);
+        } catch (error) {
+            console.error('Error getting message content parts:', error);
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: '指定されたメッセージが見つかりません' });
+            } else {
+                res.status(500).json({ message: 'メッセージコンテンツ部分の取得中にエラーが発生しました' });
+            }
+        }
+    }
+];
+/**
  * [user認証] メッセージグループ削除
  */
 export const deleteMessageGroup = [
@@ -1447,7 +1529,7 @@ export const deleteMessageGroup = [
 
                 // スレッドの取得
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { id: messageGroup.threadId }
+                    where: { id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
                 });
 
                 // プロジェクトの取得
@@ -1468,30 +1550,57 @@ export const deleteMessageGroup = [
                 }
 
                 // 関連するメッセージの取得
-                const message = await transactionalEntityManager.findOne(MessageEntity, {
+                const messages = await transactionalEntityManager.find(MessageEntity, {
                     where: { messageGroupId: messageGroupId }
                 });
 
-                if (message) {
+                if (messages && messages.length > 0) {
                     // TODO 論理削除の実装
                     // メッセージの論理削除
                     // message.status = 'deleted';  // 適切なステータス名に置き換えてください
-                    message.updatedBy = req.info.user.id;
-                    await transactionalEntityManager.save(MessageEntity, message);
+                    // message.updatedBy = req.info.user.id;
+                    // await transactionalEntityManager.save(MessageEntity, message);
+                    await transactionalEntityManager.delete(MessageEntity, { messageGroupId: messageGroupId });
 
-                    // 関連するコンテンツパーツの論理削除
+                    // 親メッセージIDの付け替え
+                    const messageIds = messages.map(message => message.id);
+                    if (messageGroup.parentMessageId) {
+                        // 削除対象のメッセージグループに親メッセージが指定されていたら、
+                        // 後続のメッセージグループの親メッセージを付け替えておく
+                        await transactionalEntityManager.createQueryBuilder()
+                            .update(MessageGroupEntity)
+                            .set({ parentMessageId: () => ':newParentMessageId' })
+                            .where('parentMessageId IN (:...messageIds)', { messageIds })
+                            .setParameter('newParentMessageId', messageGroup.parentMessageId)
+                            .execute();
+                    } else { }
+
+                    // 関連するメッセージの取得
+                    const contents = await transactionalEntityManager.find(ContentPartEntity, {
+                        where: { messageId: In(messageIds) }
+                    });
+
+                    // 関連するコンテンツパーツの物理削除
                     await transactionalEntityManager.delete(ContentPartEntity,
-                        { messageId: message.id },
+                        { messageId: In(messageIds) },
                         // { status: 'deleted', updatedBy: req.info.user.id }
                     );
-                }
+
+                    // ファイルオブジェクトも削除。（ファイルボディは再利用考慮のため消さずに残しておく）
+                    const fileIds = contents.filter(content => content.fileId).map(content => content.fileId);
+                    await transactionalEntityManager.delete(FileEntity,
+                        { id: In(fileIds) },
+                        // { status: 'deleted', updatedBy: req.info.user.id }
+                    );
+                } else { }
 
                 // メッセージグループの論理削除
                 // messageGroup.status = 'deleted';  // 適切なステータス名に置き換えてください
-                messageGroup.updatedBy = req.info.user.id;
-                await transactionalEntityManager.save(MessageGroupEntity, messageGroup);
+                // messageGroup.updatedBy = req.info.user.id;
+                await transactionalEntityManager.delete(MessageGroupEntity, messageGroup);
+                // await transactionalEntityManager.save(MessageGroupEntity, messageGroup);
 
-                res.status(200).json({ message: 'メッセージグループが正常に削除されました' });
+                res.status(200).json({ message: 'メッセージグループが正常に削除されました', target: messageGroup });
             });
         } catch (error) {
             console.error('Error deleting message group:', error);
@@ -1530,7 +1639,7 @@ export const deleteMessage = [
 
                 // スレッドの取得
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { id: messageGroup.threadId }
+                    where: { id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
                 });
 
                 // プロジェクトの取得

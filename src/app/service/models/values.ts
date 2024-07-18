@@ -33,9 +33,10 @@ export enum MessageGroupType {
 
 export enum ContentPartType {
     TEXT = 'text',
-    BASE64 = 'base64',
-    URL = 'url',
-    FILE = 'file',
+    BASE64 = 'base64', // 軽量コンテンツをロードするときに使う、メッセージオブジェクトの配下にくっつけてやるパターン。最初の一回はBase64で登録して、使うときはfileになっている感じ。
+    URL = 'url', // インターネットのリンク。基本使わないつもり。
+    STORE = 'store', // GCPのStorageに登録されているもの。gs://
+    FILE = 'file', // サーバー側にファイルとして保存済みのもの // fileになっているものは登録済みなので、登録処理の時は無視する。
 }
 
 export enum TeamMemberRoleType {

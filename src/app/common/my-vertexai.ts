@@ -34,7 +34,7 @@ export class MyVertexAiClient {
             return Promise.resolve(this.accessToken);
         } else {
             try {
-                this.expire = Date.now() + 60 * 60 * 1000; // 1時間
+                this.expire = Date.now() + 60 * 55 * 1000; // 1時間なので55分でリフレッシュする。
                 this.accessToken = execSync('gcloud auth print-access-token').toString().trim();
                 return this.accessToken;
             } catch (error) {
@@ -123,7 +123,8 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: 
         temperature: args.temperature || 0.1,
         topP: args.top_p || 0.95,
     };
-    req.safetySettings = [
+
+    req.safetySettings = (args as any).safetySettings || [
         // // ここの指定をするとマルチモーダルの時にエラーになることがあるので何もしないことにした。
         // { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE, },
         // { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE, },
@@ -143,3 +144,45 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: 
     }
     return req;
 }
+
+
+export function countChars(args: ChatCompletionCreateParamsBase): { image: number, text: number, video: number, audio: number } {
+    return args.messages.reduce((prev0, curr0) => {
+        if (curr0.content) {
+            if (typeof curr0.content === 'string') {
+                prev0.text += curr0.content.length;
+            } else {
+                curr0.content.reduce((prev1, curr1) => {
+                    if (curr1.type === 'text') {
+                        prev1.text += curr1.text.length;
+                    } else if (curr1.type === 'image_url') {
+
+                        const mediaType = curr1.image_url.url.split(/[/:]/g)[1];
+                        switch (mediaType) {
+                            case 'audio':
+                                prev1.audio += (curr1.image_url as any).second * 0.000125 / 0.00125 * 1000;
+                                break;
+                            case 'video':
+                                prev1.video += (curr1.image_url as any).second * 0.001315 / 0.00125 * 1000;
+                                break;
+                            case 'image':
+                                prev1.image += 0.001315 / 0.00125 * 1000;
+                                break;
+                            default:
+                                const contentUrlType = curr1.image_url.url.split(',')[0];
+                                console.log(`unkown type: ${contentUrlType}`);
+                                break;
+                        }
+                    } else {
+                        console.log(`unkown obj ${Object.keys(curr1)}`);
+                    }
+                    return prev1;
+                }, prev0);
+            }
+        } else {
+            // null
+        }
+        return prev0;
+    }, { image: 0, text: 0, video: 0, audio: 0 });
+}
+

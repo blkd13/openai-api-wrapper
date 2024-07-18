@@ -3,6 +3,11 @@
 import { DataSource } from "typeorm"
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { CustomNamingStrategy } from "../../config/naming-strategy.js";
+
+import * as dotenv from 'dotenv';
+dotenv.config();
+const { TZ, TYPEORM_TYPE, TYPEORM_DATABASE, TYPEORM_HOST, TYPEORM_PORT, TYPEORM_USERNAME, TYPEORM_PASSWORD, TYPEORM_SCHEMA } = process.env;
 
 // import.meta.urlからディレクトリパスを取得
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -11,9 +16,7 @@ console.log(`currentDir=${currentDir}`);
 const sqlite = new DataSource({
     type: 'sqlite',
     database: './data/database.sqlite',
-    entities: [
-        path.join(currentDir, 'entity', '**', '*.entity.js'),
-    ],
+    entities: [path.join(currentDir, 'entity', '**', '*.entity.js'),],
     synchronize: true,
     logging: true,
     // extra: {
@@ -21,23 +24,28 @@ const sqlite = new DataSource({
     //         journal_mode: "wal"
     //     }
     // }
-})
+});
 
 const postgres = new DataSource({
-    type: 'postgres',
-    host: 'localhost',
-    port: 5432,
-    username: 'chatgpt',
-    password: 'a',
-    schema: 'project_models',
-    database: 'postgres',
-    entities: [
-        path.join(currentDir, 'entity', '**', '*.entity.js'),
-    ],
+    type: TYPEORM_TYPE as 'postgres',
+    database: TYPEORM_DATABASE,
+    host: TYPEORM_HOST,
+    port: Number(TYPEORM_PORT),
+    username: TYPEORM_USERNAME,
+    password: TYPEORM_PASSWORD,
+    schema: TYPEORM_SCHEMA,
     synchronize: true,
     // logging: true,
-    useUTC: true,
-})
+    // useUTC: true,
+    // dropSchema: true, // データ全消滅するから注意。
+    entities: [path.join(currentDir, 'entity', '**', '*.entity.js'),],
+    // migrations: [path.join(currentDir, 'migration', '**', '*.migration.js'),],
+    // subscribers: [path.join(currentDir, 'subscribers', '**', '*.subscribers.js'),],
+    namingStrategy: new CustomNamingStrategy(),
+    extra: {
+        timezone: 'Asia/Tokyo',
+    }
+});
 export const ds = postgres;
 
 await ds.initialize()

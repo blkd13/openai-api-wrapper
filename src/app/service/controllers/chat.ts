@@ -3,11 +3,10 @@ import { Request, Response } from "express";
 import { body, query } from "express-validator";
 import axios from 'axios';
 
-import { OpenAIApiWrapper, countChars, my_vertexai, normalizeMessage, vertex_ai } from '../../common/openai-api-wrapper.js';
+import { OpenAIApiWrapper, my_vertexai, normalizeMessage, vertex_ai } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ChatCompletionCreateParamsStreaming } from "openai/resources/index.js";
-import { ds } from '../db.js';
 import { GenerateContentRequest, HarmBlockThreshold, HarmCategory } from '@google-cloud/vertexai';
 
 import * as dotenv from 'dotenv';
@@ -20,11 +19,11 @@ const proxyObj: { [key: string]: string | undefined } = {
     httpsProxy: process.env['https_proxy'] as string || undefined,
 };
 if (proxyObj.httpsProxy || proxyObj.httpProxy) {
-const httpsAgent = new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || '');
-axios.defaults.httpsAgent = httpsAgent;
+    const httpsAgent = new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || '');
+    axios.defaults.httpsAgent = httpsAgent;
 } else { }
 
-import { GenerateContentRequestForCache, mapForGemini } from '../../common/my-vertexai.js';
+import { countChars, GenerateContentRequestForCache, mapForGemini } from '../../common/my-vertexai.js';
 
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
@@ -109,23 +108,12 @@ export const chatCompletion = [
                 clients[clientId]?.response.end(`error: ${req.query.threadId} ${error}\n\n`);
             },
             complete: () => {
-                if (req.body.parentMessageId) {
-                    //
-                } else {
-                    // 通常モードは素直に終了
-                    clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);
-                }
+                // 通常モードは素直に終了
+                clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);
                 // console.log(text);
             },
         });
-
-        if (req.body.parentMessageId) {
-
-
-        } else {
-        // clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
         res.end(JSON.stringify({ status: 'ok' }));
-    }
     }
 ];
 
@@ -147,10 +135,10 @@ export const geminiCountTokens = [
                 topP: args.temperature || 0,
             },
             safetySettings: [
-                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, }
+                // { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                // { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                // { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                // { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, }
             ],
         });
 

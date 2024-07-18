@@ -30,7 +30,7 @@ import { Tiktoken, TiktokenModel, encoding_for_model } from 'tiktoken';
 
 import fss from './fss.js';
 import { Utils } from "./utils.js";
-import { getMetaDataFromDataURL } from './funcs.js';
+import { getMetaDataFromDataURL } from './media-funcs.js';
 
 const HISTORY_DIRE = `./history`;
 
@@ -94,7 +94,7 @@ export const azureDeployTpmMap: Record<string, number> = {
     'gpt-4-vision-preview': 10000,
 };
 
-import { CachedContent, GenerateContentRequestExtended, mapForGemini, mapForGeminiExtend, MyVertexAiClient } from './my-vertexai.js';
+import { CachedContent, countChars, GenerateContentRequestExtended, mapForGemini, mapForGeminiExtend, MyVertexAiClient } from './my-vertexai.js';
 // Initialize Vertex with your Cloud project and location
 export const my_vertexai = new MyVertexAiClient();
 export const vertex_ai = new VertexAI({ project: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', location: process.env['GCP_REGION'] || 'asia-northeast1' });
@@ -162,6 +162,8 @@ class RunBit {
 
         console.log(logObject.output('start', ''));
         if (this.openApiWrapper.wrapperOptions.provider === 'anthropic' || this.openApiWrapper.wrapperOptions.provider === 'anthropic_vertexai') {
+            for (const key of ['safetySettings', 'cachedContent']) delete (args as any)[key]; // Gemini用プロパティを消しておく
+
             args.max_tokens = Math.min(args.max_tokens || 4096, 4096);
             // console.log('shot');
             // claudeはsystemプロンプトが無い。
@@ -281,6 +283,7 @@ class RunBit {
                 return;
             });
         } else if (this.openApiWrapper.wrapperOptions.provider === 'azure') {
+            for (const key of ['safetySettings', 'cachedContent']) delete (args as any)[key]; // Gemini用プロパティを消しておく
             if (args.max_tokens) {
             } else if (args.model === 'gpt-4-vision-preview') {
                 // vision-previの時にmax_tokensを設定しないと20くらいで返ってきてしまう。
@@ -469,6 +472,7 @@ class RunBit {
 
             });
         } else {
+            for (const key of ['safetySettings', 'cachedContent']) delete (args as any)[key]; // Gemini用プロパティを消しておく
             const client =
                 this.openApiWrapper.wrapperOptions.provider === 'groq' ? groq
                     : this.openApiWrapper.wrapperOptions.provider === 'mistral' ? mistral
@@ -823,46 +827,6 @@ export class OpenAIApiWrapper {
     }
 }
 
-export function countChars(args: ChatCompletionCreateParamsBase): { image: number, text: number, video: number, audio: number } {
-    return args.messages.reduce((prev0, curr0) => {
-        if (curr0.content) {
-            if (typeof curr0.content === 'string') {
-                prev0.text += curr0.content.length;
-            } else {
-                curr0.content.reduce((prev1, curr1) => {
-                    if (curr1.type === 'text') {
-                        prev1.text += curr1.text.length;
-                    } else if (curr1.type === 'image_url') {
-
-                        const mediaType = curr1.image_url.url.split(/[/:]/g)[1];
-                        switch (mediaType) {
-                            case 'audio':
-                                prev1.audio += (curr1.image_url as any).second * 0.000125 / 0.00125 * 1000;
-                                break;
-                            case 'video':
-                                prev1.video += (curr1.image_url as any).second * 0.001315 / 0.00125 * 1000;
-                                break;
-                            case 'image':
-                                prev1.image += 0.001315 / 0.00125 * 1000;
-                                break;
-                            default:
-                                const contentUrlType = curr1.image_url.url.split(',')[0];
-                                console.log(`unkown type: ${contentUrlType}`);
-                                break;
-                        }
-                    } else {
-                        console.log(`unkown obj ${Object.keys(curr1)}`);
-                    }
-                    return prev1;
-                }, prev0);
-            }
-        } else {
-            // null
-        }
-        return prev0;
-    }, { image: 0, text: 0, video: 0, audio: 0 });
-}
-
 export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, allowLocalFiles: boolean): Observable<{ args: ChatCompletionCreateParamsStreaming, countObject: { image: number, audio: number, video: number } }> {
     const args = { ..._args };
     // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
@@ -913,7 +877,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                     } else if (content.image_url.url.startsWith('data:')) {
                         // データURLからデータを取り出してサイズを判定する。
                         const label = (content.image_url as any)['label'] as string;
-                        const trg = label.toLocaleLowerCase().replace(/.*\./g, '');
+                        const trg = label?.toLowerCase().replace(/.*\./g, '');
                         if (content.image_url.url.startsWith('data:image/') || imageExtensions.includes(trg)) {
                             const data = Buffer.from(content.image_url.url.substring(content.image_url.url.indexOf(',') + 1), 'base64');
                             const metaInfo = sizeOf(data);
