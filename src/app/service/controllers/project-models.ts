@@ -1020,7 +1020,7 @@ export const updateThread = [
 
                 thread.updatedBy = req.info.user.id;
 
-                const updatedThread = await transactionalEntityManager.save(ThreadEntity, thread);
+                updatedThread = await transactionalEntityManager.save(ThreadEntity, thread);
 
             });
             res.status(200).json(updatedThread);
