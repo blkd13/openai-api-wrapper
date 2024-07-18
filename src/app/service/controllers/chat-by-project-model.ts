@@ -454,7 +454,7 @@ export const geminiCreateContextCacheByProjectModel = [
 
                     // リクエストボディ
                     const requestBody = {
-                        model: `projects/${projectId}/locations/${location}/publishers/google/models/${model}`,
+                        model: `projects/${projectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/publishers/google/models/${model}`,
                         contents: req.contents,
                     };
                     const reqCache: GenerateContentRequestForCache = req as GenerateContentRequestForCache;
