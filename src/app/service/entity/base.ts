@@ -10,10 +10,10 @@ export class MyBaseEntity extends BaseEntity {
     @Column({ nullable: false })
     updatedBy!: string;
 
-    @CreateDateColumn()
+    @CreateDateColumn({ type: 'timestamptz' })
     createdAt!: Date;
 
-    @UpdateDateColumn()
+    @UpdateDateColumn({ type: 'timestamptz' })
     updatedAt!: Date;
 
     // @BeforeInsert()

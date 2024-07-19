@@ -1,4 +1,4 @@
-import { GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part } from "@google-cloud/vertexai";
+import { CountTokensResponse, GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part } from "@google-cloud/vertexai";
 import { execSync } from "child_process";
 import { ChatCompletionCreateParamsBase } from "openai/resources/chat/completions";
 
@@ -13,6 +13,14 @@ export interface CachedContent {
     updateTime: string;
     expireTime: string;
 }
+
+export interface CountCharsResponse {
+    image: number;
+    text: number;
+    video: number;
+    audio: number;
+}
+export type TokenCharCount = CountCharsResponse & CountTokensResponse;
 export interface GenerateContentRequestExtended extends GenerateContentRequest {
     resourcePath: string;
     region: string;

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { changePassword, deleteUser, getUser, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateUserToken } from './middleware/authenticate.js';
-import { chatCompletion, geminiCountTokens, geminiCreateContextCache, initEvent } from './controllers/chat.js';
+import { chatCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
     createTeam,
     getTeamList,
@@ -33,7 +33,7 @@ import {
 // import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
 import { getDirectoryTree, getFile, saveFile } from './controllers/directory-tree.js';
 import { deleteFile, downloadFile, getFileList, updateFileAccess, updateFileMetadata, uploadFiles } from './controllers/file-manager.js';
-import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
+import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
 
 // routers/index.ts
 
@@ -63,7 +63,9 @@ authUserRouter.get('/event', initEvent);
 authUserRouter.post('/chat-completion', chatCompletion);
 authUserRouter.post('/create-cache', geminiCreateContextCache);
 authUserRouter.post('/v2/chat-completion', chatCompletionByProjectModel);
-authUserRouter.post('/v2/create-cache', geminiCreateContextCacheByProjectModel);
+authUserRouter.post('/v2/cache', geminiCreateContextCacheByProjectModel);
+authUserRouter.patch('/v2/cache', geminiUpdateContextCacheByProjectModel);
+authUserRouter.delete('/v2/cache', geminiDeleteContextCacheByProjectModel);
 authUserRouter.post('/v2/count-tokens', geminiCountTokensByProjectModel); // count-tokenのv2はプロジェクト情報を参照するのでauthに変更.
 // チャット系（認証不要）
 authNoneRouter.post('/count-tokens', geminiCountTokens);

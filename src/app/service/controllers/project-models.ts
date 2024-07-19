@@ -1099,7 +1099,7 @@ export const upsertMessageWithContents = [
     body('groupType').isIn(Object.values(MessageGroupType)),
     body('role').notEmpty(),
     body('label').optional().isString(),
-    body('parentMessageId').optional().isUUID(),
+    body('previousMessageId').optional().isUUID(),
     body('cacheId').optional().isString(),
     body('contents').isArray(),
     body('contents.*.id').optional().isUUID(),
@@ -1108,7 +1108,7 @@ export const upsertMessageWithContents = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { messageId, groupType, role, label, parentMessageId, contents, cacheId } = req.body;
+        const { messageId, groupType, role, label, previousMessageId, contents, cacheId } = req.body;
         const { threadId } = req.params;
 
         try {
@@ -1155,7 +1155,7 @@ export const upsertMessageWithContents = [
                     messageGroup.type = groupType;
                     messageGroup.role = role;
                     messageGroup.label = label;
-                    messageGroup.parentMessageId = parentMessageId;
+                    messageGroup.previousMessageId = previousMessageId;
                     messageGroup.updatedBy = req.info.user.id;
 
                     // Messageの更新
@@ -1169,7 +1169,7 @@ export const upsertMessageWithContents = [
                     messageGroup.type = groupType;
                     messageGroup.role = role;
                     messageGroup.label = label;
-                    messageGroup.parentMessageId = parentMessageId;
+                    messageGroup.previousMessageId = previousMessageId;
                     messageGroup.createdBy = req.info.user.id;
                     messageGroup.updatedBy = req.info.user.id;
 
@@ -1571,14 +1571,14 @@ export const deleteMessageGroup = [
 
                     // 親メッセージIDの付け替え
                     const messageIds = messages.map(message => message.id);
-                    if (messageGroup.parentMessageId) {
+                    if (messageGroup.previousMessageId) {
                         // 削除対象のメッセージグループに親メッセージが指定されていたら、
                         // 後続のメッセージグループの親メッセージを付け替えておく
                         await transactionalEntityManager.createQueryBuilder()
                             .update(MessageGroupEntity)
-                            .set({ parentMessageId: () => ':newParentMessageId' })
-                            .where('parentMessageId IN (:...messageIds)', { messageIds })
-                            .setParameter('newParentMessageId', messageGroup.parentMessageId)
+                            .set({ previousMessageId: () => ':newpreviousMessageId' })
+                            .where('previousMessageId IN (:...messageIds)', { messageIds })
+                            .setParameter('newpreviousMessageId', messageGroup.previousMessageId)
                             .execute();
                     } else { }
 

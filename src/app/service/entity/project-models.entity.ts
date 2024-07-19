@@ -148,7 +148,7 @@ export class MessageGroupEntity extends MyBaseEntity {
     lastUpdate!: Date;
 
     @Column({ nullable: true })
-    parentMessageId?: string; // 先行するメッセージのID.メッセージグループIDではないことに注意。グループIDで紐づけるとグループ内のどのメッセージに紐づくか分からなくなってしまうので。
+    previousMessageId?: string; // 先行するメッセージのID.メッセージグループIDではないことに注意。グループIDで紐づけるとグループ内のどのメッセージに紐づくか分からなくなってしまうので。
 
     @Column({ nullable: false })
     role!: string;

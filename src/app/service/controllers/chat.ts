@@ -20,7 +20,7 @@ const proxyObj: { [key: string]: string | undefined } = {
 };
 if (proxyObj.httpsProxy || proxyObj.httpProxy) {
     const httpsAgent = new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || '');
-    axios.defaults.httpsAgent = httpsAgent;
+    // axios.defaults.httpsAgent = httpsAgent;
 } else { }
 
 import { countChars, GenerateContentRequestForCache, mapForGemini } from '../../common/my-vertexai.js';

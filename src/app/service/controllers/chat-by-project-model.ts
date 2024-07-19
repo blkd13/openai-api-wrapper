@@ -6,7 +6,7 @@ import axios from 'axios';
 import { OpenAIApiWrapper, my_vertexai, normalizeMessage, vertex_ai } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
-import { ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionContentPartText, ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam } from "openai/resources/index.js";
+import { ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionContentPartText, ChatCompletionCreateParams, ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam } from "openai/resources/index.js";
 import { ds } from '../db.js';
 import { GenerateContentRequest, HarmBlockThreshold, HarmCategory } from '@google-cloud/vertexai';
 
@@ -24,12 +24,13 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
     axios.defaults.httpsAgent = httpsAgent;
 } else { }
 
-import { countChars, GenerateContentRequestForCache, mapForGemini } from '../../common/my-vertexai.js';
+import { countChars, GenerateContentRequestForCache, mapForGemini, TokenCharCount, CachedContent } from '../../common/my-vertexai.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamMemberEntity, ThreadEntity } from '../entity/project-models.entity.js';
 import { ContentPartType, MessageGroupType, TeamMemberRoleType, ThreadStatus } from '../models/values.js';
 import { FileBodyEntity, FileEntity } from '../entity/file-models.entity.js';
 import { In, Not } from 'typeorm';
 import { clients } from './chat.js';
+import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
 
 
 async function buildDataUrlMap(contentPartList: (ContentPartEntity | { type: 'text', text: string } | { type: 'file', text: string, fileId: string })[]): Promise<Record<string, { file: FileEntity, fileBody: FileBodyEntity, base64: string }>> {
@@ -77,7 +78,12 @@ async function buildDataUrlMap(contentPartList: (ContentPartEntity | { type: 'te
  * @param messageId 
  * @returns 
  */
-async function buildArgs(userId: string, messageId: string): Promise<{ args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, }> {
+async function buildArgs(userId: string, messageId: string): Promise<{
+    project: ProjectEntity,
+    thread: ThreadEntity,
+    messageSetList: { messageGroup: MessageGroupEntity, message: MessageEntity }[],
+    inDto: { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, }
+}> {
     // メッセージの存在確認
     const message = await ds.getRepository(MessageEntity).findOneOrFail({
         where: { id: messageId }
@@ -131,13 +137,24 @@ async function buildArgs(userId: string, messageId: string): Promise<{ args: Cha
 
     // トリガーを引かれたメッセージIDから一番先頭まで遡ると関係するメッセージだけの一直線のリストが作れる。
     let lastMessage = messageMap[messageId];
-    const messageSetList = [] as { messageGroup: MessageGroupEntity, message: MessageEntity }[];
+    let messageSetList = [] as { messageGroup: MessageGroupEntity, message: MessageEntity }[];
     while (lastMessage) {
         const lastMessageGroup = messageGroupMap[lastMessage.messageGroupId];
         messageSetList.push({ messageGroup: lastMessageGroup, message: lastMessage });
-        lastMessage = messageMap[lastMessageGroup.parentMessageId || ''];
+        lastMessage = messageMap[lastMessageGroup.previousMessageId || ''];
     }
     messageSetList.reverse();
+
+    const inDto = JSON.parse(thread.inDtoJson) as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
+
+    // contextCacheが効いている場合はキャッシュ文のメッセージを外す。
+    if (inDto.args && (inDto.args as any).cachedContent) {
+        const cache = (inDto.args as any).cachedContent as CachedContent;
+        if (new Date(cache.expireTime) > new Date()) {
+            // live キャッシュが有効なのでキャッシュ済みメッセージを排除する。
+            messageSetList = messageSetList.filter(obj => !obj.message.cacheId);
+        } else { /* Cache is expired */ }
+    } else { /* thread is not initialized */ }
 
     // 対象メッセージID全部についてコンテンツを取得
     const messageIdList = messageSetList.map(messageSet => messageSet.message.id);
@@ -161,7 +178,6 @@ async function buildArgs(userId: string, messageId: string): Promise<{ args: Cha
     Object.keys(contentPartMap).forEach(key => contentPartMap[key].sort((a, b) => b.seq - a.seq));
 
     // argsを組み立てる
-    const inDto = JSON.parse(thread.inDtoJson) as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
     inDto.args.messages = messageSetList.map(messageSet => ({
         role: messageSet.messageGroup.role,
         content: contentPartMap[messageSet.message.id].map(content => {
@@ -178,7 +194,7 @@ async function buildArgs(userId: string, messageId: string): Promise<{ args: Cha
             }
         }),
     })) as ChatCompletionMessageParam[];
-    return inDto;
+    return { project, thread, messageSetList, inDto };
 }
 
 /**
@@ -194,22 +210,7 @@ export const chatCompletionByProjectModel = [
         const { connectionId, threadId, messageId } = req.query as { connectionId: string, threadId: string, messageId: string };
         const clientId = `${req.info.user.id}-${connectionId}` as string;
         try {
-            // メッセージの存在確認
-            const message = await ds.getRepository(MessageEntity).findOneOrFail({
-                where: { id: messageId }
-            });
-
-            // メッセージグループの存在確認
-            const messageGroup = await ds.getRepository(MessageGroupEntity).findOneOrFail({
-                where: { id: message.messageGroupId }
-            });
-
-            // スレッドの存在確認
-            const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
-                where: { id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
-            });
-
-            const inDto = await buildArgs(req.info.user.id, messageId);
+            const { thread, inDto } = await buildArgs(req.info.user.id, messageId);
             const result = await ds.transaction(async transactionalEntityManager => {
                 let text = '';
                 const label = req.body.options?.idempotencyKey || `chat-${clientId}-${threadId}-${messageId}`;
@@ -219,7 +220,7 @@ export const chatCompletionByProjectModel = [
                 } else if (inDto.args.model.startsWith('claude-')) {
                     aiApi.wrapperOptions.provider = 'anthropic_vertexai';
                 }
-                // 難しくなってきたのであきらめてPromise×２に分岐する。
+                // 難しくなってきたのでObservable系だけで処理するのを諦めてPromise×２に分岐する。
                 await Promise.all([
                     new Promise<string>((resolve, reject) => {
                         aiApi.chatCompletionObservableStream(
@@ -258,7 +259,7 @@ export const chatCompletionByProjectModel = [
                             newMessageGroup.type = MessageGroupType.Single;
                             newMessageGroup.role = 'assistant';
                             newMessageGroup.label = '';
-                            newMessageGroup.parentMessageId = messageId;
+                            newMessageGroup.previousMessageId = messageId;
                             newMessageGroup.createdBy = req.info.user.id;
                             newMessageGroup.updatedBy = req.info.user.id;
                             const savedMessageGroup = await transactionalEntityManager.save(MessageGroupEntity, newMessageGroup);
@@ -287,9 +288,10 @@ export const chatCompletionByProjectModel = [
                             // 強制的にコミットを実行
                             await transactionalEntityManager.queryRunner!.commitTransaction();
 
-                            // 新しいトランザクションを開始（エラーハンドリングのため）
+                            // 新しいトランザクションを開始。メッセー全て処理後に更新するため。
                             await transactionalEntityManager.queryRunner!.startTransaction();
 
+                            // メッセージのガラだけ返す。
                             res.end(JSON.stringify(resObj));
                             resolve(resObj);
                         } catch (error) {
@@ -317,12 +319,14 @@ export const chatCompletionByProjectModel = [
 export interface ChatInputArea {
     role: 'user' | 'system' | 'assistant';
     content: ChatContent[];
-    parentMessageId: string;
+    previousMessageId: string;
 }
 export type ChatContent = ({ type: 'text', text: string } | { type: 'file', text: string, fileId: string });
 
 /**
  * [認証不要] トークンカウント
+ * トークンカウントは呼び出し回数が多いので、
+ * DB未保存分のメッセージを未保存のまま処理するようにひと手間かける。
  */
 export const geminiCountTokensByProjectModel = [
     query('messageId').optional().isUUID(),
@@ -335,12 +339,21 @@ export const geminiCountTokensByProjectModel = [
         const req = _req as UserRequest;
         const { messageId } = req.query as { messageId: string };
         try {
+            // カウントしたいだけだからパラメータは適当でOK。
+            const args = { messages: [], model: 'gemini-1.5-flash', temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, } as ChatCompletionCreateParamsStreaming;
+
+            // メッセージIDが指定されていたらまずそれらを読み込む
+            if (messageId) {
+                const { inDto } = await buildArgs(req.info.user.id, messageId);
+                // 反映するのはメッセージだけでよい。
+                args.messages.push(...inDto.args.messages);
+            } else { }
+
+            // DB未登録のメッセージ部分の組み立てをする。
             const messageList = req.body as { role: 'user', content: ContentPartEntity[] }[];
             // コンテンツIDリストからDataURLのマップを作成しておく。
             const dataUrlMap = await buildDataUrlMap(messageList.map(message => message.content).reduce((prev, curr) => { curr.forEach(obj => prev.push(obj)); return prev; }, [] as ContentPartEntity[]));
-            // カウントしたいだけだからパラメータは適当でOK。
-            const args = { messages: [], model: 'gemini-1.5-flash', temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, } as ChatCompletionCreateParamsStreaming;
-            args.messages = messageList.map(message => {
+            args.messages.push(...messageList.map(message => {
                 return {
                     role: message.role, content: message.content.map(content => {
                         if (content.type === 'text') {
@@ -355,15 +368,13 @@ export const geminiCountTokensByProjectModel = [
                         }
                     })
                 };
-            }) as any; // TODO 無理矢理なので後で型を直す。
-            if (messageId) {
-                const inDto = await buildArgs(req.info.user.id, messageId);
-                inDto.args.messages.forEach(message => args.messages.push(message));
-            } else { }
+            }) as any); // TODO 無理矢理なので後で型を直す。
 
+            // console.dir(args, { depth: null });
             normalizeMessage(args, false).subscribe({
                 next: next => {
                     const args = next.args;
+                    // console.dir(args, { depth: null });
                     const req: GenerateContentRequest = mapForGemini(args);
                     const countCharsObj = countChars(args);
                     // console.log(countCharsObj);
@@ -373,12 +384,14 @@ export const geminiCountTokensByProjectModel = [
                         safetySettings: [],
                     });
                     generativeModel.countTokens(req).then(tokenObject => {
+                        // console.log('====================');
+                        // console.dir(req, { depth: null });
+                        // console.log('--------------------');
+                        // console.dir(tokenObject, { depth: null });
+                        // console.log('||||||||||||||||||||');
                         res.end(JSON.stringify(Object.assign(tokenObject, countCharsObj)));
                     });
                 },
-                // complete: () => {
-                //     console.log('complete');
-                // },
             });
         } catch (error) {
             res.status(503).end(errorFormat(error));
@@ -390,9 +403,15 @@ const CONTEXT_CACHE_API_ENDPOINT = `https://${GCP_CONTEXT_CACHE_LOCATION}-aiplat
 
 function errorFormat(error: any): string {
     console.error(error);
+    // console.error(Object.keys(error));
     delete error['config'];
     delete error['stack'];
-    return JSON.stringify(error);
+    if (error && error.response && error.response.data && error.response.data.error) {
+        console.log(error.response.data.error);
+        return JSON.stringify(error.response.data.error);
+    } else {
+        return JSON.stringify(error);
+    }
 }
 
 /**
@@ -408,74 +427,106 @@ export const geminiCreateContextCacheByProjectModel = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
+        const userId = req.info.user.id as string;
         const { messageId, model } = req.query as { messageId: string, model: string };
         try {
-            const messageList = req.body as { role: 'user', content: ContentPartEntity[] }[];
-            // コンテンツIDリストからDataURLのマップを作成しておく。
-            const dataUrlMap = await buildDataUrlMap(messageList.map(message => message.content).reduce((prev, curr) => { curr.forEach(obj => prev.push(obj)); return prev; }, [] as ContentPartEntity[]));
-            // カウントしたいだけだからパラメータは適当でOK。
-            const args = { messages: [], model: model, temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, } as ChatCompletionCreateParamsStreaming;
-            args.messages = messageList.map(message => {
-                return {
-                    role: message.role, content: message.content.map(content => {
-                        if (content.type === 'text') {
-                            return { type: 'text', text: content.text };
-                        } else {
-                            return {
-                                type: 'image_url', image_url: {
-                                    url: dataUrlMap[content.fileId || ''].base64,
-                                    label: dataUrlMap[content.fileId || ''].file.fileName,
-                                }
-                            };
-                        }
-                    })
-                };
-            }) as any; // TODO 無理矢理なので後で型を直す。
-            if (messageId) {
-                const inDto = await buildArgs(req.info.user.id, messageId);
-                inDto.args.messages.forEach(message => args.messages.push(message));
-            } else { }
-
+            const { thread, messageSetList, inDto } = await buildArgs(req.info.user.id, messageId);
             const projectId: string = GCP_PROJECT_ID || 'dummy';
             // const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
+            // https://us-central1-aiplatform.googleapis.com/v1beta1/projects/gcp-cloud-shosys-ai-002/locations/us-central1/cachedContents
             const url = `${CONTEXT_CACHE_API_ENDPOINT}/projects/${projectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`;
-            normalizeMessage(args, false).subscribe({
-                next: next => {
-                    const args = next.args;
-                    const req: GenerateContentRequest = mapForGemini(args);
+            normalizeMessage(inDto.args, false).subscribe({
+                next: async next => {
+                    try {
+                        const args = next.args;
+                        const req: GenerateContentRequest = mapForGemini(args);
 
-                    // モデルの説明文を書いておく？？
-                    // req.contents.push({ role: 'model', parts: [{ text: 'これはキャッシュ機能のサンプルです。' }] });
+                        // モデルの説明文を書いておく？？
+                        // req.contents.push({ role: 'model', parts: [{ text: 'これはキャッシュ機能のサンプルです。' }] });
 
-                    // // システムプロンプトを先頭に戻しておく
-                    // if (req.systemInstruction && typeof req.systemInstruction !== 'string') {
-                    //     req.contents.unshift(req.systemInstruction);
-                    // } else { }
+                        // // システムプロンプトを先頭に戻しておく
+                        // if (req.systemInstruction && typeof req.systemInstruction !== 'string') {
+                        //     req.contents.unshift(req.systemInstruction);
+                        // } else { }
 
-                    // リクエストボディ
-                    const requestBody = {
-                        model: `projects/${projectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/publishers/google/models/${model}`,
-                        contents: req.contents,
-                    };
-                    const reqCache: GenerateContentRequestForCache = req as GenerateContentRequestForCache;
-                    if (reqCache.expire_time || reqCache.ttl) {
-                        // 期限設定されていれば何もしない。
-                    } else {
-                        // 期限設定されていなければデフォルト15分を設定する。
-                        reqCache.expire_time = new Date(new Date().getTime() + 15 * 60 * 1000).toISOString();
-                    }
-                    // fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
+                        const countCharsObj = countChars(args);
+                        const generativeModel = vertex_ai.preview.getGenerativeModel({
+                            model: 'gemini-1.5-flash',
+                            safetySettings: [],
+                        });
+                        const countObj: TokenCharCount = await generativeModel.countTokens(req).then(tokenObject => Object.assign(tokenObject, countCharsObj));
 
-                    // アクセストークンを取得してリクエスト
-                    my_vertexai.getAuthorizedHeaders().then(headers =>
-                        axios.post(url, requestBody, headers)
-                    ).then(response => {
-                        res.end(JSON.stringify(response.data));
-                        // console.log(response.headers);
-                        // console.log(response.data);
-                    }).catch(error => {
+                        // リクエストボディ
+                        const requestBody = {
+                            model: `projects/${projectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/publishers/google/models/${model}`,
+                            contents: req.contents,
+                        };
+                        const reqCache: GenerateContentRequestForCache = req as GenerateContentRequestForCache;
+                        if (reqCache.expire_time || reqCache.ttl) {
+                            // 期限設定されていれば何もしない。
+                        } else {
+                            // 期限設定されていなければデフォルト15分を設定する。
+                            reqCache.expire_time = new Date(new Date().getTime() + 15 * 60 * 1000).toISOString();
+                        }
+                        // fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
+                        let savedCachedContent: VertexCachedContentEntity | undefined;
+                        savedCachedContent = undefined;
+                        await my_vertexai.getAuthorizedHeaders().then(async headers =>
+                            axios.post(url, requestBody, headers)
+                        ).then(async response => {
+                            const cache = response.data as CachedContent;
+                            // console.log(response.headers);
+                            // console.log(response.data);
+                            const result = await ds.transaction(async transactionalEntityManager => {
+                                const entity = new VertexCachedContentEntity();
+                                // 独自定義
+                                entity.modelAlias = model;
+                                entity.location = GCP_CONTEXT_CACHE_LOCATION || '';
+                                entity.projectId = thread.projectId;
+                                entity.title = thread.title;
+
+                                // コンテンツキャッシュの応答
+                                entity.name = cache.name;
+                                entity.model = cache.model;
+                                entity.createTime = new Date(cache.createTime);
+                                entity.expireTime = new Date(cache.expireTime);
+                                entity.updateTime = new Date(cache.updateTime);
+
+                                // トークンカウント
+                                entity.totalBillableCharacters = countObj.totalBillableCharacters;
+                                entity.totalTokens = countObj.totalTokens;
+
+                                // 独自トークンカウント
+                                entity.audio = countObj.audio;
+                                entity.image = countObj.image;
+                                entity.text = countObj.text;
+                                entity.video = countObj.video;
+
+                                // // メッセージ結果（ここは取れないのでずっと0になる）
+                                // entity.candidatesTokenCount = 0;
+                                // entity.totalTokenCount = 0;
+                                // entity.promptTokenCount = 0;
+
+                                // 使用回数
+                                entity.usage = 0;
+
+                                entity.createdBy = userId;
+                                entity.updatedBy = userId;
+
+                                savedCachedContent = await transactionalEntityManager.save(VertexCachedContentEntity, entity);
+
+                                await Promise.all(messageSetList.map(messageSet => {
+                                    if (savedCachedContent) {
+                                        messageSet.message.cacheId = savedCachedContent.id;
+                                    }
+                                    return transactionalEntityManager.save(MessageEntity, messageSet.message);
+                                }));
+                            });
+                        });
+                        res.status(200).json(savedCachedContent);
+                    } catch (error) {
                         res.status(503).end(errorFormat(error));
-                    });
+                    }
                 },
             });
         } catch (error) {
@@ -487,15 +538,27 @@ export const geminiCreateContextCacheByProjectModel = [
 /**
  * [ユーザー認証] コンテキストキャッシュ時間変更
  */
-export const geminiUpdateContextCache = [
+export const geminiUpdateContextCacheByProjectModel = [
+    query('threadId').notEmpty(),
     body('expire_time').notEmpty(),
-    body('cache_name').notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
-        const inDto = _req.body as { expire_time: string, cache_name: string };
+        const req = _req as UserRequest;
+        const userId = req.info.user.id as string;
+        const { threadId } = req.query as { threadId: string };
+        const { expire_time } = _req.body as { expire_time: string };
         try {
+
+            // メッセージの存在確認
+            const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
+                where: { id: threadId }
+            });
+
+            const inDto = JSON.parse(thread.inDtoJson);
+            const cachedContent: VertexCachedContentEntity = inDto.args.cachedContent;
+
             my_vertexai.getAuthorizedHeaders().then(headers =>
-                axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${inDto.cache_name}`, { expire_time: inDto.expire_time }, headers)
+                axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${cachedContent.id}`, { expire_time }, headers)
             ).then(response => {
                 res.end(JSON.stringify(response.data));
             }).catch(error => {
@@ -510,15 +573,35 @@ export const geminiUpdateContextCache = [
 /**
  * [ユーザー認証] コンテキストキャッシュ削除
  */
-export const geminiDeleteContextCache = [
-    body('cache_name').notEmpty(),
+export const geminiDeleteContextCacheByProjectModel = [
+    query('threadId').notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
-        const inDto = _req.body as { cache_name: string };
+        const { threadId } = _req.query as { threadId: string };
         try {
-            my_vertexai.getAuthorizedHeaders().then(headers =>
-                axios.delete(`${CONTEXT_CACHE_API_ENDPOINT}/${inDto.cache_name}`, headers)
-            ).then(response => {
+            // メッセージの存在確認
+            const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
+                where: { id: threadId }
+            });
+            const inDto = JSON.parse(thread.inDtoJson);
+            const cachedContent: VertexCachedContentEntity = inDto.args.cachedContent;
+
+            const result = await ds.transaction(async transactionalEntityManager => {
+                // cachedContentを消して更新
+                delete inDto.args.cachedContent;
+                thread.inDtoJson = JSON.stringify(inDto);
+                const savedThread = await transactionalEntityManager.save(ThreadEntity, thread);
+
+                await transactionalEntityManager.createQueryBuilder()
+                    .update(MessageEntity)
+                    .set({ cacheId: () => "''" })
+                    .where('cacheId = :cacheId', { cacheId: cachedContent.id })
+                    .execute();
+            });
+            // TODO googleに投げる前にDBコミットすることにした。こうすることで通信エラーを無視できるけどキャッシュが残っちゃったときどうするんだろう。。
+            await my_vertexai.getAuthorizedHeaders().then(headers =>
+                axios.delete(`${CONTEXT_CACHE_API_ENDPOINT}/${cachedContent.name}`, headers)
+            ).then(async response => {
                 res.end(JSON.stringify(response.data));
             }).catch(error => {
                 res.status(503).end(errorFormat(error));
