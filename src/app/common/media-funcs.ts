@@ -1,7 +1,7 @@
 import { Observable } from 'rxjs';
 import ffmpeg, { FfprobeData } from 'fluent-ffmpeg';
-import * as crypto from 'crypto';
 import fs from 'fs';
+import * as crypto from 'crypto';
 import * as path from 'path';
 
 // 取得したい動画ファイルのパスを指定
@@ -107,6 +107,7 @@ export async function detectMimeType(filePath: string, fileName: string): Promis
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { fileURLToPath } from 'url';
 
 const execAsync = promisify(exec);
 
@@ -241,3 +242,18 @@ export async function convertAndOptimizeImage(inputFile: string, outputFile: str
         throw error;
     }
 }
+
+async function main() {
+    console.log(process.argv);
+    minimizeAudioForMinutes(process.argv[2], process.argv[2] + '.norm');
+}
+
+/**
+ * このファイルが直接実行された場合のコード。
+ */
+if (fileURLToPath(import.meta.url) === process.argv[1]) {
+    main();
+} else {
+    // main実行じゃなかったら何もしない
+}
+

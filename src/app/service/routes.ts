@@ -28,6 +28,7 @@ import {
     upsertMessageWithContents,
     getMessageGroupDetails,
     getMessageContentParts,
+    deleteContentPart,
 } from './controllers/project-models.js';
 
 // import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
@@ -109,6 +110,7 @@ authUserRouter.get('/message-group/:messageGroupId', getMessageGroupDetails);
 authUserRouter.delete('/message-group/:messageGroupId', deleteMessageGroup);
 authUserRouter.delete('/message/:messageId', deleteMessage);
 authUserRouter.get('/message/:messageId/content-parts', getMessageContentParts);
+authUserRouter.delete('/content-part/:contentPartId', deleteContentPart);
 
 authUserRouter.post('/upload', uploadFiles); // ファイル操作関連
 authUserRouter.get('/:id/download', downloadFile); // ファイルダウンロード

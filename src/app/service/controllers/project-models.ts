@@ -1707,3 +1707,77 @@ export const deleteMessage = [
         }
     }
 ];
+
+/**
+ * [user認証] メッセージ削除
+ */
+export const deleteContentPart = [
+    param('contentPartId').isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { contentPartId } = req.params;
+
+        try {
+            await ds.transaction(async transactionalEntityManager => {
+                // コンテンツの取得
+                const contentPart = await transactionalEntityManager.findOneOrFail(ContentPartEntity, {
+                    where: { id: contentPartId },
+                });
+
+                // メッセージの取得
+                const message = await transactionalEntityManager.findOneOrFail(MessageEntity, {
+                    where: { id: contentPart.messageId },
+                });
+
+                // メッセージグループの取得
+                const messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
+                    where: { id: message.messageGroupId }
+                });
+
+                // スレッドの取得
+                const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
+                    where: { id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+                });
+
+                // プロジェクトの取得
+                const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
+                    where: { id: thread.projectId }
+                });
+
+                // ユーザーの権限チェック
+                const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
+                    where: {
+                        teamId: project.teamId,
+                        userId: req.info.user.id
+                    }
+                });
+
+                if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                    throw new Error('このメッセージを削除する権限がありません');
+                }
+
+                // メッセージの論理削除
+                // message.status = 'deleted';  // 適切なステータス名に置き換えてください
+
+                // コンテンツパーツの論理削除
+                await transactionalEntityManager.delete(ContentPartEntity,
+                    { id: contentPartId },
+                    // { status: 'deleted', updatedBy: req.info.user.id }
+                );
+
+                // コンテンツ本体（files）は消さない。
+            });
+            res.status(200).json({ message: 'メッセージが正常に削除されました' });
+        } catch (error) {
+            console.error('Error deleting message:', error);
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: '指定されたメッセージ、スレッド、またはプロジェクトが見つかりません' });
+            } else if ((error as any).message === 'このメッセージを削除する権限がありません') {
+                res.status(403).json({ message: (error as any).message });
+            } else {
+                res.status(500).json({ message: 'メッセージの削除中にエラーが発生しました' });
+            }
+        }
+    }
+];

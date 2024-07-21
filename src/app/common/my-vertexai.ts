@@ -26,7 +26,7 @@ export interface GenerateContentRequestExtended extends GenerateContentRequest {
     region: string;
     cached_content?: string;
 }
-export interface GenerateContentRequestForCache extends GenerateContentRequest {
+export interface GenerateContentRequestForCache {
     ttl?: { seconds: number, nanos: number };
     expire_time?: string; // "expire_time":"2024-06-30T09:00:00.000000Z"
 }
@@ -42,7 +42,8 @@ export class MyVertexAiClient {
             return Promise.resolve(this.accessToken);
         } else {
             try {
-                this.expire = Date.now() + 60 * 55 * 1000; // 1時間なので55分でリフレッシュする。
+                console.log(`TokenRefresh`);
+                this.expire = Date.now() + 55 * 60 * 1000; // トークン有効時間が1時間なので55分でリフレッシュする。
                 this.accessToken = execSync('gcloud auth print-access-token').toString().trim();
                 return this.accessToken;
             } catch (error) {

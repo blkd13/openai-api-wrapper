@@ -404,8 +404,8 @@ const CONTEXT_CACHE_API_ENDPOINT = `https://${GCP_CONTEXT_CACHE_LOCATION}-aiplat
 function errorFormat(error: any): string {
     console.error(error);
     // console.error(Object.keys(error));
-    delete error['config'];
-    delete error['stack'];
+    error && 'config' in error && delete error['config'];
+    error && 'stack' in error && delete error['stack'];
     if (error && error.response && error.response.data && error.response.data.error) {
         console.log(error.response.data.error);
         return JSON.stringify(error.response.data.error);
@@ -420,15 +420,16 @@ function errorFormat(error: any): string {
 export const geminiCreateContextCacheByProjectModel = [
     query('messageId').optional().isUUID(),
     query('model').trim().notEmpty(),
-    body('*.content').isArray(),
-    body('*.content.*.type').isIn(Object.values(ContentPartType)),
-    body('*.content.*.text').isString(),
-    body('*.content.*.fileId').optional().isUUID(),
+    body('ttl').optional({ nullable: true }).isObject(), // ttl が null でもオブジェクトでも良い
+    body('ttl.seconds').if(body('ttl').exists()).isFloat(), // ttl が存在する場合のみ seconds をバリデーション
+    body('ttl.nanos').if(body('ttl').exists()).isFloat(), // ttl が存在する場合のみ nanos をバリデーション
+    body('expire_time').optional().isDate(), // ISODateString
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const userId = req.info.user.id as string;
         const { messageId, model } = req.query as { messageId: string, model: string };
+        const { ttl, expire_time } = req.body as GenerateContentRequestForCache;
         try {
             const { thread, messageSetList, inDto } = await buildArgs(req.info.user.id, messageId);
             const projectId: string = GCP_PROJECT_ID || 'dummy';
@@ -460,14 +461,9 @@ export const geminiCreateContextCacheByProjectModel = [
                         const requestBody = {
                             model: `projects/${projectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/publishers/google/models/${model}`,
                             contents: req.contents,
+                            ttl, expire_time // キャッシュ保持期間の設定
                         };
-                        const reqCache: GenerateContentRequestForCache = req as GenerateContentRequestForCache;
-                        if (reqCache.expire_time || reqCache.ttl) {
-                            // 期限設定されていれば何もしない。
-                        } else {
-                            // 期限設定されていなければデフォルト15分を設定する。
-                            reqCache.expire_time = new Date(new Date().getTime() + 15 * 60 * 1000).toISOString();
-                        }
+
                         // fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
                         let savedCachedContent: VertexCachedContentEntity | undefined;
                         savedCachedContent = undefined;
@@ -540,13 +536,17 @@ export const geminiCreateContextCacheByProjectModel = [
  */
 export const geminiUpdateContextCacheByProjectModel = [
     query('threadId').notEmpty(),
-    body('expire_time').notEmpty(),
+    body('ttl').optional({ nullable: true }).isObject(), // ttl が null でもオブジェクトでも良い
+    body('ttl.seconds').if(body('ttl').exists()).isFloat(), // ttl が存在する場合のみ seconds をバリデーション
+    body('ttl.nanos').if(body('ttl').exists()).isFloat(), // ttl が存在する場合のみ nanos をバリデーション
+    body('expire_time').optional().isDate(), // ISODateString
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const userId = req.info.user.id as string;
         const { threadId } = req.query as { threadId: string };
-        const { expire_time } = _req.body as { expire_time: string };
+        const { ttl } = _req.body as { ttl: { seconds: number, nanos: number } };
+        // const { expire_time } = _req.body as { expire_time: string };
         try {
 
             // メッセージの存在確認
@@ -556,11 +556,35 @@ export const geminiUpdateContextCacheByProjectModel = [
 
             const inDto = JSON.parse(thread.inDtoJson);
             const cachedContent: VertexCachedContentEntity = inDto.args.cachedContent;
+            const cacheName = cachedContent.name;
 
-            my_vertexai.getAuthorizedHeaders().then(headers =>
-                axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${cachedContent.id}`, { expire_time }, headers)
-            ).then(response => {
-                res.end(JSON.stringify(response.data));
+            // キャッシュの存在確認
+            const cacheEntity = await ds.getRepository(VertexCachedContentEntity).findOneOrFail({
+                where: { name: cacheName }
+            });
+
+            let savedCachedContent: VertexCachedContentEntity | undefined;
+            savedCachedContent = undefined; my_vertexai.getAuthorizedHeaders().then(headers =>
+                axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${cachedContent.name}`, { ttl }, headers)
+            ).then(async response => {
+                const cache = response.data as CachedContent;
+                // console.log(response.headers);
+                // console.log(response.data);
+                const result = await ds.transaction(async transactionalEntityManager => {
+                    // 独自定義
+                    // コンテンツキャッシュの応答
+                    cacheEntity.name = cache.name;
+                    cacheEntity.model = cache.model;
+                    cacheEntity.createTime = new Date(cache.createTime);
+                    cacheEntity.expireTime = new Date(cache.expireTime);
+                    cacheEntity.updateTime = new Date(cache.updateTime);
+
+                    cacheEntity.updatedBy = userId;
+
+                    savedCachedContent = await transactionalEntityManager.save(VertexCachedContentEntity, cacheEntity);
+                });
+                // 
+                res.end(JSON.stringify(savedCachedContent));
             }).catch(error => {
                 res.status(503).end(errorFormat(error));
             });

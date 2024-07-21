@@ -19,6 +19,7 @@ export class VertexCachedContentEntity extends MyBaseEntity {
     description?: string;
 
     @Column()
+    @Index()
     name!: string;
     @Column()
     model!: string;
@@ -41,13 +42,13 @@ export class VertexCachedContentEntity extends MyBaseEntity {
     @Column()
     totalTokens!: number;
 
-    @Column()
+    @Column({ type: 'numeric' })
     audio!: number;
-    @Column()
+    @Column({ type: 'numeric' })
     image!: number;
     @Column()
     text!: number;
-    @Column()
+    @Column({ type: 'numeric' })
     video!: number;
 
     @Column()
