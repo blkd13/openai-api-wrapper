@@ -1,7 +1,7 @@
 
 export enum PredictHistoryStatus {
     Start = 'start',
-    Queue = 'queue',
+    Enque = 'enque',
     Fine = 'fine',
     Error = 'error',
 }

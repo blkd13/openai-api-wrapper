@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { changePassword, deleteUser, getUser, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
+import { changePassword, deleteUser, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateUserToken } from './middleware/authenticate.js';
 import { chatCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
@@ -50,6 +50,7 @@ authInviteRouter.use(authenticateInviteToken);
 
 // 個別コントローラーの設定
 authNoneRouter.post('/login', userLogin);
+authNoneRouter.post('/guest', guestLogin);
 authNoneRouter.post('/onetime', onetimeLogin);
 authNoneRouter.post('/request-for-password-reset', requestForPasswordReset);
 authInviteRouter.post('/password-reset', passwordReset);

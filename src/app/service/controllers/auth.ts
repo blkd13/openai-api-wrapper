@@ -1,3 +1,4 @@
+import useragent from 'express-useragent';
 import { body, param } from 'express-validator';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
@@ -6,7 +7,7 @@ import nodemailer from 'nodemailer';
 import { Request, Response } from 'express';
 
 import { InviteRequest, UserRequest } from '../models/info.js';
-import { UserEntity, InviteEntity } from '../entity/auth.entity.js';
+import { UserEntity, InviteEntity, LoginHistory } from '../entity/auth.entity.js';
 import { InviteToken, JWT_SECRET, UserToken } from '../middleware/authenticate.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { MoreThan } from 'typeorm';
@@ -32,14 +33,79 @@ export const userLogin = [
                 res.status(401).json({ message: '認証に失敗しました。' });
                 return;
             }
+
+            const deviceInfo = JSON.stringify({
+                browser: req.useragent?.browser,
+                version: req.useragent?.version,
+                os: req.useragent?.os,
+                platform: req.useragent?.platform,
+                isMobile: req.useragent?.isMobile,
+                isTablet: req.useragent?.isTablet,
+                isDesktop: req.useragent?.isDesktop,
+            });
+
+            const loginHistory = new LoginHistory();
+            loginHistory.userId = user.id; // ユーザー認証後に設定
+            loginHistory.ipAddress = req.headers['x-real-ip'] as string || req.ip || '';
+            loginHistory.deviceInfo = deviceInfo;
+            loginHistory.authGeneration = user.authGeneration;
+            loginHistory.createdBy = user.id;
+            loginHistory.updatedBy = user.id;
+            loginHistory.save(); // ログイン履歴登録の成否は見ずにレスポンスを返す
+
             // JWTの生成
             const userToken: UserToken = { type: 'user', id: user.id, authGeneration: user.authGeneration || 0 };
-            const token = jwt.sign(userToken, JWT_SECRET, { expiresIn: '1y' });
+            const token = jwt.sign(userToken, JWT_SECRET, { expiresIn: '30d' });
             res.json({ token });
             // return { token };
         });
     }
 ];
+
+/**
+ * [認証不要] ゲストログイン
+ * @param req 
+ * @param res 
+ * @returns 
+ */
+export const guestLogin = [
+    validationErrorHandler,
+    (req: Request, res: Response) => {
+        return ds.getRepository(UserEntity).findOne({ where: { email: 'guest@example.com' } }).then((user: UserEntity | null) => {
+            // ゲストログインはパスワード検証無し。その代わりIPアドレス必須。
+            if (user == null) {
+                res.status(401).json({ message: '認証に失敗しました。' });
+                return;
+            }
+            // ゲスト
+            const deviceInfo = JSON.stringify({
+                browser: req.useragent?.browser,
+                version: req.useragent?.version,
+                os: req.useragent?.os,
+                platform: req.useragent?.platform,
+                isMobile: req.useragent?.isMobile,
+                isTablet: req.useragent?.isTablet,
+                isDesktop: req.useragent?.isDesktop,
+            });
+
+            const loginHistory = new LoginHistory();
+            loginHistory.userId = user.id; // ユーザー認証後に設定
+            loginHistory.ipAddress = req.headers['x-real-ip'] as string || req.ip || '';
+            loginHistory.deviceInfo = deviceInfo;
+            loginHistory.authGeneration = user.authGeneration;
+            loginHistory.createdBy = user.id;
+            loginHistory.updatedBy = user.id;
+            loginHistory.save(); // ログイン履歴登録の成否は見ずにレスポンスを返す
+
+            // JWTの生成
+            const userToken: UserToken = { type: 'user', id: user.id, authGeneration: user.authGeneration || 0 };
+            const token = jwt.sign(userToken, JWT_SECRET, { expiresIn: '20m' });
+            res.json({ token });
+            // return { token };
+        });
+    }
+];
+
 
 /**
  * [認証不要] ワンタイムトークンの検証
@@ -103,8 +169,8 @@ export const requestForPasswordReset = [
         inviteEntity.status = 'unused';
         inviteEntity.data = JSON.stringify({ name: req.body.name, email: req.body.email });
         inviteEntity.limit = Date.now() + 1000 * 60 * 5; // 5分以内
-        inviteEntity.createdBy = 'dummy';
-        inviteEntity.updatedBy = 'dummy';
+        inviteEntity.createdBy = req.headers['x-real-ip'] as string || 'dummy';
+        inviteEntity.updatedBy = req.headers['x-real-ip'] as string || 'dummy';
         inviteEntity.save();
 
         // メール送信

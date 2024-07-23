@@ -44,11 +44,11 @@ export class PredictHistoryEntity extends MyBaseEntity {
     @PrimaryGeneratedColumn()
     id!: number;
 
-    @Column({ nullable: true })
-    clientId?: string;
+    @Column()
+    idempotencyKey!: string;
 
-    @Column({ nullable: true })
-    transactionId?: string;
+    @Column()
+    argsHash!: string;
 
     @Column({ nullable: true })
     label?: string;
@@ -56,8 +56,8 @@ export class PredictHistoryEntity extends MyBaseEntity {
     @Column({ nullable: false })
     model!: string;
 
-    @Column({ nullable: false })
-    provider!: string;
+    @Column({ nullable: true })
+    provider?: string;
 
     @Column({ type: 'integer' })
     take!: number;
@@ -68,11 +68,34 @@ export class PredictHistoryEntity extends MyBaseEntity {
     @Column({ type: 'integer' })
     resToken!: number;
 
-    @Column()
+    @Column({ type: 'numeric' })
     cost!: number;
 
     @Column({ nullable: false, type: 'enum', enum: PredictHistoryStatus })
     status!: PredictHistoryStatus;
+}
+@Entity()
+export class PredictHistoryWrapperEntity extends MyBaseEntity {
+    @PrimaryGeneratedColumn()
+    id!: number;
+
+    @Column({ nullable: true })
+    connectionId?: string;
+
+    @Column({ nullable: true })
+    streamId?: string;
+
+    @Column({ nullable: true })
+    messageId?: string;
+
+    @Column({ nullable: true })
+    label?: string;
+
+    @Column({ nullable: false })
+    model!: string;
+
+    @Column({ nullable: false })
+    provider!: string;
 }
 
 @Entity()

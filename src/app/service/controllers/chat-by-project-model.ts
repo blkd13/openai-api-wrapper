@@ -25,8 +25,8 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
 } else { }
 
 import { countChars, GenerateContentRequestForCache, mapForGemini, TokenCharCount, CachedContent } from '../../common/my-vertexai.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamMemberEntity, ThreadEntity } from '../entity/project-models.entity.js';
-import { ContentPartType, MessageGroupType, TeamMemberRoleType, ThreadStatus } from '../models/values.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity } from '../entity/project-models.entity.js';
+import { ContentPartType, MessageGroupType, PredictHistoryStatus, TeamMemberRoleType, ThreadStatus } from '../models/values.js';
 import { FileBodyEntity, FileEntity } from '../entity/file-models.entity.js';
 import { In, Not } from 'typeorm';
 import { clients } from './chat.js';
@@ -202,24 +202,37 @@ async function buildArgs(userId: string, messageId: string): Promise<{
  */
 export const chatCompletionByProjectModel = [
     query('connectionId').trim().notEmpty(),
-    query('threadId').trim().notEmpty(),
+    query('streamId').trim().notEmpty(),
     query('messageId').trim().notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { connectionId, threadId, messageId } = req.query as { connectionId: string, threadId: string, messageId: string };
+        const { connectionId, streamId, messageId } = req.query as { connectionId: string, streamId: string, messageId: string };
+        // connectionIdはクライアントで発番しているので、万が一にも混ざらないようにユーザーIDを付与。
         const clientId = `${req.info.user.id}-${connectionId}` as string;
         try {
             const { thread, inDto } = await buildArgs(req.info.user.id, messageId);
             const result = await ds.transaction(async transactionalEntityManager => {
                 let text = '';
-                const label = req.body.options?.idempotencyKey || `chat-${clientId}-${threadId}-${messageId}`;
+                const label = req.body.options?.idempotencyKey || `chat-${clientId}-${streamId}-${messageId}`;
                 const aiApi = new OpenAIApiWrapper();
                 if (inDto.args.model.startsWith('gemini-')) {
                     aiApi.wrapperOptions.provider = 'vertexai';
                 } else if (inDto.args.model.startsWith('claude-')) {
                     aiApi.wrapperOptions.provider = 'anthropic_vertexai';
                 }
+
+                // TODO コンテンツキャッシュはIDさえ合っていれば誰でも使える状態。権限付けなくていいか悩み中。
+                const cachedContent = (inDto.args as any).cachedContent as VertexCachedContentEntity;
+                if (cachedContent) {
+                    transactionalEntityManager.createQueryBuilder()
+                        .update(VertexCachedContentEntity)
+                        .set({ usage: () => "ussave + 1" }) // カウント回数は登り電文を信用しない。
+                        .where('cacheId = :cacheId', { cacheId: cachedContent.id })
+                        .execute();
+                    // 重要項目じゃないのであえて更新完了を待たない。
+                } else { }
+
                 // 難しくなってきたのでObservable系だけで処理するのを諦めてPromise×２に分岐する。
                 await Promise.all([
                     new Promise<string>((resolve, reject) => {
@@ -229,7 +242,7 @@ export const chatCompletionByProjectModel = [
                             next: next => {
                                 text += next;
                                 const resObj = {
-                                    data: { threadId: req.query.threadId, content: next },
+                                    data: { streamId: req.query.streamId, content: next },
                                     event: 'message',
                                 };
                                 clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
@@ -237,11 +250,11 @@ export const chatCompletionByProjectModel = [
                             error: error => {
                                 console.log(error);
                                 reject();
-                                clients[clientId]?.response.end(`error: ${req.query.threadId} ${error}\n\n`);
+                                clients[clientId]?.response.end(`error: ${req.query.streamId} ${error}\n\n`);
                             },
                             complete: () => {
                                 // 通常モードは素直に終了
-                                clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);
+                                clients[clientId]?.response.write(`data: [DONE] ${req.query.streamId}\n\n`);
                                 resolve(text);
                                 // console.log(text);
                             },
@@ -293,6 +306,19 @@ export const chatCompletionByProjectModel = [
 
                             // メッセージのガラだけ返す。
                             res.end(JSON.stringify(resObj));
+
+                            // レスポンス返した後にゆるりとヒストリーを更新しておく。
+                            const history = new PredictHistoryWrapperEntity();
+                            history.connectionId = connectionId;
+                            history.streamId = streamId;
+                            history.messageId = messageId;
+                            history.label = label;
+                            history.model = inDto.args.model;
+                            history.provider = aiApi.wrapperOptions.provider;
+                            history.createdBy = req.info.user.id;
+                            history.updatedBy = req.info.user.id;
+                            await transactionalEntityManager.save(PredictHistoryEntity, history);
+
                             resolve(resObj);
                         } catch (error) {
                             reject(error);

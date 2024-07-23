@@ -163,7 +163,7 @@ export function countChars(args: ChatCompletionCreateParamsBase): { image: numbe
             } else {
                 curr0.content.reduce((prev1, curr1) => {
                     if (curr1.type === 'text') {
-                        prev1.text += curr1.text.length;
+                        prev1.text += curr1.text.replace(/ /g, '').length; // 空白文字を除いた文字数
                     } else if (curr1.type === 'image_url') {
 
                         const mediaType = curr1.image_url.url.split(/[/:]/g)[1];

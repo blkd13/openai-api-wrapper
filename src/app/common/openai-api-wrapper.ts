@@ -680,6 +680,8 @@ export class OpenAIApiWrapper {
             // 強制的にストリームモードにする。
             args.stream = true;
 
+            const provider = this.wrapperOptions.provider;
+
             // 入力を整形しておく。
             normalizeMessage(args, this.wrapperOptions.allowLocalFiles).subscribe((obj) => {
                 args = obj.args;
@@ -723,7 +725,8 @@ export class OpenAIApiWrapper {
                 class LogObject {
                     constructor(public baseTime: number) { }
                     output(stepName: string, error: any = ''): string {
-                        const take = numForm(Date.now() - this.baseTime, 10);
+                        const _take = Date.now() - this.baseTime;
+                        const take = numForm(_take, 10);
                         this.baseTime = Date.now(); // baseTimeを更新しておく。
                         const prompt_tokens = numForm(tokenCount.prompt_tokens, 6);
                         // 以前は1レスポンス1トークンだったが、今は1レスポンス1トークンではないので、completion_tokensは最後に再計算するようにした。
@@ -738,6 +741,26 @@ export class OpenAIApiWrapper {
                         const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
                         const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} ${attempts} ${take} ${prompt_tokens} ${completion_tokens} ${tokenCount.modelShort} ${costStr} ${label} ${error}`;
                         fss.appendFile(`history.log`, `${logString}\n`, {}, () => { });
+                        try {
+                            // ここでDB更新なんてしたくなかったがどうしても外に出せずやむなく、、
+                            // 影響を局所化するためimport文もここでローカルで打つ。labelでPredictHistoryWrapperと紐づく
+                            Promise.all([import('../service/db.js'), import('../service/entity/project-models.entity.js')]).then(mods => {
+                                const entity = new mods[1].PredictHistoryEntity();
+                                entity.idempotencyKey = reqOptions.idempotencyKey || '';
+                                entity.argsHash = argsHash;
+                                entity.label = label;
+                                entity.provider = provider;
+                                entity.model = args.model;
+                                entity.take = _take;
+                                entity.reqToken = tokenCount.prompt_tokens;
+                                entity.resToken = tokenCount.completion_tokens;
+                                entity.cost = tokenCount.cost;
+                                entity.status = stepName as any;
+                                entity.createdBy = 'batch'; // ここでは利用者不明
+                                entity.updatedBy = 'batch'; // ここでは利用者不明
+                                entity.save();
+                            });
+                        } catch (e) { /** 登録失敗してもなんもしない。所詮ログなので */ console.log(e); }
                         return logString;
                     }
                 }

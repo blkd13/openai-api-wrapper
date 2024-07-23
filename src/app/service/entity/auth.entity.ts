@@ -1,4 +1,4 @@
-import { Column, Entity, Generated, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Generated, PrimaryGeneratedColumn } from 'typeorm';
 import { MyBaseEntity } from './base.js';
 
 // CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -52,4 +52,25 @@ export class InviteEntity extends MyBaseEntity {
 
     @Column({ type: 'bigint' })
     limit!: number;
+}
+
+@Entity("login_history")
+export class LoginHistory extends MyBaseEntity {
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;
+
+    @Column()
+    userId!: string;
+
+    @CreateDateColumn({ type: 'timestamptz' })
+    loginDate!: Date;
+
+    @Column()
+    ipAddress!: string;
+
+    @Column({ nullable: true })
+    deviceInfo!: string;
+
+    @Column({ type: 'integer', default: 0 })
+    authGeneration?: number;
 }
