@@ -25,7 +25,7 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
 } else { }
 
 import { countChars, GenerateContentRequestForCache, mapForGemini, TokenCharCount, CachedContent } from '../../common/my-vertexai.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity } from '../entity/project-models.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity } from '../entity/project-models.entity.js';
 import { ContentPartType, MessageGroupType, PredictHistoryStatus, TeamMemberRoleType, ThreadStatus } from '../models/values.js';
 import { FileBodyEntity, FileEntity } from '../entity/file-models.entity.js';
 import { In, Not } from 'typeorm';
@@ -317,7 +317,7 @@ export const chatCompletionByProjectModel = [
                             history.provider = aiApi.wrapperOptions.provider;
                             history.createdBy = req.info.user.id;
                             history.updatedBy = req.info.user.id;
-                            await transactionalEntityManager.save(PredictHistoryEntity, history);
+                            await transactionalEntityManager.save(PredictHistoryWrapperEntity, history);
 
                             resolve(resObj);
                         } catch (error) {

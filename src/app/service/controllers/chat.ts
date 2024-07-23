@@ -72,10 +72,10 @@ export const initEvent = [
  */
 export const chatCompletion = [
     // 雑に作ってしまった。。
-    // query -> connectionId, threadId
+    // query -> connectionId, streamId
     // body  -> args, options?, taskId?, type?, subType?, topic? ：taskId以降はdiscussionを作成するための情報。discussionを作成しない場合は不要。
     query('connectionId').trim().notEmpty(),
-    query('threadId').trim().notEmpty(),
+    query('streamId').trim().notEmpty(),
     body('args').notEmpty(),
     validationErrorHandler,
     (_req: Request, res: Response) => {
@@ -85,7 +85,7 @@ export const chatCompletion = [
         const inDto = req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
 
         let text = '';
-        const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.threadId}`;
+        const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.streamId}`;
         const aiApi = new OpenAIApiWrapper();
         if (inDto.args.model.startsWith('gemini-')) {
             aiApi.wrapperOptions.provider = 'vertexai';
@@ -98,18 +98,18 @@ export const chatCompletion = [
             next: next => {
                 text += next;
                 const resObj = {
-                    data: { threadId: req.query.threadId, content: next },
+                    data: { streamId: req.query.streamId, content: next },
                     event: 'message',
                 };
                 clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
             },
             error: error => {
                 console.log(error);
-                clients[clientId]?.response.end(`error: ${req.query.threadId} ${error}\n\n`);
+                clients[clientId]?.response.end(`error: ${req.query.streamId} ${error}\n\n`);
             },
             complete: () => {
                 // 通常モードは素直に終了
-                clients[clientId]?.response.write(`data: [DONE] ${req.query.threadId}\n\n`);
+                clients[clientId]?.response.write(`data: [DONE] ${req.query.streamId}\n\n`);
                 // console.log(text);
             },
         });

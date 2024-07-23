@@ -741,26 +741,31 @@ export class OpenAIApiWrapper {
                         const costStr = (tokenCount.completion_tokens > 0 ? ('$' + (Math.ceil(tokenCount.cost * 100) / 100).toFixed(2)) : '').padStart(6, ' ');
                         const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} ${attempts} ${take} ${prompt_tokens} ${completion_tokens} ${tokenCount.modelShort} ${costStr} ${label} ${error}`;
                         fss.appendFile(`history.log`, `${logString}\n`, {}, () => { });
-                        try {
+
+                        setTimeout(() => {
                             // ここでDB更新なんてしたくなかったがどうしても外に出せずやむなく、、
                             // 影響を局所化するためimport文もここでローカルで打つ。labelでPredictHistoryWrapperと紐づく
-                            Promise.all([import('../service/db.js'), import('../service/entity/project-models.entity.js')]).then(mods => {
-                                const entity = new mods[1].PredictHistoryEntity();
-                                entity.idempotencyKey = reqOptions.idempotencyKey || '';
-                                entity.argsHash = argsHash;
-                                entity.label = label;
-                                entity.provider = provider;
-                                entity.model = args.model;
-                                entity.take = _take;
-                                entity.reqToken = tokenCount.prompt_tokens;
-                                entity.resToken = tokenCount.completion_tokens;
-                                entity.cost = tokenCount.cost;
-                                entity.status = stepName as any;
-                                entity.createdBy = 'batch'; // ここでは利用者不明
-                                entity.updatedBy = 'batch'; // ここでは利用者不明
-                                entity.save();
-                            });
-                        } catch (e) { /** 登録失敗してもなんもしない。所詮ログなので */ console.log(e); }
+                            try {
+                                Promise.all([import('../service/db.js'), import('../service/entity/project-models.entity.js')]).then(mods => {
+                                    return mods[0].ds.transaction(runInTransaction => {
+                                        const entity = new mods[1].PredictHistoryEntity();
+                                        entity.idempotencyKey = reqOptions.idempotencyKey || '';
+                                        entity.argsHash = argsHash;
+                                        entity.label = label;
+                                        entity.provider = provider;
+                                        entity.model = args.model;
+                                        entity.take = _take;
+                                        entity.reqToken = tokenCount.prompt_tokens;
+                                        entity.resToken = tokenCount.completion_tokens;
+                                        entity.cost = tokenCount.cost;
+                                        entity.status = stepName as any;
+                                        entity.createdBy = 'batch'; // ここでは利用者不明
+                                        entity.updatedBy = 'batch'; // ここでは利用者不明
+                                        return runInTransaction.save(entity);
+                                    })
+                                });
+                            } catch (e) { /** 登録失敗してもなんもしない。所詮ログなので */ console.log(e); }
+                        }, 1);
                         return logString;
                     }
                 }

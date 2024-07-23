@@ -41,6 +41,7 @@ export class TeamMemberEntity extends MyBaseEntity {
 
 @Entity()
 export class PredictHistoryEntity extends MyBaseEntity {
+    // このテーブルへの登録がミスるとメッセージが消えるので登録条件ゆるゆるにしておく。
     @PrimaryGeneratedColumn()
     id!: number;
 
@@ -53,26 +54,26 @@ export class PredictHistoryEntity extends MyBaseEntity {
     @Column({ nullable: true })
     label?: string;
 
-    @Column({ nullable: false })
-    model!: string;
-
     @Column({ nullable: true })
-    provider?: string;
+    model?: string;
 
-    @Column({ type: 'integer' })
-    take!: number;
+    @Column()
+    provider!: string;
 
-    @Column({ type: 'integer' })
-    reqToken!: number;
+    @Column({ nullable: true, type: 'integer' })
+    take?: number;
 
-    @Column({ type: 'integer' })
-    resToken!: number;
+    @Column({ nullable: true, type: 'integer' })
+    reqToken?: number;
 
-    @Column({ type: 'numeric' })
-    cost!: number;
+    @Column({ nullable: true, type: 'integer' })
+    resToken?: number;
 
-    @Column({ nullable: false, type: 'enum', enum: PredictHistoryStatus })
-    status!: PredictHistoryStatus;
+    @Column({ nullable: true, type: 'float' })
+    cost?: number;
+
+    @Column({ nullable: true, type: 'enum', enum: PredictHistoryStatus })
+    status?: PredictHistoryStatus;
 }
 @Entity()
 export class PredictHistoryWrapperEntity extends MyBaseEntity {
