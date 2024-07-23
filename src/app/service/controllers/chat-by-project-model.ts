@@ -228,7 +228,7 @@ export const chatCompletionByProjectModel = [
                     transactionalEntityManager.createQueryBuilder()
                         .update(VertexCachedContentEntity)
                         .set({ usage: () => "usage + 1" }) // カウント回数は登り電文を信用しない。
-                        .where('cache_id = :cacheId', { cacheId: cachedContent.id })
+                        .where('id = :cacheId', { cacheId: cachedContent.id })
                         .execute();
                     // 重要項目じゃないのであえて更新完了を待たない。
                 } else { }
