@@ -645,7 +645,7 @@ export const geminiDeleteContextCacheByProjectModel = [
                 await transactionalEntityManager.createQueryBuilder()
                     .update(MessageEntity)
                     .set({ cacheId: () => "''" })
-                    .where('cacheId = :cacheId', { cacheId: cachedContent.id })
+                    .where('cache_id = :cacheId', { cacheId: cachedContent.id })
                     .execute();
             });
             // TODO googleに投げる前にDBコミットすることにした。こうすることで通信エラーを無視できるけどキャッシュが残っちゃったときどうするんだろう。。
