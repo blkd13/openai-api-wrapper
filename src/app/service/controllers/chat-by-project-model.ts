@@ -227,7 +227,7 @@ export const chatCompletionByProjectModel = [
                 if (cachedContent) {
                     transactionalEntityManager.createQueryBuilder()
                         .update(VertexCachedContentEntity)
-                        .set({ usage: () => "ussave + 1" }) // カウント回数は登り電文を信用しない。
+                        .set({ usage: () => "usage + 1" }) // カウント回数は登り電文を信用しない。
                         .where('cacheId = :cacheId', { cacheId: cachedContent.id })
                         .execute();
                     // 重要項目じゃないのであえて更新完了を待たない。
