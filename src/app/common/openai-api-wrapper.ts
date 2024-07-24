@@ -119,7 +119,7 @@ function getEncoder(model: TiktokenModel): Tiktoken {
 
 export interface WrapperOptions {
     allowLocalFiles: boolean;
-    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai' | 'anthropic_vertexai';
+    provider: 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai' | 'anthropic_vertexai' | 'openapi_vertexai';
 }
 
 // Uint8Arrayを文字列に変換
@@ -471,6 +471,100 @@ class RunBit {
                 return readStream();
 
             });
+        } else if (this.openApiWrapper.wrapperOptions.provider === 'openapi_vertexai') {
+            for (const key of ['safetySettings', 'cachedContent']) delete (args as any)[key]; // Gemini用プロパティを消しておく
+            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
+            // vertexai でllama3を使う場合。
+            runPromise = my_vertexai.getAccessToken().then(token => {
+                const REGION = 'us-central1';
+                const ENDPOINT = `us-central1-aiplatform.googleapis.com`;
+                const client = new OpenAI({
+                    apiKey: token,
+                    baseURL: `https://${ENDPOINT}/v1beta1/projects/${GCP_PROJECT_ID}/locations/${REGION}/endpoints/openapi/`,
+                });
+
+                // llama3は構造化されたcontentに対応していないのでただのstringにする
+                args.messages.forEach(message => {
+                    if (!message.content) {
+                    } else if (typeof message.content === 'string') {
+                        // 文字列ならそのまま
+                    } else if (typeof message.content === 'object') {
+                        // 構造化contextになっていたらただのstringに戻す。
+                        if (Array.isArray(message.content)) {
+                            message.content = message.content.map(content => {
+                                if (content.type === 'text') {
+                                    return content.text;
+                                } else if (content.image_url && content.image_url.url) {
+                                    return content.image_url.url;
+                                }
+                            }).join('\n');
+                        } else { }
+                    }
+                });
+                (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
+                    .withResponse().then((response) => {
+                        response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
+                        response.response.headers.get('x-ratelimit-limit-tokens') && (ratelimitObj.limitTokens = Number(response.response.headers.get('x-ratelimit-limit-tokens')));
+                        response.response.headers.get('x-ratelimit-remaining-requests') && (ratelimitObj.remainingRequests = Number(response.response.headers.get('x-ratelimit-remaining-requests')));
+                        response.response.headers.get('x-ratelimit-remaining-tokens') && (ratelimitObj.remainingTokens = Number(response.response.headers.get('x-ratelimit-remaining-tokens')));
+                        response.response.headers.get('x-ratelimit-reset-requests') && (ratelimitObj.resetRequests = response.response.headers.get('x-ratelimit-reset-requests') || '');
+                        response.response.headers.get('x-ratelimit-reset-tokens') && (ratelimitObj.resetTokens = response.response.headers.get('x-ratelimit-reset-tokens') || '');
+
+                        const headers: { [key: string]: string } = {};
+                        response.response.headers.forEach((value, key) => {
+                            // console.log(`${key}: ${value}`);
+                            headers[key] = value;
+                        });
+                        fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response: { status: response.response.status, headers } }, Utils.genJsonSafer()), {}, (err) => { });
+
+                        // ストリームからデータを読み取るためのリーダーを取得
+                        const reader = response.data.toReadableStream().getReader();
+
+                        let tokenBuilder: string = '';
+
+                        const _that = this;
+
+                        // ストリームからデータを読み取る非同期関数
+                        async function readStream() {
+                            while (true) {
+                                const { value, done } = await reader.read();
+                                if (done) {
+                                    // ストリームが終了したらループを抜ける
+                                    tokenCount.cost = tokenCount.calcCost();
+                                    console.log(logObject.output('fine', ''));
+                                    observer.complete();
+
+                                    _that.openApiWrapper.fire();
+
+                                    // ファイルに書き出す
+                                    const trg = args.response_format?.type === 'json_object' ? 'json' : 'md';
+                                    fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
+                                    break;
+                                }
+                                // 中身を取り出す
+                                const content = decoder.decode(value);
+                                // console.log(content);
+
+                                // 中身がない場合はスキップ
+                                if (!content) { continue; }
+                                // ファイルに書き出す
+                                fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
+                                // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
+                                // トークン数をカウント
+                                tokenCount.completion_tokens++;
+                                const text = JSON.parse(content).choices[0].delta.content || '';
+                                tokenBuilder += text;
+                                tokenCount.tokenBuilder = tokenBuilder;
+
+                                // streamHandlerを呼び出す
+                                observer.next(text);
+                            }
+                            return;
+                        }
+                        // ストリームの読み取りを開始
+                        return readStream();
+                    });
+            })
         } else {
             for (const key of ['safetySettings', 'cachedContent']) delete (args as any)[key]; // Gemini用プロパティを消しておく
             const client =
@@ -626,6 +720,9 @@ export class OpenAIApiWrapper {
         'msl-sm  ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'msl-md  ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'msl-lg  ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+
+        // vertex llama
+        'vla31-40': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
 
         'cla-1.2 ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
         'cla-2   ': { limitRequests: 5, limitTokens: 2000000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
@@ -1046,7 +1143,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
 export type GPTModels = TiktokenModel
     | 'gpt-4o-2024-05-13' | 'gpt-4o' | 'gpt-4o-mini-2024-07-18' | 'gpt-4o-mini'
-    | 'llama2-70b-4096'
+    | 'llama2-70b-4096' | 'meta/llama3-405b-instruct-maas'
     | 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' | 'gemini-1.0-pro-001' | 'gemini-1.0-pro-vision-001'
     | 'gemini-1.5-flash' | 'gemini-1.5-pro' | 'gemini-1.0-pro' | 'gemini-1.0-pro-vision'
     | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b'
@@ -1090,6 +1187,7 @@ export class TokenCount {
         'gem-15pr': { prompt: 0.00250, completion: 0.00250, },
         'gem-10pr': { prompt: 0.000125, completion: 0.00025, },
         'gem-10pv': { prompt: 0.000125, completion: 0.000125, },
+        'vla31-40': { prompt: 0.000100, completion: 0.000100, },
     };
 
     static SHORT_NAME: { [key: string]: string } = {
@@ -1148,6 +1246,7 @@ export class TokenCount {
         'gpt-3.5-turbo-instruct-0914': 'gpt3.5  ',
         'mixtral-8x7b-32768': 'g-mxl-87',
         'llama2-70b-4096': 'g-lm2-70',
+        'meta/llama3-405b-instruct-maas': 'vla31-40', // VertexAI llama3.1 405B
         'open-mistral-7b': 'msl-7b  ',
         'claude-instant-1.2': 'cla-1.2 ',
         'claude-2': 'cla-2   ',

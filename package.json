@@ -41,7 +41,7 @@
         "@anthropic-ai/sdk": "^0.17.1",
         "@anthropic-ai/vertex-sdk": "^0.4.0",
         "@azure/openai": "^1.0.0-beta.11",
-        "@google-cloud/vertexai": "^1.2.0",
+        "@google-cloud/vertexai": "^1.4.0",
         "@types/express-useragent": "^1.0.5",
         "@types/fluent-ffmpeg": "^2.1.24",
         "@types/mime-types": "^2.1.4",

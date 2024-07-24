@@ -147,6 +147,10 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: 
         req.region = 'us-central1'; // コンテキストキャッシュ機能は us-central1 で固定
         req.resourcePath = cachedContent.model;
         req.cached_content = cachedContent.name;
+    } else if (args.model.startsWith('meta/')) {
+        // 何も設定しなくてもいいかも。。
+        // req.region = 'us-central1';
+        // req.resourcePath = `projects/${GCP_PROJECT_ID}/locations/${req.region}/endpoints/openapi/chat/completions`;
     } else {
         req.region = GCP_REGION || 'asia-northeast1';
         req.resourcePath = `projects/${GCP_PROJECT_ID}/locations/${req.region}/publishers/google/models/${args.model}`;

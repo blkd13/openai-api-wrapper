@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity, Generated, UpdateDateColumn, PrimaryColumn, Index } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity, Generated, UpdateDateColumn, PrimaryColumn, Index, ViewEntity, ViewColumn } from 'typeorm';
 
 import { MyBaseEntity } from './base.js';
 import { ContentPartType, MessageGroupType, PredictHistoryStatus, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
@@ -98,6 +98,80 @@ export class PredictHistoryWrapperEntity extends MyBaseEntity {
     @Column({ nullable: false })
     provider!: string;
 }
+
+// @ViewEntity({
+//     name: 'predict_history_view', // ビューの名前
+//     expression: `
+//         SELECT 
+//             p1.id, label, model, provider
+//             idempotency_key, args_hash, 
+//             take, req_token, res_token, cost, status, 
+//             connection_id, stream_id, message_id,
+//             COALESCE(p2.created_by, p1.created_by) AS created_by, 
+//             COALESCE(p2.created_at, p1.created_at) AS created_at,
+//             COALESCE(p2.updated_by, p1.updated_by) AS updated_by,
+//             COALESCE(p2.updated_at, p1.updated_at) AS updated_at 
+//         FROM predict_history_entity p1 
+//         LEFT OUTER JOIN predict_history_wrapper_entity p2
+//         USING (label, model, provider)
+//         WHERE status IN ('fine', 'error')
+//     `
+// })
+// export class PredictHistoryView {
+//     @ViewColumn()
+//     id!: string;
+
+//     @ViewColumn()
+//     label!: string;
+
+//     @ViewColumn()
+//     model!: string;
+
+//     @ViewColumn()
+//     provider!: string;
+
+//     @ViewColumn()
+//     idempotencyKey!: string;
+
+//     @ViewColumn()
+//     argsHash!: string;
+
+//     @ViewColumn()
+//     take!: number;
+
+//     @ViewColumn()
+//     reqToken!: string;
+
+//     @ViewColumn()
+//     resToken!: string;
+
+//     @ViewColumn()
+//     cost!: number;
+
+//     @ViewColumn()
+//     status!: string;
+
+//     @ViewColumn()
+//     connectionId?: string;
+
+//     @ViewColumn()
+//     streamId?: string;
+
+//     @ViewColumn()
+//     messageId?: string;
+
+//     @ViewColumn()
+//     createdBy!: string;
+
+//     @ViewColumn()
+//     createdAt!: Date;
+
+//     @ViewColumn()
+//     updatedBy!: string;
+
+//     @ViewColumn()
+//     updatedAt!: Date;
+// }
 
 @Entity()
 export class ProjectEntity extends MyBaseEntity {

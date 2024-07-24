@@ -218,6 +218,8 @@ export const chatCompletionByProjectModel = [
                 const aiApi = new OpenAIApiWrapper();
                 if (inDto.args.model.startsWith('gemini-')) {
                     aiApi.wrapperOptions.provider = 'vertexai';
+                } else if (inDto.args.model.startsWith('meta/llama3-')) {
+                    aiApi.wrapperOptions.provider = 'openapi_vertexai';
                 } else if (inDto.args.model.startsWith('claude-')) {
                     aiApi.wrapperOptions.provider = 'anthropic_vertexai';
                 }
