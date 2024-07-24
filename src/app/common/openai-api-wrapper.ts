@@ -585,9 +585,9 @@ class RunBit {
     };
 }
 
-const VISION_MODELS = ['gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-vision-preview', 'gemini-1.5-flash-001', 'gemini-1.5-pro-001', 'gemini-1.0-pro-vision-001', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro-vision', 'claude-3-haiku-20240307', 'claude-3-sonnet-20240229', 'claude-3-opus-20240229', 'claude-3-5-sonnet-20240620', 'claude-3-5-sonnet@20240620'];
-const JSON_MODELS = ['gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'];
-const GPT4_MODELS = ['gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview'];
+const VISION_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-vision-preview', 'gemini-1.5-flash-001', 'gemini-1.5-pro-001', 'gemini-1.0-pro-vision-001', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro-vision', 'claude-3-haiku-20240307', 'claude-3-sonnet-20240229', 'claude-3-opus-20240229', 'claude-3-5-sonnet-20240620', 'claude-3-5-sonnet@20240620'];
+const JSON_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'];
+const GPT4_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview'];
 /**
  * OpenAIのAPIを呼び出すラッパークラス
  */
@@ -616,6 +616,7 @@ export class OpenAIApiWrapper {
         'gpt4-128': { limitRequests: 10000, limitTokens: 800000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt4-vis': { limitRequests: 10000, limitTokens: 800000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         'gpt4-o  ': { limitRequests: 10000, limitTokens: 800000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+        'gpt4-om ': { limitRequests: 10000, limitTokens: 800000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         // groq
         'g-mxl-87': { limitRequests: 10, limitTokens: 100000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
         'g-lm2-70': { limitRequests: 10, limitTokens: 100000, remainingRequests: 1, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
@@ -654,7 +655,6 @@ export class OpenAIApiWrapper {
     ) {
         this.options = options;
         this.options.stream = true;
-        // this.options.timeout = 1200000;
 
         // this.options = {};
         // console.log(this.options);
@@ -1045,7 +1045,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
 // TiktokenModelが新モデルに追いつくまでは自己定義で対応する。
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
 export type GPTModels = TiktokenModel
-    | 'gpt-4o-2024-05-13' | 'gpt-4o'
+    | 'gpt-4o-2024-05-13' | 'gpt-4o' | 'gpt-4o-mini-2024-07-18' | 'gpt-4o-mini'
     | 'llama2-70b-4096'
     | 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' | 'gemini-1.0-pro-001' | 'gemini-1.0-pro-vision-001'
     | 'gemini-1.5-flash' | 'gemini-1.5-pro' | 'gemini-1.0-pro' | 'gemini-1.0-pro-vision'
@@ -1069,6 +1069,7 @@ export class TokenCount {
         'gpt4-vis': { prompt: 0.01000, completion: 0.03000, },
         'gpt4-128': { prompt: 0.01000, completion: 0.03000, },
         'gpt4-o  ': { prompt: 0.00500, completion: 0.01500, },
+        'gpt4-om ': { prompt: 0.00015, completion: 0.00060, },
         'cla-1.2 ': { prompt: 0.00800, completion: 0.02400, },
         'cla-2   ': { prompt: 0.00800, completion: 0.02400, },
         'cla-2.1 ': { prompt: 0.00800, completion: 0.02400, },
