@@ -474,6 +474,8 @@ class RunBit {
         } else if (this.openApiWrapper.wrapperOptions.provider === 'openapi_vertexai') {
             for (const key of ['safetySettings', 'cachedContent']) delete (args as any)[key]; // Gemini用プロパティを消しておく
             fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
+            // 上限4097
+            args.max_tokens = (args.max_tokens || 0) > 4096 ? 4096 : args.max_tokens;
             // vertexai でllama3を使う場合。
             runPromise = my_vertexai.getAccessToken().then(token => {
                 const REGION = 'us-central1';
@@ -542,7 +544,7 @@ class RunBit {
                                     break;
                                 }
                                 // 中身を取り出す
-                                const content = decoder.decode(value);
+                                const content = decoder.decode(value).replaceAll(/\\\\n/g, '\\n');
                                 // console.log(content);
 
                                 // 中身がない場合はスキップ
