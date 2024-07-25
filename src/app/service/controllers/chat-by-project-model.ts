@@ -82,6 +82,8 @@ async function buildArgs(userId: string, messageId: string): Promise<{
     project: ProjectEntity,
     thread: ThreadEntity,
     messageSetList: { messageGroup: MessageGroupEntity, message: MessageEntity }[],
+    message: MessageEntity,
+    messageGroup: MessageGroupEntity,
     inDto: { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, }
 }> {
     // メッセージの存在確認
@@ -194,7 +196,7 @@ async function buildArgs(userId: string, messageId: string): Promise<{
             }
         }),
     })) as ChatCompletionMessageParam[];
-    return { project, thread, messageSetList, inDto };
+    return { project, thread, messageSetList, inDto, message, messageGroup };
 }
 
 /**
@@ -211,7 +213,7 @@ export const chatCompletionByProjectModel = [
         // connectionIdはクライアントで発番しているので、万が一にも混ざらないようにユーザーIDを付与。
         const clientId = `${req.info.user.id}-${connectionId}` as string;
         try {
-            const { thread, inDto } = await buildArgs(req.info.user.id, messageId);
+            const { thread, inDto, messageSetList, message, messageGroup } = await buildArgs(req.info.user.id, messageId);
             const result = await ds.transaction(async transactionalEntityManager => {
                 let text = '';
                 const label = req.body.options?.idempotencyKey || `chat-${clientId}-${streamId}-${messageId}`;
@@ -227,6 +229,7 @@ export const chatCompletionByProjectModel = [
                 // TODO コンテンツキャッシュはIDさえ合っていれば誰でも使える状態。権限付けなくていいか悩み中。
                 const cachedContent = (inDto.args as any).cachedContent as VertexCachedContentEntity;
                 if (cachedContent) {
+                    // console.log(`cachedContent=${cachedContent.id}`, JSON.stringify(cachedContent));
                     transactionalEntityManager.createQueryBuilder()
                         .update(VertexCachedContentEntity)
                         .set({ usage: () => "usage + 1" }) // カウント回数は登り電文を信用しない。
@@ -268,14 +271,22 @@ export const chatCompletionByProjectModel = [
                         contentParts: ContentPartEntity[],
                     }>(async (resolve, reject) => {
                         try {
-                            // 新しいメッセージグループを登録
-                            const newMessageGroup = new MessageGroupEntity();
-                            newMessageGroup.threadId = thread.id;
-                            newMessageGroup.type = MessageGroupType.Single;
-                            newMessageGroup.role = 'assistant';
-                            newMessageGroup.label = '';
-                            newMessageGroup.previousMessageId = messageId;
-                            newMessageGroup.createdBy = req.info.user.id;
+
+                            let newMessageGroup = await transactionalEntityManager.findOne(MessageGroupEntity, {
+                                where: { previousMessageId: messageId }
+                            });
+                            if (newMessageGroup) {
+                                // 既存のメッセージグループを使う
+                            } else {
+                                // 新しいメッセージグループを登録
+                                newMessageGroup = new MessageGroupEntity();
+                                newMessageGroup.threadId = thread.id;
+                                newMessageGroup.type = MessageGroupType.Single;
+                                newMessageGroup.role = 'assistant';
+                                newMessageGroup.label = '';
+                                newMessageGroup.previousMessageId = messageId;
+                                newMessageGroup.createdBy = req.info.user.id;
+                            }
                             newMessageGroup.updatedBy = req.info.user.id;
                             const savedMessageGroup = await transactionalEntityManager.save(MessageGroupEntity, newMessageGroup);
 

@@ -1108,7 +1108,7 @@ export const upsertMessageWithContents = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { messageId, groupType, role, label, previousMessageId, contents, cacheId } = req.body;
+        const { messageGroupId, messageId, groupType, role, label, previousMessageId, contents, cacheId } = req.body;
         const { threadId } = req.params;
 
         try {
@@ -1137,6 +1137,28 @@ export const upsertMessageWithContents = [
                 let messageGroup: MessageGroupEntity;
                 let message: MessageEntity;
 
+                if (messageGroupId) {
+                    // 更新の場合
+                    messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
+                        where: { id: messageGroupId }
+                    });
+                    messageGroup.type = groupType;
+                    messageGroup.role = role;
+                    messageGroup.label = label;
+                    messageGroup.previousMessageId = previousMessageId; // 変えちゃダメな気はする。
+                    messageGroup.updatedBy = req.info.user.id;
+                } else {
+                    // 新規作成の場合
+                    messageGroup = new MessageGroupEntity();
+                    messageGroup.threadId = threadId;
+                    messageGroup.type = groupType;
+                    messageGroup.role = role;
+                    messageGroup.label = label;
+                    messageGroup.previousMessageId = previousMessageId;
+                    messageGroup.createdBy = req.info.user.id;
+                    messageGroup.updatedBy = req.info.user.id;
+                }
+
                 if (messageId) {
                     // 更新の場合
                     message = await transactionalEntityManager.findOneOrFail(MessageEntity, {
@@ -1151,12 +1173,9 @@ export const upsertMessageWithContents = [
                         throw new Error('指定されたメッセージは、このスレッドに属していません');
                     }
 
-                    // MessageGroupの更新
-                    messageGroup.type = groupType;
-                    messageGroup.role = role;
-                    messageGroup.label = label;
-                    messageGroup.previousMessageId = previousMessageId;
-                    messageGroup.updatedBy = req.info.user.id;
+                    if (messageGroup.id !== messageGroupId) {
+                        throw new Error('指定されたメッセージグループは存在しません');
+                    }
 
                     // Messageの更新
                     message.cacheId = cacheId;
@@ -1164,15 +1183,6 @@ export const upsertMessageWithContents = [
                     message.updatedBy = req.info.user.id;
                 } else {
                     // 新規作成の場合
-                    messageGroup = new MessageGroupEntity();
-                    messageGroup.threadId = threadId;
-                    messageGroup.type = groupType;
-                    messageGroup.role = role;
-                    messageGroup.label = label;
-                    messageGroup.previousMessageId = previousMessageId;
-                    messageGroup.createdBy = req.info.user.id;
-                    messageGroup.updatedBy = req.info.user.id;
-
                     message = new MessageEntity();
                     message.cacheId = cacheId;
                     message.label = label;
@@ -1185,9 +1195,12 @@ export const upsertMessageWithContents = [
                 const savedMessage = await transactionalEntityManager.save(MessageEntity, message);
 
                 // 既存のContentPartsを取得（更新の場合）
-                const existingContentParts = messageId
-                    ? await transactionalEntityManager.find(ContentPartEntity, { where: { messageId: messageId } })
-                    : [];
+                const existingContentParts = await (messageId
+                    ? transactionalEntityManager.find(ContentPartEntity, {
+                        where: { messageId: messageId },
+                        order: { seq: 'ASC' }
+                    })
+                    : Promise.resolve([] as ContentPartEntity[]));
 
                 // ContentPartの作成、更新、削除
                 const updatedContentParts = await Promise.all((contents as ContentPartEntity[]).map(async (content, index) => {
@@ -1205,7 +1218,8 @@ export const upsertMessageWithContents = [
                     contentPart.type = content.type;
                     contentPart.updatedBy = req.info.user.id;
 
-                    contentPart.seq = index + 1;
+                    // seqは全体通番なので無編集にする
+                    // contentPart.seq = index + 1;
 
                     switch (content.type) {
                         case ContentPartType.TEXT:
@@ -1246,6 +1260,66 @@ export const upsertMessageWithContents = [
             });
 
             res.status(messageId ? 200 : 201).json(result);
+        } catch (error) {
+            console.error('Error upserting message with contents:', error);
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: '指定されたスレッド、プロジェクト、またはメッセージが見つかりません' });
+            } else if ((error as any).message === 'このスレッドにメッセージを作成または更新する権限がありません') {
+                res.status(403).json({ message: (error as any).message });
+            } else if ((error as any).message === '指定されたメッセージは、このスレッドに属していません') {
+                res.status(400).json({ message: (error as any).message });
+            } else {
+                res.status(500).json({ message: 'メッセージの作成または更新中にエラーが発生しました' });
+            }
+        }
+    }
+];
+
+
+/**
+ * [user認証] メッセージ、コンテンツの作成または更新
+ */
+export const updateMessageTimestamp = [
+    param('threadId').isUUID().notEmpty(),
+    body('id').isUUID().notEmpty(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { id } = req.body; // as messageId
+        const { threadId } = req.params;
+
+        try {
+            const result = await ds.transaction(async transactionalEntityManager => {
+                // スレッドの存在確認
+                const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
+                    where: { id: threadId, status: Not(ThreadStatus.Deleted) }
+                });
+
+                // プロジェクトの取得と権限チェック
+                const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
+                    where: { id: thread.projectId }
+                });
+
+                const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
+                    where: {
+                        teamId: project.teamId,
+                        userId: req.info.user.id
+                    }
+                });
+
+                if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                    throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
+                }
+
+                const message = await transactionalEntityManager.findOneOrFail(MessageEntity, {
+                    where: { id }
+                });
+
+                // タイムスタンプを更新するだけ。本当は自動で更新掛かるはずなんだけどオブジェクトに何も手を加えないとupdateが効かない？
+                message.lastUpdate = new Date();
+                const updatedMessage = await transactionalEntityManager.save(MessageEntity, message);
+                res.status(200).json(updatedMessage);
+            });
         } catch (error) {
             console.error('Error upserting message with contents:', error);
             if (error instanceof EntityNotFoundError) {
