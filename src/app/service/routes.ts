@@ -30,6 +30,7 @@ import {
     getMessageContentParts,
     deleteContentPart,
     updateMessageTimestamp,
+    moveThread,
 } from './controllers/project-models.js';
 
 // import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
@@ -103,6 +104,7 @@ authUserRouter.post('/project/:projectId/threads', createThread);
 authUserRouter.get('/project/:projectId/threads', getThreadList);
 authUserRouter.get('/thread/:id', getThread);
 authUserRouter.patch('/thread/:id', updateThread);
+authUserRouter.put('/thread/:id', moveThread);
 authUserRouter.delete('/thread/:id', deleteThread);
 
 // メッセージ関連

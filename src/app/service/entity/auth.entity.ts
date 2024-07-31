@@ -1,6 +1,16 @@
 import { Column, CreateDateColumn, Entity, Generated, PrimaryGeneratedColumn } from 'typeorm';
 import { MyBaseEntity } from './base.js';
 
+export enum UserRoleType {
+    Maintainer = 'Maintainer', // メンテナ
+    User = 'User', // ユーザー
+
+    Owner = 'Owner', // 所有者
+    Admin = 'Admin', // 管理者（オーナーに統合したので今は使わない）
+    Member = 'Member', // メンバー（スレッドの作成、編集、削除ができる）
+    Viewer = 'Viewer', // 閲覧者（スレッドの閲覧のみ）
+    Guest = 'Guest', // ゲスト（スレッドの閲覧のみ）
+}
 // CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 // SELECT uuid_generate_v4();
 @Entity()
@@ -17,6 +27,9 @@ export class UserEntity extends MyBaseEntity {
 
     @Column()
     email!: string;
+
+    @Column({ default: UserRoleType.User })
+    role!: UserRoleType;
 
     @Column({ nullable: true })
     passwordHash?: string;

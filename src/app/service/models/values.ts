@@ -40,6 +40,7 @@ export enum ContentPartType {
 }
 
 export enum TeamMemberRoleType {
+    Maintainer = 'Maintainer', // メンテナ
     Owner = 'Owner', // オーナー
     Admin = 'Admin', // 管理者（オーナーに統合したので今は使わない）
     Member = 'Member', // メンバー（スレッドの作成、編集、削除ができる）

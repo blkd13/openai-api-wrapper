@@ -1,3 +1,6 @@
+import * as dotenv from 'dotenv';
+dotenv.config({ override: true });
+
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { Observable, Subscriber, forkJoin, map, of, tap, toArray } from 'rxjs';
 import * as crypto from 'crypto';
@@ -5,8 +8,6 @@ import * as fs from 'fs';
 import sizeOf from 'image-size';
 import { detect } from 'jschardet';
 
-import * as dotenv from 'dotenv';
-dotenv.config();
 const { GCP_PROJECT_ID, GCP_REGION } = process.env;
 // if (!PROJECT_ID || !LOCATION) {
 //     throw new Error('Missing required environment variables');

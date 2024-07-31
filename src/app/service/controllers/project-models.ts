@@ -1038,6 +1038,71 @@ export const updateThread = [
 ];
 
 /**
+ * [user認証] スレッドを別のプロジェクトに紐づける。
+ */
+export const moveThread = [
+    param('id').isUUID(),
+    body('projectId').isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { id } = req.params;
+        const { projectId } = req.body;
+
+        try {
+            let updatedThread;
+            await ds.transaction(async transactionalEntityManager => {
+                const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
+                    where: { id: id, status: Not(ThreadStatus.Deleted) }
+                });
+
+                const projectFm = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
+                    where: { id: thread.projectId }
+                });
+                const projectTo = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
+                    where: { id: projectId }
+                });
+
+                const teamMemberFm = await transactionalEntityManager.findOne(TeamMemberEntity, {
+                    where: {
+                        teamId: projectFm.teamId,
+                        userId: req.info.user.id
+                    }
+                });
+                const teamMemberTo = await transactionalEntityManager.findOne(TeamMemberEntity, {
+                    where: {
+                        teamId: projectTo.teamId,
+                        userId: req.info.user.id
+                    }
+                });
+
+                if ((!teamMemberFm || (teamMemberFm.role !== TeamMemberRoleType.Owner && teamMemberFm.role !== TeamMemberRoleType.Member)) ||
+                    (!teamMemberTo || (teamMemberTo.role !== TeamMemberRoleType.Owner && teamMemberTo.role !== TeamMemberRoleType.Member))) {
+                    throw new Error('このスレッドを更新する権限がありません');
+                }
+
+                thread.projectId = projectId;
+
+                thread.updatedBy = req.info.user.id;
+
+                updatedThread = await transactionalEntityManager.save(ThreadEntity, thread);
+
+            });
+            res.status(200).json(updatedThread);
+        } catch (error) {
+            console.error('Error updating thread:', error);
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: '指定されたスレッドまたはプロジェクトが見つかりません' });
+            } else if ((error as any).message === 'このスレッドを更新する権限がありません' || (error as any).message === 'スレッド公開設定は変更できません') {
+                res.status(403).json({ message: (error as any).message });
+            } else {
+                res.status(500).json({ message: 'スレッドの更新中にエラーが発生しました' });
+            }
+        }
+    }
+];
+
+/**
  * [user認証] スレッド削除
  */
 export const deleteThread = [

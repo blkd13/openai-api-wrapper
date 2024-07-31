@@ -1,3 +1,6 @@
+import * as dotenv from 'dotenv';
+dotenv.config({ override: true });
+
 import { promises as fs } from 'fs';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";
@@ -10,9 +13,7 @@ import { ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompleti
 import { ds } from '../db.js';
 import { GenerateContentRequest, HarmBlockThreshold, HarmCategory } from '@google-cloud/vertexai';
 
-import * as dotenv from 'dotenv';
 import { HttpsProxyAgent } from 'https-proxy-agent';
-dotenv.config();
 const { GCP_PROJECT_ID, GCP_CONTEXT_CACHE_LOCATION } = process.env;
 
 const proxyObj: { [key: string]: string | undefined } = {
