@@ -79,7 +79,7 @@ async function buildDataUrlMap(contentPartList: (ContentPartEntity | { type: 'te
  * @param messageId 
  * @returns 
  */
-async function buildArgs(userId: string, messageId: string): Promise<{
+async function buildArgs(userId: string, messageId: string, countOnly: boolean = false): Promise<{
     project: ProjectEntity,
     thread: ThreadEntity,
     messageSetList: { messageGroup: MessageGroupEntity, message: MessageEntity }[],
@@ -113,7 +113,7 @@ async function buildArgs(userId: string, messageId: string): Promise<{
     });
 
     // 権限チェック
-    if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+    if (!countOnly && (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member))) {
         throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
     }
 
@@ -384,7 +384,7 @@ export const geminiCountTokensByProjectModel = [
 
             // メッセージIDが指定されていたらまずそれらを読み込む
             if (messageId) {
-                const { inDto } = await buildArgs(req.info.user.id, messageId);
+                const { inDto } = await buildArgs(req.info.user.id, messageId, true);
                 // 反映するのはメッセージだけでよい。
                 args.messages.push(...inDto.args.messages);
             } else { }

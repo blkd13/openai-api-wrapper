@@ -56,7 +56,7 @@ export const userLogin = [
             // JWTの生成
             const userToken: UserToken = { type: 'user', id: user.id, authGeneration: user.authGeneration || 0 };
             const token = jwt.sign(userToken, JWT_SECRET, { expiresIn: '30d' });
-            res.json({ token });
+            res.json({ token, user });
             // return { token };
         });
     }
@@ -100,7 +100,7 @@ export const guestLogin = [
             // JWTの生成
             const userToken: UserToken = { type: 'user', id: user.id, authGeneration: user.authGeneration || 0 };
             const token = jwt.sign(userToken, JWT_SECRET, { expiresIn: '20m' });
-            res.json({ token });
+            res.json({ token, user });
             // return { token };
         });
     }
@@ -252,7 +252,7 @@ export const passwordReset = [
                 // JWTの生成
                 const userToken: UserToken = { type: 'user', id: user.id, authGeneration: user.authGeneration || 0 };
                 const jwtToken = jwt.sign(userToken, JWT_SECRET, { expiresIn: '1y' });
-                res.json({ message: 'パスワードを設定しました。', token: jwtToken });
+                res.json({ message: 'パスワードを設定しました。', token: jwtToken, user });
             });
         });
     }
