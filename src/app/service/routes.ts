@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { changePassword, deleteUser, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateUserToken } from './middleware/authenticate.js';
-import { chatCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
+import { chatCompletion, codegenCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
     createTeam,
     getTeamList,
@@ -65,6 +65,7 @@ authUserRouter.delete('/user', deleteUser);
 // チャット系
 authUserRouter.get('/event', initEvent);
 authUserRouter.post('/chat-completion', chatCompletion);
+authUserRouter.post('/codegen/completion', codegenCompletion);
 authUserRouter.post('/create-cache', geminiCreateContextCache);
 authUserRouter.post('/v2/chat-completion', chatCompletionByProjectModel);
 authUserRouter.post('/v2/cache', geminiCreateContextCacheByProjectModel);

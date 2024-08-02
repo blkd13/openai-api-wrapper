@@ -71,6 +71,54 @@ export const initEvent = [
 /**
  * [user認証] チャットの送信
  */
+export const codegenCompletion = [
+    // 雑に作ってしまった。。
+    body('model').notEmpty(),
+    body('prompt'),
+    validationErrorHandler,
+    (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const clientId = `${req.info.user.id}-${req.query.connectionId}` as string;
+        const inDto = {
+            args: {
+                model: req.body.model,
+                temperature: req.body.temperature || 0.2,
+                max_tokens: req.body.max_tokens || 256,
+                stop: req.body.stop || ['\n'],
+                messages: [
+                    { role: 'system', content: `Code Completion AI System Prompt\nYou are an efficient code completion AI. Follow these guidelines:\n\nUnderstand the user's input code and continue writing it.\nGenerate appropriate code based on the context.\nFollow language best practices and avoid errors.\nAim for concise and readable code.\nFocus on effectively supporting the user's coding process.` },
+                    { role: 'user', content: req.body.prompt },
+                ],
+            }
+        } as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
+
+        let text = '';
+        const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.streamId}`;
+        const aiApi = new OpenAIApiWrapper();
+        if (inDto.args.model.startsWith('gemini-')) {
+            aiApi.wrapperOptions.provider = 'vertexai';
+        } else if (inDto.args.model.startsWith('claude-')) {
+            aiApi.wrapperOptions.provider = 'anthropic_vertexai';
+        }
+        aiApi.chatCompletionObservableStream(
+            inDto.args, { label }
+        ).subscribe({
+            next: next => {
+                text += next;
+            },
+            error: error => {
+                res.status(503).end(errorFormat(error));
+            },
+            complete: () => {
+                res.end(text);
+            },
+        });
+    }
+];
+
+/**
+ * [user認証] チャットの送信
+ */
 export const chatCompletion = [
     // 雑に作ってしまった。。
     // query -> connectionId, streamId
