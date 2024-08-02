@@ -186,6 +186,8 @@ async function buildArgs(userId: string, messageId: string, countOnly: boolean =
         content: contentPartMap[messageSet.message.id].map(content => {
             if (content.type === 'text') {
                 return { type: 'text', text: content.text };
+            } else if (content.type === 'error') {
+                return { type: 'error', text: content.text };
             } else {
                 return {
                     type: 'image_url',
@@ -213,10 +215,11 @@ export const chatCompletionByProjectModel = [
         const { connectionId, streamId, messageId } = req.query as { connectionId: string, streamId: string, messageId: string };
         // connectionIdはクライアントで発番しているので、万が一にも混ざらないようにユーザーIDを付与。
         const clientId = `${req.info.user.id}-${connectionId}` as string;
+        let text = '';
+        let savedMessageId = '';
         try {
             const { thread, inDto, messageSetList, message, messageGroup } = await buildArgs(req.info.user.id, messageId);
             const result = await ds.transaction(async transactionalEntityManager => {
-                let text = '';
                 const label = req.body.options?.idempotencyKey || `chat-${clientId}-${streamId}-${messageId}`;
                 const aiApi = new OpenAIApiWrapper();
                 if (inDto.args.model.startsWith('gemini-')) {
@@ -254,8 +257,8 @@ export const chatCompletionByProjectModel = [
                                 clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
                             },
                             error: error => {
-                                console.log(error);
-                                reject();
+                                // console.log(error);
+                                reject(error);
                                 clients[clientId]?.response.end(`error: ${req.query.streamId} ${error}\n\n`);
                             },
                             complete: () => {
@@ -299,6 +302,7 @@ export const chatCompletionByProjectModel = [
                             newMessage.updatedBy = req.info.user.id;
                             newMessage.messageGroupId = savedMessageGroup.id;
                             const savedMessage = await transactionalEntityManager.save(MessageEntity, newMessage);
+                            savedMessageId = savedMessage.id;
 
                             // 新しいContentPartを作成
                             const newContentPart = new ContentPartEntity();
@@ -351,6 +355,41 @@ export const chatCompletionByProjectModel = [
                 });
             });
         } catch (error) {
+            ds.transaction(async transactionalEntityManager => {
+                if (savedMessageId) {
+                    const savedMessage = await transactionalEntityManager.findOne(MessageEntity, {
+                        where: { id: savedMessageId }
+                    });
+                    if (savedMessage) {
+                        const savedMessageGroup = await transactionalEntityManager.findOne(MessageGroupEntity, {
+                            where: { id: savedMessage.messageGroupId }
+                        });
+                        const contentPart = await transactionalEntityManager.findOne(ContentPartEntity, {
+                            where: { messageId: savedMessageId }
+                        });
+                        if (savedMessageGroup && contentPart) {
+                            contentPart.text = text;
+                            await transactionalEntityManager.save(ContentPartEntity, contentPart);
+
+                            // ラベルを更新（ラベルはコンテンツの最初の方だけ）
+                            savedMessageGroup.label = text.substring(0, 250);
+                            savedMessage.label = text.substring(0, 250);
+                            await transactionalEntityManager.save(MessageGroupEntity, savedMessageGroup);
+                            await transactionalEntityManager.save(MessageEntity, savedMessage);
+
+                            // 新しいContentPartを作成
+                            const newContentPart = new ContentPartEntity();
+                            newContentPart.messageId = savedMessage.id;
+                            newContentPart.type = ContentPartType.ERROR;
+                            newContentPart.text = errorFormat(error);
+                            newContentPart.seq = 1;
+                            newContentPart.createdBy = req.info.user.id;
+                            newContentPart.updatedBy = req.info.user.id;
+                            const savedContentPart = await transactionalEntityManager.save(ContentPartEntity, newContentPart);
+                        } else { }
+                    }
+                } else { }
+            });
             res.status(503).end(errorFormat(error));
         }
     }
@@ -398,6 +437,8 @@ export const geminiCountTokensByProjectModel = [
                     role: message.role, content: message.content.map(content => {
                         if (content.type === 'text') {
                             return { type: 'text', text: content.text };
+                        } else if (content.type === 'error') {
+                            return { type: 'error', text: content.text };
                         } else {
                             return {
                                 type: 'image_url', image_url: {
@@ -444,8 +485,8 @@ const CONTEXT_CACHE_API_ENDPOINT = `https://${GCP_CONTEXT_CACHE_LOCATION}-aiplat
 function errorFormat(error: any): string {
     console.error(error);
     // console.error(Object.keys(error));
-    error && 'config' in error && delete error['config'];
-    error && 'stack' in error && delete error['stack'];
+    error && error['config'] && delete error['config'];
+    error && error['stack'] && delete error['stack'];
     if (error && error.response && error.response.data && error.response.data.error) {
         console.log(error.response.data.error);
         return JSON.stringify(error.response.data.error);

@@ -5,7 +5,7 @@ import { CountTokensResponse, GenerateContentRequest, HarmBlockThreshold, HarmCa
 import { execSync } from "child_process";
 import { ChatCompletionCreateParamsBase } from "openai/resources/chat/completions";
 
-const { GCP_PROJECT_ID, GCP_REGION } = process.env;
+const { GCP_PROJECT_ID, GCP_REGION, GCP_CONTEXT_CACHE_LOCATION } = process.env;
 
 export interface CachedContent {
     name: string;
@@ -141,11 +141,23 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: 
         // { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE, },
         // { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE, }
     ];
+    // メディアファイルの有無で分けるようにした。
+    if (req.contents.find(content => content.parts.find(part => part.inlineData))) {
+        // ここの指定をするとマルチモーダルの時にエラーになることがあるので何もしないことにした。
+        req.safetySettings = (args as any).safetySettings || [];
+    } else {
+        req.safetySettings = (args as any).safetySettings || [
+            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE, },
+            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE, },
+            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE, },
+            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE, }
+        ];
+    }
 
     const cachedContent = (args as any).cachedContent as CachedContent;
     // console.dir(cachedContent);
     if (cachedContent) {
-        req.region = 'us-central1'; // コンテキストキャッシュ機能は us-central1 で固定
+        req.region = GCP_CONTEXT_CACHE_LOCATION || 'asia-northeast1';
         req.resourcePath = cachedContent.model;
         req.cached_content = cachedContent.name;
     } else if (args.model.startsWith('meta/')) {
