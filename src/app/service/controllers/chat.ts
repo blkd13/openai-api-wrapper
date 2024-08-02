@@ -25,6 +25,7 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
 } else { }
 
 import { countChars, GenerateContentRequestForCache, mapForGemini } from '../../common/my-vertexai.js';
+import { Utils } from '../../common/utils.js';
 
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
@@ -78,7 +79,6 @@ export const codegenCompletion = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const clientId = `${req.info.user.id}-${req.query.connectionId}` as string;
         const inDto = {
             args: {
                 model: req.body.model,
@@ -86,14 +86,16 @@ export const codegenCompletion = [
                 max_tokens: req.body.max_tokens || 256,
                 stop: req.body.stop || ['\n'],
                 messages: [
-                    { role: 'system', content: `Code Completion AI System Prompt\nYou are an efficient code completion AI. Follow these guidelines:\n\nUnderstand the user's input code and continue writing it.\nGenerate appropriate code based on the context.\nFollow language best practices and avoid errors.\nAim for concise and readable code.\nFocus on effectively supporting the user's coding process.` },
-                    { role: 'user', content: req.body.prompt },
+                    { role: 'system', content: [{ text: `**Code Completion AI System Prompt**\n\nYou are an efficient code completion AI. Follow these guidelines:\n\nUnderstand the user's input code and continue writing it.\nGenerate appropriate code based on the context.\nFollow language best practices and avoid errors.\nAim for concise and readable code.\nFocus on effectively supporting the user's coding process.\n\n**Important Note:**\nOnly return the continuation of the code. There is no need to rewrite the entire provided code. The continuation is the most important part. Exclude any additional explanations or comments.\n` }] },
+                    { role: 'user', content: `Write only the continuation of this code\n\n\n\`\`\`${req.body.prompt}\`\`\`` },
+
                 ],
             }
+
         } as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
 
         let text = '';
-        const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.streamId}`;
+        const label = req.body.options?.idempotencyKey || `chat-${req.info.user.id}`;
         const aiApi = new OpenAIApiWrapper();
         if (inDto.args.model.startsWith('gemini-')) {
             aiApi.wrapperOptions.provider = 'vertexai';
@@ -110,7 +112,28 @@ export const codegenCompletion = [
                 res.status(503).end(errorFormat(error));
             },
             complete: () => {
-                res.end(text);
+                text = Utils.mdTrim(text)[0];
+                const resObj = {
+                    id: label,
+                    model: inDto.args.model,
+                    object: "text_completion",
+                    choices: [
+                        {
+                            finish_reason: "length",
+                            index: 0,
+                            logprobs: null,
+                            text: text,
+                        }
+                    ],
+                    created: Date.now(),
+                    usage: {
+                        completion_tokens: 0,
+                        prompt_tokens: 0,
+                        total_tokens: text.length,
+                    }
+                };
+                res.json(resObj);
+                res.end();
             },
         });
     }
