@@ -65,7 +65,7 @@ authUserRouter.delete('/user', deleteUser);
 // チャット系
 authUserRouter.get('/event', initEvent);
 authUserRouter.post('/chat-completion', chatCompletion);
-authUserRouter.post('/codegen/completion', codegenCompletion);
+authUserRouter.post('/codegen/completions', codegenCompletion);
 authUserRouter.post('/create-cache', geminiCreateContextCache);
 authUserRouter.post('/v2/chat-completion', chatCompletionByProjectModel);
 authUserRouter.post('/v2/cache', geminiCreateContextCacheByProjectModel);
