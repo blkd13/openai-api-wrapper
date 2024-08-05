@@ -78,7 +78,7 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
         if (typeof message.content === 'string') {
             if (message.role === 'system') {
                 // systemはsystemInstructionに入れる
-                req.systemInstruction = message.content;
+                req.systemInstruction = { role: message.role, parts: [{ text: message.content }] };
             } else {
                 req.contents.push({ role: message.role, parts: [{ text: message.content }] });
             }
