@@ -99,7 +99,7 @@ import { CachedContent, countChars, GenerateContentRequestExtended, mapForGemini
 // Initialize Vertex with your Cloud project and location
 export const my_vertexai = new MyVertexAiClient();
 export const vertex_ai = new VertexAI({ project: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', location: process.env['GCP_REGION'] || 'asia-northeast1' });
-export const anthropicVertex = new AnthropicVertex({ projectId: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', region: process.env['GCP_REGION'] || 'asia-northeast1', httpAgent: options.httpAgent }); //TODO 他で使えるようになったら変える。
+export const anthropicVertex = new AnthropicVertex({ projectId: process.env['GCP_PROJECT_ID'] || 'gcp-cloud-shosys-ai-002', region: process.env['GCP_REGION_ANTHROPIC'] || 'europe-west1', httpAgent: options.httpAgent }); //TODO 他で使えるようになったら変える。
 
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
