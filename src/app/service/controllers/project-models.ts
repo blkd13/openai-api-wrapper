@@ -1451,6 +1451,7 @@ export const getMessageGroupList = [
             // 関連するメッセージを一括で取得
             const messages = await ds.getRepository(MessageEntity).find({
                 where: { messageGroupId: In(messageGroupIds) },
+                order: { seq: 'ASC' },
                 // select: ['id', 'messageGroupId', 'label', 'createdAt', 'updatedAt']
             });
 
