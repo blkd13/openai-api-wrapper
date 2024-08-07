@@ -79,7 +79,7 @@ async function buildDataUrlMap(contentPartList: (ContentPartEntity | { type: 'te
  * @param messageId 
  * @returns 
  */
-async function buildArgs(userId: string, messageId: string, countOnly: boolean = false): Promise<{
+async function buildArgs(userId: string, messageId: string, mode: 'countOnly' | 'createCache' | undefined = undefined): Promise<{
     project: ProjectEntity,
     thread: ThreadEntity,
     messageSetList: { messageGroup: MessageGroupEntity, message: MessageEntity }[],
@@ -113,7 +113,7 @@ async function buildArgs(userId: string, messageId: string, countOnly: boolean =
     });
 
     // 権限チェック
-    if (!countOnly && (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member))) {
+    if (mode !== 'countOnly' && (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member))) {
         throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
     }
 
@@ -150,14 +150,18 @@ async function buildArgs(userId: string, messageId: string, countOnly: boolean =
 
     const inDto = JSON.parse(thread.inDtoJson) as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
 
-    // contextCacheが効いている場合はキャッシュ文のメッセージを外す。
-    if (inDto.args && (inDto.args as any).cachedContent) {
-        const cache = (inDto.args as any).cachedContent as CachedContent;
-        if (new Date(cache.expireTime) > new Date()) {
-            // live キャッシュが有効なのでキャッシュ済みメッセージを排除する。
-            messageSetList = messageSetList.filter(obj => !obj.message.cacheId);
-        } else { /* Cache is expired */ }
-    } else { /* thread is not initialized */ }
+    if (mode === 'createCache') {
+        // キャッシュ作成の時はゴミが残ってても上から更新する。
+    } else {
+        // contextCacheが効いている場合はキャッシュ文のメッセージを外す。
+        if (inDto.args && (inDto.args as any).cachedContent) {
+            const cache = (inDto.args as any).cachedContent as CachedContent;
+            if (new Date(cache.expireTime) > new Date()) {
+                // live キャッシュが有効なのでキャッシュ済みメッセージを排除する。
+                messageSetList = messageSetList.filter(obj => !obj.message.cacheId);
+            } else { /* Cache is expired */ }
+        } else { /* thread is not initialized */ }
+    }
 
     // 対象メッセージID全部についてコンテンツを取得
     const messageIdList = messageSetList.map(messageSet => messageSet.message.id);
@@ -423,7 +427,7 @@ export const geminiCountTokensByProjectModel = [
 
             // メッセージIDが指定されていたらまずそれらを読み込む
             if (messageId) {
-                const { inDto } = await buildArgs(req.info.user.id, messageId, true);
+                const { inDto } = await buildArgs(req.info.user.id, messageId, 'countOnly');
                 // 反映するのはメッセージだけでよい。
                 args.messages.push(...inDto.args.messages);
             } else { }
@@ -512,7 +516,7 @@ export const geminiCreateContextCacheByProjectModel = [
         const { messageId, model } = req.query as { messageId: string, model: string };
         const { ttl, expire_time } = req.body as GenerateContentRequestForCache;
         try {
-            const { thread, messageSetList, inDto } = await buildArgs(req.info.user.id, messageId);
+            const { thread, messageSetList, inDto } = await buildArgs(req.info.user.id, messageId, 'createCache');
             const projectId: string = GCP_PROJECT_ID || 'dummy';
             // const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
             // https://us-central1-aiplatform.googleapis.com/v1beta1/projects/gcp-cloud-shosys-ai-002/locations/us-central1/cachedContents
