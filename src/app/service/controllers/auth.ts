@@ -545,7 +545,7 @@ export const getDepartment = [
 
         const totalCosts = await ds.query(`
             SELECT created_by, model, sum(cost) as cost, sum(req_token) as req_token, sum(res_token) as res_token, COUNT(*)  
-            FROM project_models.predict_history_view 
+            FROM predict_history_view 
             GROUP BY created_by, model;
           `);
         const costMap = totalCosts.reduce((map: any, cost: any) => {
