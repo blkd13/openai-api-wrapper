@@ -63,6 +63,7 @@ export const authenticateUserToken = (req: Request, res: Response, next: NextFun
                     userEntity.id = user.id;
                     userEntity.name = user.name;
                     userEntity.email = user.email;
+                    userEntity.role = user.role;
                     (req as UserRequest).info = { user: userEntity };
                     next();
                 }
