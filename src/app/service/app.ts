@@ -6,7 +6,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import moment, { Moment } from "moment-timezone";
 
-import { authInviteRouter, authNoneRouter, authUserRouter } from './routes.js';
+import { authAdminRouter, authInviteRouter, authNoneRouter, authUserRouter } from './routes.js';
 
 // .envファイルを読み込む
 dotenv.config();
@@ -38,6 +38,8 @@ const rootRouter = Router();
 rootRouter.use('/', authNoneRouter);
 // ユーザー/パスワード認証が必要なルート
 rootRouter.use('/user', authUserRouter);
+// ワンタイムトークン認証が必要なルート
+rootRouter.use('/admin', authAdminRouter);
 // ワンタイムトークン認証が必要なルート
 rootRouter.use('/invite', authInviteRouter);
 

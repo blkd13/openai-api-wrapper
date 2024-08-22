@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { changePassword, deleteUser, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
-import { authenticateInviteToken, authenticateUserToken } from './middleware/authenticate.js';
+import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
+import { authenticateInviteToken, authenticateUserTokenMiddleGenerator } from './middleware/authenticate.js';
 import { chatCompletion, codegenCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
     createTeam,
@@ -37,18 +37,20 @@ import {
 import { getDirectoryTree, getFile, saveFile } from './controllers/directory-tree.js';
 import { deleteFile, downloadFile, getFileList, updateFileAccess, updateFileMetadata, uploadFiles } from './controllers/file-manager.js';
 import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
+import { UserRoleType } from './entity/auth.entity.js';
 
 // routers/index.ts
 
 // 認証種別によってルーターを分ける
 export const authNoneRouter = Router();
 export const authUserRouter = Router();
+export const authAdminRouter = Router();
 export const authInviteRouter = Router();
 
 // 認証種別ごとのミドルウェアを設定
-authUserRouter.use(authenticateUserToken);
+authUserRouter.use(authenticateUserTokenMiddleGenerator());
+authAdminRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.Admin));
 authInviteRouter.use(authenticateInviteToken);
-
 
 // 個別コントローラーの設定
 authNoneRouter.post('/login', userLogin);
@@ -132,3 +134,8 @@ authNoneRouter.get('/message-group/:messageGroupId', getMessageGroupDetails);
 authUserRouter.get('/directory-tree/:path/*', getDirectoryTree); // 最低1階層は必要
 authUserRouter.get('/file/:path/*', getFile); // 最低1階層は必要
 authUserRouter.post('/file/:path/*', saveFile); // 最低1階層は必要
+
+// 部管理用
+authUserRouter.get(`/department`, getDepartmentList); // 部署一覧取得
+authAdminRouter.get(`/department`, getDepartment); // 部署情報取得
+authAdminRouter.patch(`/department/:departmentId`, patchDepartmentMember);

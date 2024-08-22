@@ -9,6 +9,7 @@ import { UserRequest } from '../models/info.js';
 import { EntityNotFoundError, In, Not } from 'typeorm';
 import { ContentPartType, MessageGroupType, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
 import { FileEntity } from '../entity/file-models.entity.js';
+import { UserEntity } from '../entity/auth.entity.js';
 
 /**
  * [user認証] チーム作成
@@ -137,10 +138,25 @@ export const getTeam = [
                 where: { teamId: teamId }
             });
 
+            // チームメンバーのユーザー情報を取得
+            const teamMemberNames = await ds.getRepository(UserEntity).find({
+                where: { id: In(teamMembers.map(member => member.userId)) },
+            });
+            const teamMemberNamesMap = teamMemberNames.reduce((map, user) => {
+                map[user.id] = user;
+                return map;
+            }, {} as { [key: string]: UserEntity });
+            const teamMembersWitUserEntity = teamMembers.map(member => {
+                // 渡す項目を絞る
+                const { id, name, email, role, status } = teamMemberNamesMap[member.userId];
+                (member as any).user = { id, name, email, role, status };
+                return member;
+            });
+
             // チーム情報とメンバー情報を組み合わせて返却
             const teamWithMembers = {
                 ...team,
-                members: teamMembers
+                members: teamMembersWitUserEntity
             };
 
             res.status(200).json(teamWithMembers);
