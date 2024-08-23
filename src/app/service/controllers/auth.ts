@@ -655,3 +655,20 @@ export const patchDepartmentMember = [
         }
     }
 ];
+
+
+/**
+ * [user認証] ユーザー情報取得
+ */
+export const getUserList = [
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const userList = await ds.query(`
+            SELECT u.id, name, u.email, u.role, u.status, m.label
+            FROM user_entity u
+            LEFT OUTER JOIN (SELECT DISTINCT name, label FROM department_member) m
+            USING (name)
+          `);
+        res.json({ userList });
+    }
+];

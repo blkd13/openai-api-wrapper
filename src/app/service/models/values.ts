@@ -49,6 +49,11 @@ export enum TeamMemberRoleType {
     Guest = 'Guest', // ゲスト（スレッドの閲覧のみ）
 }
 
+export enum TeamStatus {
+    Normal = 'Normal', // 普通
+    Deleted = 'Deleted', // 削除済み
+}
+
 export enum ThreadStatus {
     Normal = 'Normal', // 普通
     Deleted = 'Deleted', // 削除済み

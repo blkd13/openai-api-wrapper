@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin } from './controllers/auth.js';
+import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateUserTokenMiddleGenerator } from './middleware/authenticate.js';
 import { chatCompletion, codegenCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
@@ -64,6 +64,8 @@ authUserRouter.patch('/user', updateUser);
 authUserRouter.patch('/change-password', changePassword);
 authUserRouter.delete('/user', deleteUser);
 
+authUserRouter.get(`/user-list`, getUserList); // 部署情報取得（メンバー追加時のサジェスト）
+
 // チャット系
 authUserRouter.get('/event', initEvent);
 authUserRouter.post('/chat-completion', chatCompletion);
@@ -86,7 +88,7 @@ authUserRouter.patch('/team/:id', updateTeam);
 authUserRouter.delete('/team/:id', deleteTeam);
 
 // チームメンバー関連
-authUserRouter.post('/team-member', addTeamMember);
+authUserRouter.post('/team/:teamId/member', addTeamMember);
 authUserRouter.get('/team/:teamId/members', getTeamMembers);
 authUserRouter.patch('/team/:teamId/member/:userId', updateTeamMember);
 authUserRouter.delete('/team/:teamId/member/:userId', removeTeamMember);
@@ -139,3 +141,6 @@ authUserRouter.post('/file/:path/*', saveFile); // 最低1階層は必要
 authUserRouter.get(`/department`, getDepartmentList); // 部署一覧取得
 authAdminRouter.get(`/department`, getDepartment); // 部署情報取得
 authAdminRouter.patch(`/department/:departmentId`, patchDepartmentMember);
+
+
+

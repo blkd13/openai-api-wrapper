@@ -7,9 +7,10 @@ import { body, param, query, validationResult } from 'express-validator';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { UserRequest } from '../models/info.js';
 import { EntityNotFoundError, In, Not } from 'typeorm';
-import { ContentPartType, MessageGroupType, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
+import { ContentPartType, MessageGroupType, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamStatus, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
 import { FileEntity } from '../entity/file-models.entity.js';
 import { UserEntity } from '../entity/auth.entity.js';
+import { Utils } from '../../common/utils.js';
 
 /**
  * [user認証] チーム作成
@@ -93,7 +94,7 @@ export const getTeamList = [
 
             // チーム情報を取得
             const teams = await ds.getRepository(TeamEntity).find({
-                where: { id: In(teamIds) }
+                where: { id: In(teamIds), status: TeamStatus.Normal }
             });
 
             res.status(200).json(teams);
@@ -130,13 +131,15 @@ export const getTeam = [
 
             // チーム情報を取得
             const team = await ds.getRepository(TeamEntity).findOneOrFail({
-                where: { id: teamId }
+                where: { id: teamId, status: TeamStatus.Normal }
             });
 
             // チームメンバー情報を取得
-            const teamMembers = await ds.getRepository(TeamMemberEntity).find({
+            let teamMembers = await ds.getRepository(TeamMemberEntity).find({
                 where: { teamId: teamId }
             });
+            // ゴミが混ざると巻き込まれ死するので綺麗にしておく。
+            teamMembers = teamMembers.filter(member => Utils.isUUID(member.userId));
 
             // チームメンバーのユーザー情報を取得
             const teamMemberNames = await ds.getRepository(UserEntity).find({
@@ -272,6 +275,7 @@ export const deleteTeam = [
 
                 // チームを論理削除
                 team.updatedBy = req.info.user.id;
+                team.status = TeamStatus.Deleted;
                 await transactionalEntityManager.save(TeamEntity, team);
 
                 // // 関連するチームメンバー情報も論理削除
@@ -298,13 +302,14 @@ export const deleteTeam = [
  * [user認証] チームメンバー追加
  */
 export const addTeamMember = [
-    body('teamId').isUUID(),
+    param('teamId').isUUID(),
     body('userId').isUUID(),
     body('role').isIn(Object.values(TeamMemberRoleType)),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { teamId, userId, role } = req.body;
+        const { teamId } = req.params as { teamId: string };
+        const { userId, role } = req.body;
 
         try {
             await ds.transaction(async transactionalEntityManager => {
@@ -345,6 +350,7 @@ export const addTeamMember = [
                 newMember.role = role;
 
                 newMember.createdBy = req.info.user.id;
+                newMember.updatedBy = req.info.user.id;
 
                 await transactionalEntityManager.save(TeamMemberEntity, newMember);
             });
@@ -536,10 +542,11 @@ export const removeTeamMember = [
                     }
                 }
 
-                // メンバーを削除（論理削除）
+                // メンバーを削除（物理削除）
                 targetMember.updatedBy = req.info.user.id;
 
-                await transactionalEntityManager.save(TeamMemberEntity, targetMember);
+                await transactionalEntityManager.remove(TeamMemberEntity, targetMember);
+                // await transactionalEntityManager.save(TeamMemberEntity, targetMember);
             });
 
             res.status(200).json({ message: 'チームメンバーが正常に削除されました' });

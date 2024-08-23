@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity, Generated, UpdateDateColumn, PrimaryColumn, Index, ViewEntity, ViewColumn } from 'typeorm';
 
 import { MyBaseEntity } from './base.js';
-import { ContentPartType, MessageGroupType, PredictHistoryStatus, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
+import { ContentPartType, MessageGroupType, PredictHistoryStatus, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamStatus, TeamType, ThreadStatus, ThreadVisibility } from '../models/values.js';
 
 @Entity()
 export class TeamEntity extends MyBaseEntity {
@@ -19,6 +19,9 @@ export class TeamEntity extends MyBaseEntity {
 
     @Column({ nullable: false, type: 'enum', enum: TeamType, })
     teamType!: TeamType;
+
+    @Column({ nullable: false, type: 'enum', enum: TeamStatus, default: TeamStatus.Normal })
+    status!: TeamStatus;
 }
 
 
