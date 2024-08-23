@@ -269,18 +269,18 @@ export const passwordReset = [
 
                         // 個人用デフォルトプロジェクト
                         const projectDef = new ProjectEntity();
-                        projectDef.name = 'default';
+                        projectDef.name = `${user.name}-default`;
                         projectDef.teamId = savedTeam.id;
                         projectDef.status = ProjectStatus.InProgress;
                         projectDef.visibility = ProjectVisibility.Default;
-                        projectDef.description = '個人用デフォルトプロジェクト';
-                        projectDef.label = '個人用デフォルト';
+                        projectDef.description = '個人用チャットプロジェクト';
+                        projectDef.label = '個人用チャット';
                         projectDef.createdBy = user.id;
                         projectDef.updatedBy = user.id;
 
                         // 個人用アーカイブ
                         const projectArch = new ProjectEntity();
-                        projectArch.name = 'default-archive';
+                        projectArch.name = `${user.name}-archive`;
                         projectArch.teamId = savedTeam.id;
                         projectArch.status = ProjectStatus.InProgress;
                         projectArch.visibility = ProjectVisibility.Team;
