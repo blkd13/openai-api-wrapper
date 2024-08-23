@@ -138,7 +138,7 @@ interface Ratelimit {
 class RunBit {
     attempts: number = 0;
     constructor(
-        public logObject: { output: (stepName: string, error: any) => string },
+        public logObject: { output: (stepName: string, error?: any, message?: string) => string },
         public tokenCount: TokenCount,
         public args: ChatCompletionCreateParamsBase,
         public options: RequestOptions,
@@ -384,6 +384,9 @@ class RunBit {
                 (_req as any).cached_content = req.cached_content; // コンテキストキャッシュを足しておく
             } else {
             }
+
+            let isOver128 = false;
+            let usageMetadata = '';
             runPromise = generateContentStream(req.region, req.resourcePath, my_vertexai.getAccessToken(), _req, undefined, req.generationConfig, req.safetySettings, undefined, {}).then(streamingResp => {
                 // かつてはModelを使って投げていた。
                 // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
@@ -405,8 +408,8 @@ class RunBit {
                         // [1] }
                         if (done) {
                             // ストリームが終了したらループを抜ける
-                            tokenCount.cost = tokenCount.calcCost();
-                            console.log(logObject.output('fine', ''));
+                            tokenCount.cost = tokenCount.calcCost() * (isOver128 ? 2 : 1);
+                            console.log(logObject.output('fine', '', usageMetadata));
                             observer.complete();
 
                             _that.openApiWrapper.fire();
@@ -428,6 +431,11 @@ class RunBit {
                         if (content.usageMetadata) {
                             // tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
                             // tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
+                            // 128k超えてるかどうか判定。
+                            if (content.usageMetadata.totalTokenCount) {
+                                isOver128 = content.usageMetadata.totalTokenCount > 128000;
+                            } else { }
+                            usageMetadata = JSON.stringify(content.usageMetadata);
 
                             // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
                             fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
@@ -436,7 +444,7 @@ class RunBit {
                         if (content.promptFeedback && content.promptFeedback.blockReason) {
                             // finishReasonが指定されている、かつSTOPではない場合はエラー終了させる。
                             // ストリームが終了したらループを抜ける
-                            tokenCount.cost = tokenCount.calcCost();
+                            tokenCount.cost = tokenCount.calcCost() * (isOver128 ? 2 : 1);
                             throw JSON.stringify({ promptFeedback: content.promptFeedback });
                         } else { }
 
@@ -452,7 +460,7 @@ class RunBit {
                         if (content.candidates[0] && content.candidates[0].content && content.candidates[0].content.parts && content.candidates[0].content.parts[0] && content.candidates[0].content.parts[0].text) {
                             const text = content.candidates[0].content.parts[0].text || '';
                             tokenBuilder += text;
-                            tokenCount.completion_tokens += text.length;
+                            tokenCount.completion_tokens += text.replace(/\s/g, '').length; // 空白文字を除いた文字数
 
                             // streamHandlerを呼び出す
                             observer.next(text);
@@ -461,7 +469,7 @@ class RunBit {
                         if (content.candidates[0] && content.candidates[0].finishReason && content.candidates[0].finishReason !== 'STOP') {
                             // finishReasonが指定されている、かつSTOPではない場合はエラー終了させる。
                             // ストリームが終了したらループを抜ける
-                            tokenCount.cost = tokenCount.calcCost();
+                            tokenCount.cost = tokenCount.calcCost() * (isOver128 ? 2 : 1);
                             throw JSON.stringify({ safetyRatings, candidate: content.candidates[0] });
                         } else { }
                         // candidates: [ { finishReason: 'OTHER', index: 0, content: [Object] } ],
@@ -859,6 +867,7 @@ export class OpenAIApiWrapper {
                                         entity.resToken = tokenCount.completion_tokens;
                                         entity.cost = tokenCount.cost;
                                         entity.status = stepName as any;
+                                        entity.message = String(error) || message; // 追加メッセージがあれば書く。
                                         entity.createdBy = 'batch'; // ここでは利用者不明
                                         entity.updatedBy = 'batch'; // ここでは利用者不明
                                         return runInTransaction.save(entity);
@@ -1186,8 +1195,8 @@ export class TokenCount {
         'msl-lg  ': { prompt: 0.00870, completion: 0.02400, },
         'dps-code': { prompt: 0.00000, completion: 0.00000, },
         'dps-chat': { prompt: 0.00000, completion: 0.00000, },
-        'gem-15fl': { prompt: 0.000125, completion: 0.00025, },
-        'gem-15pr': { prompt: 0.00250, completion: 0.00250, },
+        'gem-15fl': { prompt: 0.00001875, completion: 0.000075, },
+        'gem-15pr': { prompt: 0.00125, completion: 0.00375, },
         'gem-10pr': { prompt: 0.000125, completion: 0.00025, },
         'gem-10pv': { prompt: 0.000125, completion: 0.000125, },
         'vla31-40': { prompt: 0.000100, completion: 0.000100, },

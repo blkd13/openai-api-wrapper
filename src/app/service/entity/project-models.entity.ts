@@ -77,6 +77,9 @@ export class PredictHistoryEntity extends MyBaseEntity {
 
     @Column({ nullable: true, type: 'enum', enum: PredictHistoryStatus })
     status?: PredictHistoryStatus;
+
+    @Column({ nullable: true })
+    message?: string;
 }
 @Entity()
 export class PredictHistoryWrapperEntity extends MyBaseEntity {
