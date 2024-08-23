@@ -832,7 +832,7 @@ export class OpenAIApiWrapper {
 
                 class LogObject {
                     constructor(public baseTime: number) { }
-                    output(stepName: string, error: any = ''): string {
+                    output(stepName: string, error: any = '', message: string = ''): string {
                         const _take = Date.now() - this.baseTime;
                         const take = numForm(_take, 10);
                         this.baseTime = Date.now(); // baseTimeを更新しておく。
