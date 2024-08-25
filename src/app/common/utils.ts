@@ -138,6 +138,36 @@ export class Utils {
     }
 
     /**
+     * 期間文字列をミリ秒に変換する関数
+     * @param timeString 
+     * @returns 
+     */
+    static parseTimeStringToMilliseconds(timespanString: string): number {
+        const timeUnits: { [key: string]: number } = {
+            d: 1000 * 60 * 60 * 24,  // 日
+            h: 1000 * 60 * 60,       // 時
+            m: 1000 * 60,            // 分
+            s: 1000                  // 秒
+        };
+
+        let totalMilliseconds = 0;
+        const regex = /(\d+)([dhms])/g;
+        let match;
+
+        while ((match = regex.exec(timespanString)) !== null) {
+            const value = parseInt(match[1], 10);
+            const unit = match[2];
+
+            if (timeUnits[unit]) {
+                totalMilliseconds += value * timeUnits[unit];
+            } else {
+                throw new Error(`Invalid time unit: ${unit}`);
+            }
+        }
+        return totalMilliseconds;
+    }
+
+    /**
      * 配列を指定されたサイズごとに分割する関数
      * 
      * @param arr 分割する配列
@@ -491,13 +521,24 @@ export class Utils {
         return uuidRegex.test(uuid);
     }
 
+    static jsonOrder(obj: { [key: string]: any }, orderedKeys: string[]): { [key: string]: any } {
+        if (obj) { } else { return obj; }
+        // orderedKeysの順にオブジェクトを再構築し、それ以外のプロパティはそのまま追加
+        const reorderedObj: any = {};
+        // orderedKeysに指定されているものを先に入れる
+        orderedKeys.forEach(key => { if (key in obj) { reorderedObj[key] = obj[key]; } });
+        // その後に残りのプロパティを追加
+        Object.keys(obj).forEach(key => { if (!(key in reorderedObj)) { reorderedObj[key] = obj[key]; } });
+        return reorderedObj;
+    }
+
     /**
      * Pythonのrangeのようなもの
      * @param start 
      * @param end 
      * @param step 
      */
-    static *range(start: number, end?: number, step: number = 1): Generator<number> {
+    static * range(start: number, end?: number, step: number = 1): Generator<number> {
         // stepが0の場合は無限ループになるのでエラー
         if (step === 0) throw new Error('step cannot be 0');
         // endが指定されない場合はstartをendとして扱う

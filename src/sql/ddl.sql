@@ -1,5 +1,4 @@
 -- DROP VIEW predict_history_view;
-
 CREATE
 OR REPLACE VIEW predict_history_view AS
 SELECT
@@ -32,4 +31,7 @@ WHERE
         p1.status = ANY (
             ARRAY ['fine'::predict_history_entity_status_enum, 'error'::predict_history_entity_status_enum]
         )
-    );
+    )
+ORDER BY
+    created_at DESC;
+;

@@ -1,17 +1,21 @@
 // app.ts
 import * as dotenv from 'dotenv';
+dotenv.config();
 import express, { NextFunction, Request, Response, Router } from 'express';
+import cookieParser from 'cookie-parser';
+import useragent from 'express-useragent';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import morgan from 'morgan';
 import moment, { Moment } from "moment-timezone";
 
 import { authAdminRouter, authInviteRouter, authNoneRouter, authUserRouter } from './routes.js';
-
-// .envファイルを読み込む
-dotenv.config();
+import axios from 'axios';
 
 const app = express();
+
+app.use(useragent.express());
+app.use(cookieParser());
 
 // body-parser の設定を変更して、リクエストボディのサイズ制限を拡大する
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));

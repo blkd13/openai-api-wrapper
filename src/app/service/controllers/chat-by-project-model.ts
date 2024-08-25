@@ -87,29 +87,32 @@ async function buildArgs(userId: string, messageId: string, mode: 'countOnly' | 
     messageGroup: MessageGroupEntity,
     inDto: { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, }
 }> {
+    // 万が一にもwhere句の中の条件に対してundefinedが入ってはいけないので強制的に||''を足しておく。
+    // where句の条件項目に対してundefinedが入ってしまうと、条件自体が消えるので、結果的に適当に選ばれたやつが選択される。
+
     // メッセージの存在確認
     const message = await ds.getRepository(MessageEntity).findOneOrFail({
-        where: { id: messageId }
+        where: { id: messageId || '' }
     });
 
     // メッセージグループの存在確認
     const messageGroup = await ds.getRepository(MessageGroupEntity).findOneOrFail({
-        where: { id: message.messageGroupId }
+        where: { id: message.messageGroupId || '' }
     });
 
     // スレッドの存在確認
     const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
-        where: { id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+        where: { id: messageGroup.threadId || '', status: Not(ThreadStatus.Deleted) }
     });
 
     // プロジェクトの取得と権限チェック
     const project = await ds.getRepository(ProjectEntity).findOneOrFail({
-        where: { id: thread.projectId }
+        where: { id: thread.projectId || '' }
     });
 
     // メンバーチェック
     const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
-        where: { teamId: project.teamId, userId: userId }
+        where: { teamId: project.teamId || '', userId: userId || '' }
     });
 
     // 権限チェック
@@ -119,7 +122,7 @@ async function buildArgs(userId: string, messageId: string, mode: 'countOnly' | 
 
     // メッセージグループ全量取得
     const messageGroupList = await ds.getRepository(MessageGroupEntity).find({
-        where: { threadId: thread.id }
+        where: { threadId: thread.id || '' }
     });
     // メッセージグループマップ
     const messageGroupMap = messageGroupList.reduce((prev, curr) => { prev[curr.id] = curr; return prev }, {} as Record<string, MessageGroupEntity>);

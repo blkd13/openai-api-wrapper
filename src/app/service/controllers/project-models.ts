@@ -110,7 +110,7 @@ export const getTeamList = [
  * [user認証] チーム詳細取得（メンバー情報含む）
  */
 export const getTeam = [
-    param('id').isUUID(),
+    param('id').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -179,7 +179,7 @@ export const getTeam = [
  * [user認証] チーム情報更新
  */
 export const updateTeam = [
-    param('id').isUUID(),
+    param('id').notEmpty().isUUID(),
     // body('teamType').optional().isIn(Object.values(TeamType)),
     body('name').optional().isString().trim().notEmpty(),
     body('label').optional().isString().trim().notEmpty(),
@@ -246,7 +246,7 @@ export const updateTeam = [
  * [user認証] チーム削除
  */
 export const deleteTeam = [
-    param('id').isUUID(),
+    param('id').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -302,9 +302,9 @@ export const deleteTeam = [
  * [user認証] チームメンバー追加
  */
 export const addTeamMember = [
-    param('teamId').isUUID(),
-    body('userId').isUUID(),
-    body('role').isIn(Object.values(TeamMemberRoleType)),
+    param('teamId').notEmpty().isUUID(),
+    body('userId').notEmpty().isUUID(),
+    body('role').notEmpty().isIn(Object.values(TeamMemberRoleType)),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -372,7 +372,7 @@ export const addTeamMember = [
  * [user認証] チームメンバー一覧取得
  */
 export const getTeamMembers = [
-    param('teamId').isUUID(),
+    param('teamId').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -414,9 +414,9 @@ export const getTeamMembers = [
  * [user認証] チームメンバー情報更新
  */
 export const updateTeamMember = [
-    param('teamId').isUUID(),
-    param('userId').isUUID(),
-    body('role').isIn(Object.values(TeamMemberRoleType)),
+    param('teamId').notEmpty().isUUID(),
+    param('userId').notEmpty().isUUID(),
+    body('role').notEmpty().isIn(Object.values(TeamMemberRoleType)),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -489,8 +489,8 @@ export const updateTeamMember = [
  * [user認証] チームメンバー削除
  */
 export const removeTeamMember = [
-    param('teamId').isUUID(),
-    param('userId').isUUID(),
+    param('teamId').notEmpty().isUUID(),
+    param('userId').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -572,7 +572,7 @@ export const removeTeamMember = [
 export const createProject = [
     body('name').trim().notEmpty(),
     body('visibility').trim().notEmpty(),
-    body('teamId').trim().notEmpty(),
+    body('teamId').trim().notEmpty().isUUID(),
     // body('status').trim().notEmpty(),
     body('label').trim().notEmpty(),
     validationErrorHandler,
@@ -704,7 +704,7 @@ export const getProject = [
  * [user認証] プロジェクト更新
  */
 export const updateProject = [
-    param('id').trim().notEmpty(),
+    param('id').trim().notEmpty().isUUID(),
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -755,7 +755,7 @@ export const updateProject = [
  * [user認証] プロジェクト削除
  */
 export const deleteProject = [
-    param('id').trim().notEmpty(),
+    param('id').trim().notEmpty().isUUID(),
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -868,7 +868,7 @@ export const createThread = [
  * [認証なし/user認証] スレッド一覧取得
  */
 export const getThreadList = [
-    param('projectId').isUUID(),
+    param('projectId').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -932,7 +932,7 @@ export const getThreadList = [
  * [認証なし/user認証] スレッド取得
  */
 export const getThread = [
-    param('id').isUUID(),
+    param('id').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -990,7 +990,7 @@ export const getThread = [
  * [user認証] スレッド更新
  */
 export const updateThread = [
-    param('id').isUUID(),
+    param('id').notEmpty().isUUID(),
     body('title').optional().trim().isString(),
     body('description').optional().trim().isString(),
     body('inDtoJson').optional().trim().notEmpty(),
@@ -1064,8 +1064,8 @@ export const updateThread = [
  * [user認証] スレッドを別のプロジェクトに紐づける。
  */
 export const moveThread = [
-    param('id').isUUID(),
-    body('projectId').isUUID(),
+    param('id').notEmpty().isUUID(),
+    body('projectId').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -1129,7 +1129,7 @@ export const moveThread = [
  * [user認証] スレッド削除
  */
 export const deleteThread = [
-    param('id').isUUID(),
+    param('id').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -1427,7 +1427,7 @@ export const updateMessageTimestamp = [
  * [user認証] スレッド内のメッセージグループリスト取得
  */
 export const getMessageGroupList = [
-    param('threadId').isUUID(),
+    param('threadId').notEmpty().isUUID(),
     query('page').optional().isInt({ min: 1 }).toInt(),
     query('limit').optional().isInt({ min: 1, max: 1000 }).toInt(),
     validationErrorHandler,
@@ -1512,7 +1512,7 @@ export const getMessageGroupList = [
  * [認証なし/user認証] メッセージグループ詳細取得
  */
 export const getMessageGroupDetails = [
-    param('messageGroupId').isUUID(),
+    param('messageGroupId').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -1609,7 +1609,7 @@ export const getMessageGroupDetails = [
  * [user認証] メッセージコンテンツ部分取得
  */
 export const getMessageContentParts = [
-    param('messageId').isUUID(),
+    param('messageId').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -1683,7 +1683,7 @@ export const getMessageContentParts = [
  * [user認証] メッセージグループ削除
  */
 export const deleteMessageGroup = [
-    param('messageGroupId').isUUID(),
+    param('messageGroupId').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -1789,7 +1789,7 @@ export const deleteMessageGroup = [
  * [user認証] メッセージ削除
  */
 export const deleteMessage = [
-    param('messageId').isUUID(),
+    param('messageId').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -1875,7 +1875,7 @@ export const deleteMessage = [
  * [user認証] メッセージ削除
  */
 export const deleteContentPart = [
-    param('contentPartId').isUUID(),
+    param('contentPartId').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;

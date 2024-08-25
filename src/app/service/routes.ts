@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList } from './controllers/auth.js';
+import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateUserTokenMiddleGenerator } from './middleware/authenticate.js';
 import { chatCompletion, codegenCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
@@ -38,6 +38,7 @@ import { getDirectoryTree, getFile, saveFile } from './controllers/directory-tre
 import { deleteFile, downloadFile, getFileList, updateFileAccess, updateFileMetadata, uploadFiles } from './controllers/file-manager.js';
 import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
 import { UserRoleType } from './entity/auth.entity.js';
+import { getOAuthApiProxy } from './controllers/api-proxy.js';
 
 // routers/index.ts
 
@@ -54,11 +55,18 @@ authInviteRouter.use(authenticateInviteToken);
 
 // 個別コントローラーの設定
 authNoneRouter.post('/login', userLogin);
+authNoneRouter.get('/logout', logout);
 authNoneRouter.post('/guest', guestLogin);
 authNoneRouter.post('/onetime', onetimeLogin);
 authNoneRouter.post('/request-for-password-reset', requestForPasswordReset);
 authInviteRouter.post('/password-reset', passwordReset);
+authInviteRouter.post('/oauth-emailauth', oAuthEmailAuth);
 
+// OAuth2
+authNoneRouter.get('/oauth/:provider/login', userLoginOAuth2);
+authNoneRouter.get('/oauth/:provider/callback', userLoginOAuth2Callback);
+
+// ユーザー認証系
 authUserRouter.get('/user', getUser);
 authUserRouter.patch('/user', updateUser);
 authUserRouter.patch('/change-password', changePassword);
@@ -143,4 +151,7 @@ authAdminRouter.get(`/department`, getDepartment); // 部署情報取得
 authAdminRouter.patch(`/department/:departmentId`, patchDepartmentMember);
 
 
+// 
+authUserRouter.get(`/oauth/account`, getOAuthAccountList);
+authUserRouter.get(`/oauth/api/proxy/:provider/*`, getOAuthApiProxy);
 

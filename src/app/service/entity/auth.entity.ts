@@ -1,4 +1,4 @@
-import { Column, CreateDateColumn, Entity, Generated, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Generated, Index, PrimaryGeneratedColumn } from 'typeorm';
 import { MyBaseEntity } from './base.js';
 export enum UserStatus {
     // アクティブ系
@@ -84,8 +84,8 @@ export class InviteEntity extends MyBaseEntity {
     limit!: number;
 }
 
-@Entity("login_history")
-export class LoginHistory extends MyBaseEntity {
+@Entity()
+export class LoginHistoryEntity extends MyBaseEntity {
     @PrimaryGeneratedColumn('uuid')
     id!: string;
 
@@ -105,9 +105,39 @@ export class LoginHistory extends MyBaseEntity {
     authGeneration?: number;
 }
 
+@Entity()
+export class SessionEntity extends MyBaseEntity {
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;  // UUIDとしてセッションを一意に識別
+
+    @Column()
+    userId!: string;  // ユーザーID
+
+    @CreateDateColumn({ type: 'timestamptz' })
+    loginDate!: Date;  // ログイン日時
+
+    @Column()
+    ipAddress!: string;  // IPアドレス
+
+    @Column()
+    provider!: string;  // 認証プロバイダ（local, mattermost, boxなど）
+
+    @Column()
+    authInfo!: string;  // 認証に関連する追加情報（トークンIDや認証世代など）
+
+    @Column({ nullable: true, type: 'timestamptz' })
+    expiresAt?: Date;  // セッションの有効期限（無効化された場合は現在の日時に設定）
+
+    @Column({ type: 'timestamptz' })
+    lastActiveAt!: Date;  // 最後のアクティビティ日時
+
+    @Column({ nullable: true })
+    deviceInfo?: string;  // デバイス情報
+}
+
 // TODO 管理テーブル。いつか作りたいけど今はログがあるから後回し。
 // @Entity()
-export class UserAudit extends MyBaseEntity {
+export class UserAuditEntity extends MyBaseEntity {
     @PrimaryGeneratedColumn('uuid')
     id!: string;
 
@@ -146,7 +176,7 @@ export enum DepartmentRoleType {
 }
 
 @Entity()
-export class Department extends MyBaseEntity {
+export class DepartmentEntity extends MyBaseEntity {
     @PrimaryGeneratedColumn('uuid')
     id!: string;
 
@@ -158,7 +188,7 @@ export class Department extends MyBaseEntity {
 }
 
 @Entity()
-export class DepartmentMember extends MyBaseEntity {
+export class DepartmentMemberEntity extends MyBaseEntity {
     @PrimaryGeneratedColumn('uuid')
     id!: string;
 
@@ -175,5 +205,51 @@ export class DepartmentMember extends MyBaseEntity {
     label!: string;
 
     @Column({ default: DepartmentRoleType.Member })
-    departementRole!: DepartmentRoleType;
+    departmentRole!: DepartmentRoleType;
+}
+export enum OAuthAccountStatus {
+    // TODO ACTIVE以外のステータスは未作成
+    ACTIVE = 'ACTIVE', // アクティブ状態で、トークンが有効で使用可能
+    EXPIRED = 'EXPIRED', // トークンが期限切れの状態
+    REVOKED = 'REVOKED', // トークンが取り消された状態
+    PENDING = 'PENDING', // アカウントがまだ完全に設定されていない、または確認中の状態
+    ERROR = 'ERROR', // トークンの取得や更新に問題が発生した状態
+    DISCONNECTED = 'DISCONNECTED', // ユーザーがアカウントの接続を解除した状態
+}
+
+@Entity()
+@Index(['userId', 'provider', 'providerUserId'], { unique: true })
+export class OAuthAccountEntity extends MyBaseEntity {
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;
+
+    @Column()
+    userId!: string;
+
+    @Column()
+    provider!: string; // mattermost, box, gitlab,,,
+
+    @Column()
+    providerUserId!: string;
+
+    @Column({ nullable: true })
+    providerEmail?: string;
+
+    @Column()
+    accessToken!: string;
+
+    @Column({ nullable: true })
+    refreshToken?: string;
+
+    @Column({ nullable: true })
+    tokenExpiresAt?: Date;
+
+    @Column({ nullable: true })
+    tokenBody!: string;
+
+    @Column({ nullable: true })
+    userInfo!: string;
+
+    @Column({ default: OAuthAccountStatus.ACTIVE })
+    status!: string;
 }
