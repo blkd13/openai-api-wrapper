@@ -4,6 +4,66 @@
 
 OpenAI の API をラップして使いやすくしたものです。
 
+## プロジェクト概要
+
+**openai-api-wrapper** は、AI技術を活用した多機能なアプリケーション開発基盤です。
+様々なAIモデルの統合、外部サービスとの連携、柔軟な拡張性、フルスタック構成、バッチ・リアルタイム処理対応を特徴とし、高度なAI活用システム開発を効率化することを目指しています。
+
+## 主要機能
+
+* **多様なAIモデル統合:** OpenAI, Vertex AI, Anthropic, Mistral, Groq, DeepSeek など、様々なAIプロバイダーのモデルを統合的に利用可能
+* **外部サービス連携:** Box, Mattermost, GitLab, Gitea, Confluence, Jira との連携機能により、業務システムとのスムーズなデータ連携と高度な自動化を実現
+* **モジュール性と拡張性:**  機能が独立したモジュールとして実装されており、機能追加やカスタマイズが容易
+* **フルスタック構成:** バックエンド (Java/Spring Boot) からフロントエンド (Angular) まで、一貫した技術スタックで開発
+* **バッチ・リアルタイム処理:** バッチ処理 (エージェント) とリアルタイム処理 (APIサーバー、チャット機能) の両方をサポート
+
+## アーキテクチャ概要図
+
+```mermaid
+graph LR
+   subgraph フロントエンド
+       A[Angular Web UI] --> B(API Gateway)
+   end
+
+   subgraph バックエンド
+       B --> C{API Gateway}
+       C --> D[認証・認可 API]
+       C --> E[チャット API]
+       C --> F[ファイル管理 API]
+       C --> G[プロジェクト管理 API]
+       C --> H[AI連携 API]
+       D --> I(認証DB)
+       E --> J(チャットDB)
+       F --> K(ファイルストレージ)
+       H --> L{AI基盤}
+       L --> M[OpenAI]
+       L --> N[Vertex AI]
+       L --> O[Anthropic]
+       L --> P[Mistral AI]
+       L --> Q[Groq]
+       L --> R[DeepSeek]
+       subgraph 外部サービス連携
+           C --> S[Mattermost API]
+           C --> T[Box API]
+           C --> U[GitLab API]
+           C --> V[Gitea API]
+           C --> W[Confluence API]
+           C --> X[Jira API]
+       end
+   end
+
+   style B fill:#f9f,stroke:#333,stroke-width:2px
+   style C fill:#ccf,stroke:#333,stroke-width:2px
+   style L fill:#cff,stroke:#333,stroke-width:2px
+```
+
+## 技術スタック
+
+* **バックエンド:** Java, Spring Boot, TypeORM, PostgreSQL
+* **フロントエンド:** TypeScript, Angular, Tailwind CSS
+* **AI連携:** OpenAI API, Vertex AI API, Anthropic API, Mistral API, Groq API, DeepSeek API
+* **外部サービス連携:** Box API, Mattermost API, GitLab API, Gitea API, Confluence API, Jira API
+
 ## 機能
 
 1. **API 生データのロギング**: API の入出力の生データを`history`に保存します。
