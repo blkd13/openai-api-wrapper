@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+// 環境変数の設定が最優先
+import 'dotenv/config'; // dotenv を読み込む
+
 // typescriptのデバッグ用にsource-map-supportを読み込む
 import 'source-map-support/register.js'
 
@@ -78,7 +81,7 @@ const argv = yargs(hideBin(process.argv))
     .epilog(message.epilog) // ヘルプの最後に表示される
     .showHelpOnFail(true)
     .demandCommand(1, message.demandCommand)
-    // batch 用の設定 ------------------------------------------------------------------------------
+    // batch 用の設定 
     .example('$0 batch sample', `${message.example.batch} 'sample`)
     .command(
         ['batch <agent> [step]', 'b'], message.example.batch,
@@ -92,7 +95,7 @@ const argv = yargs(hideBin(process.argv))
             // batchの実行
             import(`./main/main-batch.js`).then(async (m) => { m.main(argv.agent as string || ''); });
         })
-    // rest api server 用の設定 --------------------------------------------------------------------
+    // rest api server 用の設定
     .example('$0 server -p 3000 -h localhost --cors', `${message.example.server}`)
     .command(
         ['server', 's'], message.example.server,
@@ -120,7 +123,7 @@ const argv = yargs(hideBin(process.argv))
             // serverの実行
             import(`./main/main-server.js`).then(async (m) => { m.main(argv.host, argv.port, argv.allowLocalFiles, argv.cors); });
         })
-    // generate 用の設定 ---------------------------------------------------------------------------
+    // generate 用の設定
     .example('$0 generate agent sample', message.generateAgent)
     .command(
         ['generate <gentype> <name>', 'g', `gen`], message.example.generate,

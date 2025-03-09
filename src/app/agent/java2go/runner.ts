@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'url';
 import * as fs from 'fs';
 import { BaseStep, MultiStep, StepOutputFormat } from "../../common/base-step.js";
-import { GPTModels } from '../../common/openai-api-wrapper.js';
+import { GPTModels } from '../../common/model-definition.js';
 import { Utils } from '../../common/utils.js';
 import fss from '../../common/fss.js';
 import path from 'path';

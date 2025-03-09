@@ -1,13 +1,14 @@
 import * as  fs from 'fs';
-import { Observable, defer, finalize, forkJoin, map, of, tap, toArray } from 'rxjs';
+import { Observable, defer, filter, finalize, forkJoin, map, of, tap, toArray } from 'rxjs';
 import { ChatCompletionContentPart, ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 import fss from './fss.js';
-import { GPTModels, OpenAIApiWrapper } from "./openai-api-wrapper.js";
+import { GPTModels } from '../common/model-definition.js';
+import { OpenAIApiWrapper } from "./openai-api-wrapper.js";
 import { Utils } from './utils.js';
 
 // aiApi as singleton (for queing requests)
-export const aiApi = new OpenAIApiWrapper({ allowLocalFiles: true, provider: 'openai' });
+export const aiApi = new OpenAIApiWrapper({ allowLocalFiles: true });
 
 export interface StructuredPrompt {
     title?: string;
@@ -324,6 +325,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
                 label: this.label
             }).pipe( // オペレータじゃなくSubscribeでも良かった。
                 // ストリームを結合する
+                map(data => data.choices[0]?.delta?.content || ''),
                 tap(data => {
                     content += data;
                     (isInit ? fss.appendFile : fss.writeFile)(`${outputPath}.tmp`, data, (err: any) => { if (err) console.error(err); });
@@ -363,6 +365,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
                                     }, {
                                         label: `${this.label}JsonCorrect`,
                                     }).pipe(
+                                        map(data => data.choices[0]?.delta?.content || ''),
                                         tap(data => {
                                             content += data;
                                             (isInit ? fss.appendFile : fss.writeFile)(`${outputPath}.tmp`, data, (err: any) => { if (err) console.error(err); });

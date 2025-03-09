@@ -138,6 +138,38 @@ export class Utils {
     }
 
     /**
+     * 期間文字列をミリ秒に変換する関数
+     * @param timeString 
+     * @returns 
+     */
+    static parseTimeStringToMilliseconds(timespanString: string): number {
+        const timeUnits: { [key: string]: number } = {
+            y: 1000 * 60 * 60 * 24 * 365.25,  // 年（平均的に365.25日）
+            M: 1000 * 60 * 60 * 24 * 30.44,   // 月（平均的に30.44日）
+            d: 1000 * 60 * 60 * 24,           // 日
+            h: 1000 * 60 * 60,                // 時
+            m: 1000 * 60,                     // 分
+            s: 1000                           // 秒
+        };
+
+        let totalMilliseconds = 0;
+        const regex = /(\d+)([yMdhms])/g;  // y, Mもサポート
+        let match;
+
+        while ((match = regex.exec(timespanString)) !== null) {
+            const value = parseInt(match[1], 10);
+            const unit = match[2];
+
+            if (timeUnits[unit]) {
+                totalMilliseconds += value * timeUnits[unit];
+            } else {
+                throw new Error(`Invalid time unit: ${unit}`);
+            }
+        }
+        return totalMilliseconds;
+    }
+
+    /**
      * 配列を指定されたサイズごとに分割する関数
      * 
      * @param arr 分割する配列
@@ -262,7 +294,7 @@ export class Utils {
      * @param {*} str 
      * @returns 
      */
-    static mdTrim(str0: string): string {
+    static mdTrim(str0: string, firstOnly: boolean = false): string {
         if (str0.indexOf('```') < 0) { return str0; }
         else {
             let flg = false;
@@ -273,9 +305,10 @@ export class Utils {
                 } else {
                 }
                 return flg;
-            }).join('\n');
+            }).filter((obj, index) => !firstOnly || index < 1).join('\n');
         }
     }
+
 
     /**
      * Markdown がコードブロックを含むかどうかにかかわらず、
@@ -450,12 +483,21 @@ export class Utils {
     }
 
     /**
+     * pathを分割する
+     * @param filepath 
+     * @returns 
+     */
+    static pathSplit(filepath: string): string[] {
+        return filepath.split(/\/|\\/);
+    }
+
+    /**
      * path.basename相当。いちいちpathをインポートするのだるいから作った。
      * @param filepath 
      * @returns 
      */
     static basename(filepath: string): string {
-        const parts = filepath.split(/\/|\\/);
+        const parts = Utils.pathSplit(filepath);
         return parts[parts.length - 1];
     }
 
@@ -484,6 +526,22 @@ export class Utils {
             return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         });
         return uuid;
+    }
+
+    static isUUID(uuid: string): boolean {
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[4][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        return uuidRegex.test(uuid);
+    }
+
+    static jsonOrder(obj: { [key: string]: any }, orderedKeys: string[]): { [key: string]: any } {
+        if (obj) { } else { return obj; }
+        // orderedKeysの順にオブジェクトを再構築し、それ以外のプロパティはそのまま追加
+        const reorderedObj: any = {};
+        // orderedKeysに指定されているものを先に入れる
+        orderedKeys.forEach(key => { if (key in obj) { reorderedObj[key] = obj[key]; } });
+        // その後に残りのプロパティを追加
+        Object.keys(obj).forEach(key => { if (!(key in reorderedObj)) { reorderedObj[key] = obj[key]; } });
+        return reorderedObj;
     }
 
     /**
@@ -820,6 +878,28 @@ export class Utils {
         return word + 's';
     }
 
+    static splitCodeBlock(text: string): string[] {
+        let split = text.split(/```/, -1);
+        // if (text.startsWith('```')) {
+        //     split.unshift('');
+        // } else { }
+        return split;
+    }
+
+    static replaceExtension(path: string, extension: string): string {
+        const splitPath = path.split('/');
+        const splitName = splitPath[splitPath.length - 1].split('.');
+        // ファイル名が拡張子付きの場合と拡張子無しの場合で分ける。
+        if (splitName.length > 1) {
+            splitName[splitName.length - 1] = extension;
+            splitPath[splitPath.length - 1] = splitName.join('.');
+            path = splitPath.join('/');
+        } else {
+            path = `${path}.${extension}`;
+        }
+        return path;
+    }
+
     // ここから下は失敗作
 
     /**
@@ -870,7 +950,128 @@ export class Utils {
         }
         return obj;
     }
+
+    static dataUrlSplit(dataUrl: string): [string, string] {
+        const index = dataUrl.indexOf(',');
+        return [dataUrl.substring(5, index), dataUrl.substring(index + 1)];
+    }
+    static dataUrlToData(dataUrl: string): any {
+        return Buffer.from(dataUrl.substring(dataUrl.indexOf(',') + 1), 'base64');
+    }
+
+    static errorFormat(error: any, print: boolean = true): string {
+        if (print) console.error(error);
+        try {
+            // console.error(Object.keys(error));
+            if (error && error['config']) {
+                // delete error.config.headers.Cookie;
+                const { method, url, data } = error['config'];
+                delete error['config'];
+                error['config'] = { method, url, data };
+            } else { }
+            error && error['stack'] && delete error['stack'];
+            if (error && error.response && error.response.data && error.response.data.error) {
+                // console.log(error.response.data.error);
+                return JSON.stringify(error.response.data.error, Utils.genJsonSafer());
+            } else {
+                const json = JSON.stringify(error, Utils.genJsonSafer());
+                if (json === '{}') {
+                    return error.toString();
+                } else {
+                    return JSON.stringify(error, Utils.genJsonSafer());
+                }
+            }
+        } catch (err) {
+            return error.toString();
+        }
+    }
+    static errorFormattedObject(error: any, print: boolean = true): unknown | string {
+        const errorString = Utils.errorFormat(error, print);
+        let errorObject;
+        try {
+            errorObject = JSON.parse(errorString);
+        } catch (error) {
+            // JSON化出来なければ文字列のまま
+            errorObject = errorString;
+        }
+        return errorObject;
+    }
 }
+
+
+class RequestLimiter {
+    private activeRequests: number = 0;
+    private queue: (() => void)[] = [];
+    private maxConcurrent: number;
+
+    constructor(maxConcurrent: number = 10) {
+        this.maxConcurrent = maxConcurrent;
+    }
+
+    async execute<T>(request: () => Promise<T>): Promise<T> {
+        // キューに入れる必要があるかチェック
+        if (this.activeRequests >= this.maxConcurrent) {
+            await new Promise<void>(resolve => {
+                this.queue.push(resolve);
+            });
+        }
+
+        // リクエストを実行
+        this.activeRequests++;
+        try {
+            const result = await request();
+            return result;
+        } finally {
+            this.activeRequests--;
+            // キューにある次のリクエストを実行
+            if (this.queue.length > 0) {
+                const next = this.queue.shift();
+                next?.();
+            }
+        }
+    }
+
+    getCurrentActiveRequests(): number {
+        return this.activeRequests;
+    }
+
+    getQueueLength(): number {
+        return this.queue.length;
+    }
+}
+
+// エラーハンドリングを含むより実践的な使用例
+export class EnhancedRequestLimiter extends RequestLimiter {
+    private retryCount: number;
+    private retryDelay: number;
+
+    constructor(maxConcurrent: number = 10, retryCount: number = 3, retryDelay: number = 1000) {
+        super(maxConcurrent);
+        this.retryCount = retryCount;
+        this.retryDelay = retryDelay;
+    }
+
+    async executeWithRetry<T>(request: () => Promise<T>): Promise<T> {
+        let lastError: Error | null = null;
+
+        for (let attempt = 0; attempt <= this.retryCount; attempt++) {
+            try {
+                return await this.execute(request);
+            } catch (error) {
+                lastError = error as Error;
+                if (attempt < this.retryCount) {
+                    // リトライ前に待機
+                    await new Promise(resolve => setTimeout(resolve, this.retryDelay * (attempt + 1)));
+                    continue;
+                }
+            }
+        }
+
+        throw lastError;
+    }
+}
+
+export const requestLimitation = new EnhancedRequestLimiter(300);
 
 // const code = `
 // Here is the JSON format for the Entities of the "User Management" Bounded Context:

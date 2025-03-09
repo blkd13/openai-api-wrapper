@@ -1,153 +1,207 @@
 import { fileURLToPath } from 'url';
+// import { chunk } from 'lodash';
+import _ from 'lodash';
 
-import { BaseStep, MultiStep, StepOutputFormat } from "../../common/base-step.js";
-import { GPTModels } from '../../common/openai-api-wrapper.js';
-import { Utils } from '../../common/utils.js';
-import fss from '../../common/fss.js';
+import { DataSource, In, IsNull, Not } from 'typeorm';
+import { MessageEntity, MessageGroupEntity } from '../../service/entity/project-models.entity.js';
+import { FileBodyEntity } from '../../service/entity/file-models.entity.js';
+import { ds } from '../../service/db.js';
 
-/**
- * runner.tsでは以下の3つが必須。
- * - BaseStepXXXクラスの作成：Stepクラスの元になるクラス。エージェント用の共通設定を書いておくクラス。
- * - StepXXXクラスの作成：BaseStepXXXを拡張して実際にどういう動きをするかを定義するクラス。
- * - mainの作成：Stepクラスをどの順番で動かすかを書いておくクラス。main-batch.tsから呼ばれるので、必ずexport async function main()で定義する必要がある。
- */
+import { convertPdf, convertToPdfMimeList } from '../../common/pdf-funcs.js';
 
-/**
- * このエージェント用の共通設定。
- * エージェントごとに設定したいデフォルト値が異なるのでrunnerの最初に書くことにした。
- */
-abstract class BaseStepSample extends BaseStep {
-    agentName: string = Utils.basename(Utils.dirname(import.meta.url));
-    model: GPTModels = 'gpt-4-1106-preview';
-    systemMessage = 'Experts in AI.'; // AI専門家
-    temperature: number = 0.0; // ランダム度合い。0に近いほど毎回同じ結果になる。プログラムのようなものは 0 に、文章系は 1 にするのが良い。
-    format = StepOutputFormat.MARKDOWN;
+interface OldMessageGroup {
+    id: string;
+    thread_id: string;
+    message_cluster_id: string | null;
+    type: string;
+    seq: number;
+    last_update: Date;
+    previous_message_id: string | null;
+    role: string;
+    label: string;
+
+    created_by: string;
+    updated_by: string;
+    created_at: Date;
+    updated_at: Date;
+    created_ip: string;
+    updated_ip: string;
 }
 
-/**
- * 最初のプロンプト。
- * このエージェント用の共通クラスであるBaseStepSampleを拡張する。
- */
-class Step0000_FirstStep extends BaseStepSample {
+interface OldMessage {
+    id: string;
+    seq: number;
+    last_update: Date;
+    message_group_id: string;
+    previous_message_id: string | null;
+    cache_id: string | null;
+    label: string;
 
-    // BaseStepSampleで指定したデフォルト値から変更したいものはここで定義すると上書きされる。
-    format = StepOutputFormat.JSON;
-
-    /**
-     * コンストラクタの中で chapters というオブジェクトリストを組み立てる。
-     * これが後のメソッドでMarkdownに変換されてプロンプトになる。
-     */
-    constructor() {
-        super();
-        // プロンプトを構造化しやすくするためのオブジェクト。
-        this.chapters = [{
-            // 指示を与えるChapter
-            title: `Instructions`,
-            content: `AIについて重要な要素を5個列挙してください`,
-            children: [
-                { title: `Prohibition`, content: `AIについての批判的な要素は対象外としてください。` },
-                {
-                    title: `Additional information`,
-                    content: `必ずしも正確な情報でなくともかまいません。`,
-                    children: [
-                        { content: `- 例えば、とても古くて今では使われていないような情報でも良いです。` }
-                    ]
-                },
-            ],
-        }, {
-            // 出力フォーマットを指定するChapter
-            title: `Output format`,
-            // 改行含む文章を入れるときは Utils.trimLines で囲うといい感じにインデントを除去してくれる。
-            content: Utils.trimLines(`
-                {"factors":["some answer",...]}
-            `),
-        }];
-
-        // 上記のchaterpsは投げるときに以下のようにmarkdownに変換される。
-        /**
-         * # Instructions
-         * 
-         * AIについて重要な要素を5個列挙してください
-         * 
-         * 
-         * ## Prohibition
-         * 
-         * AIについての批判的な要素は対象外としてください。
-         * 
-         * 
-         * ## Additional information
-         * 
-         * 必ずしも正確な情報でなくともかまいません。
-         * 
-         * - 例えば、とても古くて今では使われていないような情報でも良いです。
-         * 
-         * 
-         * 
-         * # Output format
-         * 
-         * {"factors":["some answer",...]}
-         * 
-         */
-    }
+    created_by: string;
+    updated_by: string;
+    created_at: Date;
+    updated_at: Date;
+    created_ip: string;
+    updated_ip: string;
 }
 
-/**
- * 最初のステップの結果を詳細化するステップ
- * 並列に展開するのでBaseStepではなく MultiStep を拡張する。
- * MultiStepではchapterではなく、childStepListを組み立てる。
- */
-class Step0010_DrillDown extends MultiStep {
+// CREATE TABLE message_group_entity_bk AS SELECT * FROM message_group_entity;
+// CREATE TABLE message_entity_bk AS SELECT * FROM message_entity;
+// CREATE TABLE thread_entity_bk AS SELECT * FROM thread_entity;
 
-    // クラスとして普通に自由に変数を作ってもよい。
-    factors!: string[];
+// INSERT INTO thread_entity (created_by, updated_by, created_at, updated_at, created_ip, updated_ip, thread_group_id, in_dto_json, status) 
+// SELECT created_by, updated_by, created_at, updated_at, created_ip, updated_ip, id, in_dto_json, 'Normal' FROM thread_entity_bk;
 
-    constructor() {
-        super();
+// INSERT INTO thread_group_entity (id, created_by, updated_by, created_at, updated_at, created_ip, updated_ip, project_id, visibility, title, description, last_update, status) 
+// SELECT id, created_by, updated_by, created_at, updated_at, created_ip, updated_ip, project_id, visibility::text::thread_group_entity_visibility_enum, title, description, last_update, status::text::thread_group_entity_status_enum FROM thread_entity_bk;
 
-        /**
-         * 実際のステップ定義はここで書く。
-         */
-        class Step0010_DrillDownChil extends BaseStepSample {
-            // 共通定義を上書きする場合はここで定義する。
-            systemMessage = 'You are someone who has been thinking about AI for a long time.'; // AIについて昔からずっと考えている人。
+// CREATE TABLE message_group_entity_newbk AS SELECT * FROM message_group_entity;
 
-            constructor(public factor: string) {
-                super();
-                // 複数並列処理するので、被らないようにラベルを設定する。（これがログファイル名になる）
-                this.label = `${this.constructor.name}_${Utils.safeFileName(factor)}`; // Utils.safeFileNameはファイル名として使える文字だけにするメソッド。
-                // 個別の指示を作成。
-                this.chapters = [
-                    {
-                        title: `Instructions`,
-                        content: `AIについて理解するための要素として、「${factor}」について日本語で詳しくレポートしてください。`,
-                    },
-                ];
+// UPDATE message_group_entity
+// SET thread_id = (
+//   SELECT id
+//   FROM thread_entity
+//   WHERE message_group_entity.thread_id = thread_entity.thread_group_id
+// )
+// WHERE EXISTS (
+//   SELECT 1
+//   FROM thread_entity
+//   WHERE message_group_entity.thread_id = thread_entity.thread_group_id
+// );
+
+
+
+
+export async function migrateMessages(dataSource: DataSource) {
+    // バックアップテーブルからデータを取得
+    const oldMessageGroups = await dataSource.query(
+        'SELECT * FROM message_group_entity_bk ORDER BY seq'
+    ) as OldMessageGroup[];
+
+    const oldMessages = await dataSource.query(
+        'SELECT * FROM message_entity_bk ORDER BY seq'
+    ) as OldMessage[];
+
+    // メッセージグループごとにメッセージをグループ化
+    const messagesByGroup: { [message_group_id: string]: OldMessage[] } = {};
+    const messageMap: { [message_id: string]: OldMessage } = {};
+    const messageGroupMap: { [message_group_id: string]: OldMessageGroup } = {};
+    oldMessageGroups.forEach(group => {
+        messageGroupMap[group.id] = group;
+    });
+    oldMessages.forEach(message => {
+        // console.dir(message);
+        // console.log(`Migrating message ${message.message_group_id} ${message.id}`);
+        messageMap[message.id] = message;
+        const messages = messagesByGroup[message.message_group_id] || [];
+        messages.push(message);
+        messagesByGroup[message.message_group_id] = messages;
+        // console.log(`Migrated  message ${message.message_group_id} ${message.id}`);
+    });
+
+    // 新しいエンティティを作成して保存
+    const messageGroupRepo = dataSource.getRepository(MessageGroupEntity);
+    const messageRepo = dataSource.getRepository(MessageEntity);
+
+    try {
+        // トランザクション内で処理を実行
+        await dataSource.transaction(async transactionalEntityManager => {
+            for (const oldGroup of oldMessageGroups) {
+                console.log(`Migrating message group ${oldGroup.id}`);
+                const messages = messagesByGroup[oldGroup.id] || [];
+                console.log(`Messages: ${messages.length}`);
+
+                // メッセージグループの変更履歴を管理するための変数
+                let previousMessageGroupId: string | null = null;
+
+                // 新しいメッセージグループを作成
+                const newGroup = new MessageGroupEntity();
+                let previous_message_id = messageGroupMap[oldGroup.id].previous_message_id;
+                let previous_message_group_id;
+                if (previous_message_id) {
+                    if (messageMap[previous_message_id]) {
+                    } else {
+                        console.log(`SKIP-${previous_message_id}`)
+                        continue;
+                    }
+                    previous_message_group_id = messageMap[previous_message_id].message_group_id;
+                }
+
+                // 同じグループ内のメッセージを新しい形式に変換
+                for (let i = 0; i < messages.length; i++) {
+                    console.log(`Migrating message ${messages[i].id}`);
+                    const message = messages[i];
+
+                    Object.assign(newGroup, {
+                        id: (i === 0 ? oldGroup.id : undefined) as any,
+                        threadId: oldGroup.thread_id,
+                        // messageClusterId: oldGroup.message_cluster_id,
+                        type: oldGroup.type,
+                        // seq: oldGroup.seq,
+                        // argsIndex: 0,
+                        previousMessageGroupId: previous_message_group_id,
+                        role: oldGroup.role,
+                        // editedRootMessageGroupId: i === 0 ? undefined : oldGroup.id, // 
+                        versionNumber: i + 1,
+                        isActive: i === messages.length - 1, // 最新のバージョンのみアクティブ
+                        createdBy: oldGroup.created_by,
+                        updatedBy: oldGroup.updated_by,
+                        createdAt: oldGroup.created_at,
+                        updatedAt: oldGroup.updated_at,
+                        createdIp: oldGroup.created_ip,
+                        updatedIp: oldGroup.updated_ip,
+                    });
+
+                    try {
+                        await transactionalEntityManager.save(newGroup);
+                    } catch (error) {
+                        console.error('Failed to save message group:', error);
+                        throw error;
+                    }
+
+                    // 新しいメッセージを作成
+                    const newMessage = new MessageEntity();
+                    Object.assign(newMessage, {
+                        id: message.id,
+                        // seq: message.seq,
+                        subSeq: 0,
+                        messageGroupId: newGroup.id,
+                        cacheId: message.cache_id,
+                        label: message.label,
+                        editedRootMessageId: undefined,
+                        versionNumber: 1,
+                        isActive: true, // 最新のバージョンのみアクティブ
+                        createdBy: message.created_by,
+                        updatedBy: message.updated_by,
+                        createdAt: message.created_at,
+                        updatedAt: message.updated_at,
+                        createdIp: message.created_ip,
+                        updatedIp: message.updated_ip,
+                    });
+
+                    await transactionalEntityManager.save(newMessage);
+
+                    console.log(`Migrated  message ${message.id}`);
+                }
             }
-        }
+        });
 
-        // 前のステップの結果を読み込む（ステップを new して .formed でそのステップの結果にアクセスできる）
-        const firstStepResult = JSON.parse(new Step0000_FirstStep().formed) as { factors: string[] };
-        this.factors = firstStepResult.factors;
-        // childStepListを組み立て。
-        this.childStepList = this.factors.map(targetName => new Step0010_DrillDownChil(targetName));
-    }
-
-    /**
-     * 後処理系は postProcess で。
-     * 結果を1つのファイルにまとめる。
-     * @param result 
-     * @returns 
-     */
-    postProcess(result: string[]): string[] {
-        // タイトルを付けてレポート形式にする。
-        const reportList = result.map((targetName: string, index: number) => `# ${this.factors[index]}\n\n${targetName}`);
-        // 全部まとめてファイルに出力する。
-        const outputFileName = `results/${this.constructor.name}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-report_all.md`;
-        fss.writeFileSync(outputFileName, reportList.join('\n\n---\n\n'));
-        return result;
+    } catch (error) {
+        console.error('Migration failed:', error);
+        throw error;
     }
 }
 
+// エラーハンドリング用のラッパー関数
+export async function executeMigration(dataSource: DataSource) {
+    try {
+        await migrateMessages(dataSource);
+        console.log('Migration completed successfully');
+    } catch (error) {
+        console.error('Migration failed:', error);
+        throw error;
+    }
+}
 /**
  * 必ず main() という関数を定義する。
  * promiseチェーンで順次実行させる。
@@ -161,16 +215,63 @@ class Step0010_DrillDown extends MultiStep {
  */
 export async function main() {
     let obj;
-    return Promise.resolve().then(() => {
-        obj = new Step0000_FirstStep();
-        obj.initPrompt();
-        return obj.run();
-    }).then(() => {
-        obj = new Step0010_DrillDown();
-        obj.initPrompt();
-        return obj.run();
-    }).then(() => {
-    });
+
+
+    // --- サンプル実行 ---
+    (async () => {
+        try {
+            // ファイル
+            let files = await ds.getRepository(FileBodyEntity).find({
+                where: { fileType: In(['application/pdf', ...convertToPdfMimeList]), metaJson: {} },
+            });
+            console.log(`file time ${new Date()} files ${files.length}`);
+            files = files.filter(file => file);
+
+
+            for (const chunkData of _.chunk(files, 1)) {
+                await ds.transaction(async tm => {
+                    console.log(`file time ${new Date()} chunk ${chunkData.length}`);
+                    for (const fileBody of chunkData) {
+                        const fileBodyForSave = await convertPdf(tm, fileBody);
+                        await tm.save(FileBodyEntity, fileBodyForSave);
+                    }
+                });
+            }
+        } catch (error) {
+            console.error("PDF の抽出中にエラーが発生しました:", error);
+        }
+    })();
+
+    // console.log('Migration started');
+    // const dataSource = ds;
+    // // await dataSource.initialize();
+    // await executeMigration(dataSource);
+
+    // console.log(tokenCountedFileBodyList);
+
+    // const messageMessageGroupThreadList = await dataSource.query(`
+    //     SELECT m.*, mg.*, t.* 
+    //     FROM message_entity m 
+    //     INNER JOIN message_group_entity mg
+    //     ON mg.id::text = m.message_group_id 
+    //     INNER JOIN thread_entity t
+    //     ON t.id::text = mg.thread_id
+    //   `);
+    // for (const row of messageMessageGroupThreadList) {
+    //     console.dir(`Message: ${row.id} ${row.label.replace(/\n/g, '')}---------------------------------`);
+    //     console.dir(row);
+    // }
+
+    // return Promise.resolve().then(() => {
+    //     obj = new Step0000_FirstStep();
+    //     obj.initPrompt();
+    //     return obj.run();
+    // }).then(() => {
+    //     obj = new Step0010_DrillDown();
+    //     obj.initPrompt();
+    //     return obj.run();
+    // }).then(() => {
+    // });
 }
 
 

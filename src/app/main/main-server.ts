@@ -4,6 +4,7 @@ import * as url from 'url';
 import { ChatCompletionCreateParamsStreaming } from 'openai/resources/chat/completions';
 
 import { OpenAIApiWrapper } from '../common/openai-api-wrapper.js';
+import { map } from 'rxjs/dist/types/index.js';
 
 interface Client {
     id: string;
@@ -188,7 +189,9 @@ const server = http.createServer((req, res) => {
             aiApi.chatCompletionObservableStream(
                 json.args, {
                 label: `chat-${clientId}-${threadId}`,
-            }).subscribe({
+            }).pipe(
+                map(data => data.choices[0]?.delta?.content || ''),
+            ).subscribe({
                 next: next => {
                     const resObj = {
                         data: { threadId, content: next },

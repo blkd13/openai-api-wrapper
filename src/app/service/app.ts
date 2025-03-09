@@ -1,21 +1,31 @@
 // app.ts
-import * as dotenv from 'dotenv';
-import express, { NextFunction, Request, Response, Router } from 'express';
+// 環境変数の設定が最優先
+import 'dotenv/config'; // dotenv を読み込む
+import 'source-map-support/register.js';
+
+import express, { Request, Response, Router } from 'express';
+import cookieParser from 'cookie-parser';
+import useragent from 'express-useragent';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import morgan from 'morgan';
 import moment, { Moment } from "moment-timezone";
 
-import { authInviteRouter, authNoneRouter, authUserRouter } from './routes.js';
-
-// .envファイルを読み込む
-dotenv.config();
+import { authAdminRouter, authInviteRouter, authNoneRouter, authOAuthRouter, authUserRouter } from './routes.js';
+import { createProxyMiddleware } from 'http-proxy-middleware';
+import { getAccessToken, getOAuthApiProxy } from './api/api-proxy.js';
+import { authenticateUserTokenMiddleGenerator, authenticateUserTokenWsMiddleGenerator } from './middleware/authenticate.js';
 
 const app = express();
+
+app.use(useragent.express());
+app.use(cookieParser());
 
 // body-parser の設定を変更して、リクエストボディのサイズ制限を拡大する
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 app.use(bodyParser.json({ limit: '50mb' })); // JSONパーサー
+app.set('trust proxy', 1);
+
 
 // これはデバッグ用
 app.use(cors()); // CORS許可
@@ -32,14 +42,60 @@ const rootRouter = Router();
 rootRouter.use('/', authNoneRouter);
 // ユーザー/パスワード認証が必要なルート
 rootRouter.use('/user', authUserRouter);
+// admin認証が必要なルート
+rootRouter.use('/admin', authAdminRouter);
 // ワンタイムトークン認証が必要なルート
 rootRouter.use('/invite', authInviteRouter);
 
 app.use('/api', rootRouter);
 // 認証系ルート設定終了
 
-
 // サーバー起動
-app.listen(3000, () => {
+const server = app.listen(3000, () => {
     console.log('Server is running on port 3000');
+});
+server.setMaxListeners(20); // 最大リスナー数を20に設定
+
+const { OAUTH2_MATTERMOST_URI_BASE } = process.env;
+
+server.on('upgrade', (req, res, header) => {
+    // console.log(`upgrade `);
+    // console.log(req.headers.cookie);
+    const wsmw = authenticateUserTokenWsMiddleGenerator();
+    const next = async () => {
+        const pathRewrite = {
+            '/api/user/oauth/api/proxy/mattermost': '',
+        };
+        // console.log(`call next`);
+        const accessToken = await getAccessToken((req as any).info.user.id, 'mattermost');
+        // console.log(`accessToken ${accessToken}`);
+        createProxyMiddleware({
+            target: OAUTH2_MATTERMOST_URI_BASE,
+            changeOrigin: true,
+            pathRewrite: pathRewrite,
+            selfHandleResponse: true, //  falseにしてデフォルトの挙動にさせたらチャンクが混線したのでダメ。
+            ws: true,
+            on: {
+                proxyReqWs: (proxyReq, req, socket, options, head) => {
+                    // ws用（マタモ専用）
+                    // 何故かoriginヘッダーを消すと繋がる。
+                    proxyReq.removeHeader('origin');
+                    // Authorizationヘッダーだと認証が通らないのでCookieに書く。
+                    // proxyReq.setHeader('Authorization', 'xxxxxxxxxxxxxxxxxxxx');
+                    proxyReq.setHeader('Cookie', `MMAUTHTOKEN=${accessToken}; ` + (proxyReq.getHeader('Cookie') || ''));
+                    // console.log('wsProxyReqWs:ws-connetc-upgrade-start', proxyReq.path);
+                },
+                proxyReq: (proxyReq, req) => {
+                    // console.log(`wsProxyReq.path=${proxyReq.path}`);
+                    proxyReq.setHeader('Authorization', `Bearer ${accessToken}`);
+                    // // TODO エラーになるのでとりあえず圧縮を無効にする
+                    // proxyReq.removeHeader('accept-encoding');
+                },
+                proxyRes: async (proxyRes, req, res) => {
+                    // console.log(`wsProxyRes.path=${proxyRes.url}`);
+                }
+            }
+        }).upgrade(req, res as any, header);
+    };
+    wsmw(req as any, res, header, next);
 });

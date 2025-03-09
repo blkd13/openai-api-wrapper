@@ -1,9 +1,10 @@
 
-export enum PredictHIstoryStatus {
+export enum PredictHistoryStatus {
     Start = 'start',
-    Queue = 'queue',
+    Enque = 'enque',
     Fine = 'fine',
     Error = 'error',
+    Wait = 'wait',
 }
 
 export enum ProjectVisibility {
@@ -18,11 +19,19 @@ export enum TeamType {
     Team = 'Team', // チーム用
 }
 
-export enum ThreadVisibility {
+export enum ThreadGroupVisibility {
     Public = 'Public', // 公開スレッド（ログイン不要）
     Team = 'Team', // チーム内のみ（デフォルト）
     Login = 'Login', // ログインユーザーのみ
     Temporary = 'Temporary', // 一時的なスレッド（デフォルト）
+}
+
+export enum ThreadGroupType {
+    Normal = 'Normal', // 通常スレッド
+    Default = 'Default', // デフォルト設定用（各ユーザー1個しか作らない）
+    Template = 'Template', // テンプレートスレッド
+    // Announcement = 'Announcement', // お知らせスレッド
+    // Temporary = 'Temporary', // 一時的なスレッド
 }
 
 export enum MessageGroupType {
@@ -30,15 +39,42 @@ export enum MessageGroupType {
     Parallel = 'Parallel',
     Regenerated = 'Regenerated',
 }
+export enum MessageClusterType {
+    Single = 'Single',
+    Parallel = 'Parallel',
+    Serial = 'Serial',
+    Regenerated = 'Regenerated',
+}
 
 export enum ContentPartType {
     TEXT = 'text',
-    BASE64 = 'base64',
-    URL = 'url',
-    FILE = 'file',
+    ERROR = 'error',
+    BASE64 = 'base64', // 軽量コンテンツをロードするときに使う、メッセージオブジェクトの配下にくっつけてやるパターン。最初の一回はBase64で登録して、使うときはfileになっている感じ。
+    URL = 'url', // インターネットのリンク。基本使わないつもり。
+    STORE = 'store', // GCPのStorageに登録されているもの。gs://
+    FILE = 'file', // サーバー側にファイルとして保存済みのもの // fileになっているものは登録済みなので、登録処理の時は無視する。
+    TOOL = 'tool', // function_call
+    TOOL_CALL = 'tool_call', // function_call
+    TOOL_RESULT = 'tool_result', // function_call
+    META = 'meta', // メタ情報。groundingの結果など。
+}
+
+export enum ContentPartStatus {
+    Normal = 'Normal', // 普通
+    Deleted = 'Deleted', // 削除済み
+}
+
+export enum FileGroupType {
+    UPLOAD = 'upload', // アップロードの単位
+    MERGED = 'merged', // 色々くっつけて自作するやつ
+    GIT = 'git', // git
+    GITLAB = 'gitlab', // gitlab
+    GITEA = 'gitea', // gitea
+    BOX = 'box', // box
 }
 
 export enum TeamMemberRoleType {
+    Maintainer = 'Maintainer', // メンテナ
     Owner = 'Owner', // オーナー
     Admin = 'Admin', // 管理者（オーナーに統合したので今は使わない）
     Member = 'Member', // メンバー（スレッドの作成、編集、削除ができる）
@@ -46,7 +82,17 @@ export enum TeamMemberRoleType {
     Guest = 'Guest', // ゲスト（スレッドの閲覧のみ）
 }
 
+export enum TeamStatus {
+    Normal = 'Normal', // 普通
+    Deleted = 'Deleted', // 削除済み
+}
+
 export enum ThreadStatus {
+    Normal = 'Normal', // 普通
+    Deleted = 'Deleted', // 削除済み
+}
+
+export enum ThreadGroupStatus {
     Normal = 'Normal', // 普通
     Deleted = 'Deleted', // 削除済み
 }
