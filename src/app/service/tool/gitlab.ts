@@ -392,11 +392,11 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得`, responseType: 'text' },
+            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得（ls風）`, responseType: 'text' },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_repository_tree`,
-                    description: `指定したプロジェクトのリポジトリ内のファイルとディレクトリ一覧を取得`,
+                    description: `指定したプロジェクトのリポジトリ内のファイルとディレクトリ一覧をls形式で取得`,
                     parameters: {
                         type: 'object',
                         properties: {
@@ -416,45 +416,111 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                             },
                             recursive: {
                                 type: 'boolean',
-                                description: '再帰的に取得するかどうか',
+                                description: '再帰的に取得するかどうか (trueの場合、サブディレクトリも含めて全取得)',
+                                default: true
+                            },
+                            show_directories: {
+                                type: 'boolean',
+                                description: 'ディレクトリも表示するかどうか',
                                 default: false
-                            },
-                            per_page: {
-                                type: 'number',
-                                description: '1ページあたりの結果数（最大100）',
-                                default: 20,
-                                minimum: 1,
-                                maximum: 100
-                            },
-                            page: {
-                                type: 'number',
-                                description: 'ページ番号',
-                                default: 1,
-                                minimum: 1
                             }
                         },
                         required: ['project_id']
                     }
                 }
             },
-            handler: async (args: { project_id: number, path: string, ref: string, recursive: boolean, per_page: number, page: number }): Promise<any> => {
-                let { project_id, path, ref, recursive, per_page, page } = args;
+            handler: async (args: { project_id: number, path: string, ref: string, recursive: boolean, show_directories: boolean }): Promise<any> => {
+                let { project_id, path, ref, recursive, show_directories } = args;
                 path = path || '';
                 ref = ref || 'main';
-                recursive = recursive || false;
-                per_page = Math.max(Math.min(per_page || 20, 100), 1);
-                page = Math.max(page || 1, 1);
+                recursive = recursive !== false; // 明示的にfalseの場合のみfalse
+                show_directories = show_directories === true; // 明示的にtrueの場合のみtrue
 
                 const { e, oAuthAccount } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
 
-                const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/tree?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}&recursive=${recursive}&per_page=${per_page}&page=${page}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get<{ id: string, name: string, type: 'tree' | 'blob', path: string, mode: string, }[]>(url))).data;
-                const text = result
-                    .sort((a, b) => a.path.localeCompare(b.path))
-                    .filter(f => f.type !== 'tree') // ディレクトリは除外する
-                    .map(f => `${f.type}\t${f.mode}\t${f.id}\t${f.path}`).join('\n');
-                return `uriBase=${e.uriBase}\n\n${text}\n\n`;
+                // GitLabのAPIでは最大100件しか一度に取得できないので、100に設定
+                const per_page = 100;
+                let allItems: any[] = [];
+                let currentPage = 1;
+                let hasMorePages = true;
+
+                // 全ページ取得
+                while (hasMorePages) {
+                    const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/tree?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}&recursive=${recursive}&per_page=${per_page}&page=${currentPage}`;
+
+                    try {
+                        const response = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url));
+                        const result = response.data;
+
+                        if (result.length > 0) {
+                            allItems = allItems.concat(result);
+                            currentPage++;
+                        } else {
+                            hasMorePages = false;
+                        }
+                    } catch (error) {
+                        return {
+                            error: "ファイル一覧の取得に失敗しました",
+                            details: Utils.errorFormattedObject(error),
+                        };
+                    }
+                }
+
+                // 結果をソート
+                allItems.sort((a, b) => {
+                    // 1. タイプでソート (ディレクトリが先)
+                    if (a.type !== b.type) {
+                        return a.type === 'tree' ? -1 : 1;
+                    }
+                    // 2. パス名でソート
+                    return a.path.localeCompare(b.path);
+                });
+
+                // 表示用にフィルタリング
+                if (!show_directories) {
+                    allItems = allItems.filter(item => item.type !== 'tree');
+                }
+
+                // 出力形式
+                let output = `# Repository files for project ${project_id}, path: ${path || '/'}, recursive: ${recursive}\n`;
+                output += `# uriBase=${e.uriBase}\n\n`;
+
+                // ls風の表示
+                const formattedItems = allItems.map(item => {
+                    const type = item.type === 'tree' ? 'd' : '-';
+                    const mode = item.mode || '100644'; // デフォルトパーミッション
+                    const formattedMode = formatMode(mode);
+                    const name = item.path.split('/').pop(); // パスの最後の部分を取得
+                    const fullPath = item.path;
+                    return `${type}${formattedMode} ${item.id} ${fullPath}${item.type === 'tree' ? '/' : ''}`;
+                });
+
+                output += formattedItems.join('\n');
+                return output;
             }
-        },
+            }
     ];
 };
+
+
+// Git modeをls -l風の権限表記に変換する補助関数
+function formatMode(mode: string): string {
+    // Gitのモード (例: 100644) をls風の表記 (例: rwxr-xr-x) に変換
+    const m = parseInt(mode, 8); // 8進数として解釈
+
+    let result = '';
+    // オーナー権限
+    result += (m & 0o400) ? 'r' : '-';
+    result += (m & 0o200) ? 'w' : '-';
+    result += (m & 0o100) ? 'x' : '-';
+    // グループ権限
+    result += (m & 0o40) ? 'r' : '-';
+    result += (m & 0o20) ? 'w' : '-';
+    result += (m & 0o10) ? 'x' : '-';
+    // その他の権限
+    result += (m & 0o4) ? 'r' : '-';
+    result += (m & 0o2) ? 'w' : '-';
+    result += (m & 0o1) ? 'x' : '-';
+
+    return result;
+}

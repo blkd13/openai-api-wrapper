@@ -66,7 +66,7 @@ const mistral = new OpenAI({
 const anthropic = new Anthropic({
     apiKey: process.env['ANTHROPIC_API_KEY'] || 'dummy',
     httpAgent: options.httpAgent,
-    maxRetries: 0,
+    maxRetries: 3,
 });
 
 const deepSeek = new OpenAI({
@@ -75,8 +75,9 @@ const deepSeek = new OpenAI({
 });
 
 const local = new OpenAI({
-    apiKey: 'dummy',
-    baseURL: 'http://localhost:8913/v1',
+    apiKey: process.env['LOCAL_AI_API_KEY'] || 'dummy',
+    baseURL: process.env['LOCAL_AI_BASE_URL'] || 'dummy',
+    httpAgent: false,
 });
 
 // 環境変数からAPIキーとエンドポイントを取得
@@ -126,20 +127,20 @@ function getEncoder(model: TiktokenModel): Tiktoken {
     return encoderMap[model];
 }
 
-export function providerPrediction(model: string, provider?: AiProvider) {
+export function providerPrediction(model: string, provider?: AiProvider): AiProvider {
     // providerが指定されている場合は、そのプロバイダーを使う。
     // 指定されていなかったら、モデル名からプロバイダーを推測する。
     if (provider) {
-        return provider;
+        return provider as AiProvider;
     } else if (model.startsWith('gemini-')) {
         return 'vertexai';
     } else if (model.startsWith('meta/llama3-')) {
         return 'openapi_vertexai';
     } else if (model.startsWith('claude-')) {
-        // return 'anthropic';
+        return 'anthropic';
         return 'anthropic_vertexai';
     } else if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3')) {
-        // return 'openai';
+        return 'openai';
         return 'azure';
     } else {
         // 未知モデルはvertexのモデルガーデンと思われるのでそっちに向ける
@@ -253,7 +254,7 @@ class RunBit {
 
                         let type: 'text' | 'tool_use';
                         let index = 0;
-                        const toolCallUUID = Utils.generateUUID(); // ツールコールのUUIDを一つに統一するためとりあえず生成しておく
+                        // const toolCallUUID = Utils.generateUUID(); // ツールコールのUUIDを一つに統一するためとりあえず生成しておく
                         // ストリームからデータを読み取る非同期関数
                         async function readStream() {
                             while (true) {
@@ -1015,7 +1016,8 @@ class RunBit {
                         } else { }
                     });
                 }
-
+                // TODO無理矢理すぎる。。proxy設定のやり方を再考する。
+                options.httpAgent = client.httpAgent;
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
                 runPromise = (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
                     .withResponse().then((response) => {
@@ -1092,8 +1094,9 @@ class RunBit {
         await runPromise.catch(async error => {
             this.attempts++;
 
+            const formattedError = Utils.errorFormat(error, false);
             // エラーを出力
-            console.log(logObject.output('error', Utils.errorFormat(error, false)));
+            console.log(logObject.output('error', formattedError));
             // 400エラーの場合は、リトライしない
             if (error.toString().startsWith('Error: 400')) {
                 observer.error(error);
@@ -1131,7 +1134,10 @@ class RunBit {
             } else { }
             // レートリミットに引っかかった場合は、レートリミットに書かれている時間分待機する。
             const pattern = /(?<!\d)429(?!\d)/; // 429で前後が数字じゃないパターン。タイムスタンプが偶然429を含むと変なことにはなるので、もうちょっとチェックを追加した方が良いかもしれない。
-            if (pattern.test(error.toString()) || pattern.test(JSON.stringify(error, Utils.genJsonSafer()))) {
+            const pattern2 = /(?<!\d)Overloaded(?!\d)/; // 429で前後が数字じゃないパターン。タイムスタンプが偶然429を含むと変なことにはなるので、もうちょっとチェックを追加した方が良いかもしれない。
+            // console.log(`UUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU\n` + error.toString());
+            // console.log(`UUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU\n` + formattedError);
+            if (pattern.test(formattedError) || pattern2.test(formattedError)) {
                 let waitMs = Number(String(ratelimitObj.resetRequests).replace('ms', '')) || 0;
                 let waitS = Number(String(ratelimitObj.resetTokens).replace('s', '')) || 0;
                 // 待ち時間が設定されていなかったらとりあえずRPM/TPMを回復させるために60秒待つ。

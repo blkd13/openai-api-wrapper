@@ -42,7 +42,7 @@ export const boxApiItem = [
             if (fromcache) {
                 // fromcache=trueの場合はキャッシュを返す
                 try {
-                    let itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ userId: req.info.user.id, itemId });
+                    let itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ userId: req.info.user.id, itemId, offset, limit });
                     // キャッシュがあればそれを先に返しておく。APIの結果が返ってきたらそれでキャッシュを上書きしておく。
                     res.json(itemEntity.data);
                 } catch (e) {
@@ -61,26 +61,32 @@ export const boxApiItem = [
 
                 const response = await e.axios.get<BoxApiFolder>(url, { headers: { Authorization: `Bearer ${req.info.oAuth.accessToken}`, }, });
                 const folder = response.data;
+                console.log(`Retrieved ${folder.item_collection.entries.length} items. Total count: ${folder.item_collection.total_count}`);
+                if (folder.item_collection.entries.length > 0) {
+                    const savedFolder = await ds.transaction(async (tm) => {
+                        let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ userId: req.info.user.id, type, itemId, offset, limit });
+                        if (itemEntity) {
+                        } else {
+                            itemEntity = new BoxItemEntity();
+                            itemEntity.userId = req.info.user.id;
+                            itemEntity.itemId = itemId;
+                            itemEntity.type = type;
 
-                const savedFolder = await ds.transaction(async (tm) => {
-                    let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ userId: req.info.user.id, type, itemId });
-                    if (itemEntity) {
-                    } else {
-                        itemEntity = new BoxItemEntity();
-                        itemEntity.userId = req.info.user.id;
-                        itemEntity.itemId = itemId;
-                        itemEntity.type = type;
+                            itemEntity.createdBy = req.info.user.id;
+                            itemEntity.createdIp = req.info.ip;
+                        }
+                        itemEntity.offset = offset;
+                        itemEntity.limit = limit;
+                        itemEntity.data = folder;
+                        itemEntity.updatedBy = req.info.user.id;
+                        itemEntity.updatedIp = req.info.ip;
 
-                        itemEntity.createdBy = req.info.user.id;
-                        itemEntity.createdIp = req.info.ip;
-                    }
-                    itemEntity.data = folder;
-                    itemEntity.updatedBy = req.info.user.id;
-                    itemEntity.updatedIp = req.info.ip;
-
-                    return await tm.getRepository(BoxItemEntity).save(itemEntity);
-                });
-                res.json(savedFolder.data);
+                        return await tm.getRepository(BoxItemEntity).save(itemEntity);
+                    });
+                    res.json(savedFolder.data);
+                } else {
+                    res.status(404).json({ error: 'Not Found' });
+                }
             }
 
         } catch (error) {
@@ -1009,6 +1015,8 @@ export async function boxDownloadCore(provider: string, fileId: string, userId: 
                     fileType: fileBody.fileType,
                     status: 'already_processed'
                 };
+            } else {
+                return { fileBodyId: '', innerPath: '', fileName, sha1Digest: sha1FromMeta, sha256Digest: '', fileSize: infodata.size, fileType: '', status: 'large_file' };
             }
         }
 
@@ -1045,6 +1053,23 @@ export async function boxDownloadCore(provider: string, fileId: string, userId: 
                 fileType: existingFileBody.fileType,
                 status: 'content_reused'
             };
+        }
+
+        if (infodata.size > 2_147_483_648) {
+            const boxFile = new BoxFileEntity();
+            boxFile.fileId = boxFileId;
+            boxFile.versionId = versionId;
+            boxFile.versionSha1 = sha1FromMeta;
+            boxFile.name = fileName;
+            boxFile.info = infodata2;
+            boxFile.meta = metaData;
+            boxFile.createdBy = userId;
+            boxFile.updatedBy = userId;
+            boxFile.createdIp = ip;
+            boxFile.updatedIp = ip;
+            const boxFileEntity = await ds.getRepository(BoxFileEntity).save(boxFile);
+
+            return { fileBodyId: '', innerPath: '', fileName, sha1Digest: sha1FromMeta, sha256Digest: '', fileSize: infodata.size, fileType: '', status: 'large_file' };
         }
 
         // 4. ここまで来たら新規ファイルなのでダウンロードする

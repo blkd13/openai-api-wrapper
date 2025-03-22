@@ -1,21 +1,45 @@
-import { Request, Response } from "express";
-import { EntityManager } from "typeorm";
-import { map, toArray } from "rxjs";
+import { Request, response, Response } from 'express';
+import { EntityManager } from 'typeorm';
+import { map, toArray } from 'rxjs';
 
-import { MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
-import { UserRequest } from "../models/info.js";
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { OAuth2Env, readOAuth2Env } from "../controllers/auth.js";
-import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
-import { Utils } from "../../common/utils.js";
-import { boxFunctionDefinitions } from "./box.js";
-import { mattermostFunctionDefinitions } from "./mattermost.js";
-import { confluenceFunctionDefinitions } from "./confluence.js";
-import { jiraFunctionDefinitions } from "./jira.js";
-import { ds } from "../db.js";
-import { OAuthAccountEntity } from "../entity/auth.entity.js";
-import { gitlabFunctionDefinitions } from "./gitlab.js";
-import { giteaFunctionDefinitions } from "./gitea.js";
+import { MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
+import { UserRequest } from '../models/info.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
+import { OAuth2Env, readOAuth2Env } from '../controllers/auth.js';
+import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
+import { Utils } from '../../common/utils.js';
+import { boxFunctionDefinitions } from './box.js';
+import { mattermostFunctionDefinitions } from './mattermost.js';
+import { confluenceFunctionDefinitions } from './confluence.js';
+import { jiraFunctionDefinitions } from './jira.js';
+import { ds } from '../db.js';
+import { OAuthAccountEntity } from '../entity/auth.entity.js';
+import { gitlabFunctionDefinitions } from './gitlab.js';
+import { giteaFunctionDefinitions } from './gitea.js';
+import axios from 'axios';
+import TurndownService from 'turndown';
+import * as cheerio from 'cheerio';
+import puppeteer from 'puppeteer';
+
+const turndownService = new TurndownService();
+
+async function fetchRenderedText(url: string): Promise<string> {
+    // headless: "new"
+    const browser = await puppeteer.launch({}); // ヘッドレスブラウザを起動
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'networkidle2' }); // JSが実行されるまで待つ
+
+    // console.log('page loaded');
+    const text = await page.evaluate(() => {
+        console.log('page evaluate');
+        console.log(document.body.innerText);
+        return document.body.innerText; // ページの本文のテキストを取得
+    });
+    // console.log('text:', text);
+
+    await browser.close();
+    return text.trim();
+}
 
 const aiModels = [
     { 'model': 'gemini-2.0-flash-001', 'description': 'gemini-1.5-flashの次世代モデル。前世代を上回る性能。' },
@@ -42,9 +66,108 @@ export function functionDefinitions(
         ...jiraFunctionDefinitions('', obj, req, aiApi, connectionId, streamId, message, label),
         ...giteaFunctionDefinitions('local', obj, req, aiApi, connectionId, streamId, message, label),
         ...gitlabFunctionDefinitions('local', obj, req, aiApi, connectionId, streamId, message, label),
+        ...commonFunctionDefinitions(obj, req, aiApi, connectionId, streamId, message, label),
+    ].map(_func => {
+        const func = _func as MyToolType;
+        // nameの補充（二重定義になると修正時漏れが怖いので、nameは一か所で定義してここで補充する）
+        func.info.name = func.definition.function.name;
+        func.definition.function.description = `${func.info.group}\n${func.definition.function.description}`;
+        return func;
+    }).filter((func, index, self) => func.info.isActive && index === self.findIndex(t => t.definition.function.name === func.definition.function.name)) as MyToolType[];
+    return functionDefinitions;
+}
+
+export function commonFunctionDefinitions(
+    obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
+    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+): MyToolType[] {
+    return [
+        {
+            info: { group: 'web', isActive: true, isInteractive: false, label: 'Google検索', },
+            definition: {
+                type: 'function', function: {
+                    name: 'google_search',
+                    description: `Google検索を行う。`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            query: { type: 'string', description: '検索クエリ' },
+                            num: { type: 'number', description: '検索結果の最大数', default: 10 },
+                        },
+                        required: ['query']
+                    }
+                }
+            },
+            handler: async (args: { query: string, num: number }): Promise<{ title: string, link: string }[]> => {
+                const { query, num = 10 } = args;
+                const GOOGLE_CUSTOM_SEARCH_API_KEY = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY || '';
+                const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID || '';
+                const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(GOOGLE_CUSTOM_SEARCH_API_KEY)}&cx=${encodeURIComponent(GOOGLE_CSE_ID)}&q=${encodeURIComponent(query)}&num=${num}`;
+                const response = await axios.get<CustomSearchResponse>(url);
+                const items = response.data.items || [];
+                const res = await Promise.all(items.map(async item => {
+                    const response = await axios.get(item.link);
+                    if (response.headers['content-type'].includes('text/html')) {
+                        try {
+                            const text = await fetchRenderedText(item.link);
+                            return { title: item.title, link: item.link, body: text };
+                        } catch (e) {
+                            return { title: item.title, link: item.link, body: response.data };
+                        }
+                        // const turndownService = new TurndownService();
+                        // try {
+                        //     const markdown = turndownService.turndown(response.data);
+                        //     console.log(markdown);
+                        //     const text = await fetchRenderedText(item.link);
+                        //     return { title: item.title, link: item.link, body: text };
+                        //     // // return { title: item.title, link: item.link, body: markdown };
+                        //     // const $ = cheerio.load(response.data);
+                        //     // const text = $('body').text().replace(/\s+/g, ' ').trim(); // 余計な空白を削除
+                        //     // return { title: item.title, link: item.link, body: text };
+                        // } catch (e) {
+                        //     return { title: item.title, link: item.link, body: response.data };
+                        // }
+                    } else if (response.headers['content-type'].includes('application/json')) {
+                        return { title: item.title, link: item.link, body: response.data };
+                    } else if (response.headers['content-type'].includes('application/pdf')) {
+                        return { title: item.title, link: item.link, body: response.data };
+                    } else if (response.headers['content-type'].includes('application/msword')) {
+                        return { title: item.title, link: item.link, body: response.data };
+                    } else {
+                        return { title: item.title, link: item.link, body: response.data };
+                    }
+                }));
+                return res;
+            },
+        },
+        {
+            info: { group: 'web', isActive: true, isInteractive: false, label: 'Webページを開く（複数可）。', },
+            definition: {
+                type: 'function', function: {
+                    name: 'get_web_page_contents',
+                    description: `Webページを開く。（複数可）`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            urls: { type: 'array', description: 'URLの配列', items: { type: 'string' } },
+                        },
+                        required: ['urls']
+                    }
+                }
+            },
+            handler: async (args: { urls: string[] }): Promise<any> => {
+                const { urls } = args;
+                const promises = urls.map(async url => {
+                    // const response = await axios.get(url);
+                    // return response.data;
+                    const text = await fetchRenderedText(url)
+                    return text;
+                });
+                return Promise.all(promises);
+            },
+        },
         {
             info: { group: 'ai', isActive: false, isInteractive: true, label: '要約', },
-            command: {},
             definition: {
                 type: 'function', function: {
                     name: 'summarize_text',
@@ -63,11 +186,10 @@ export function functionDefinitions(
             },
         },
         {
-            info: { group: 'ai', isActive: false, isInteractive: true },
+            info: { group: 'ai', isActive: false, isInteractive: true, label: 'AI呼び出し', },
             definition: {
                 type: 'function', function: {
                     name: 'call_ai',
-                    label: 'AI呼び出し',
                     description: `AIを呼び出す。AIモデル:\n${JSON.stringify(aiModels)}`,
                     parameters: {
                         type: 'object',
@@ -85,7 +207,7 @@ export function functionDefinitions(
                 let { systemPrompt, userPrompt, model } = args;
                 systemPrompt = systemPrompt || 'アシスタントAI';
                 if (!userPrompt) {
-                    throw new Error("User prompt is required.");
+                    throw new Error('User prompt is required.');
                 } else { }
 
                 const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
@@ -174,20 +296,13 @@ export function functionDefinitions(
                 const { options } = args;
                 if (!options) {
                     console.log('Prompting for choice with options:+------------------------------------------------', args);
-                    throw new Error("Options are required.");
+                    throw new Error('Options are required.');
                 }
-                console.log("Prompting for choice with options:", options);
+                console.log('Prompting for choice with options:', options);
                 return Promise.resolve('dummy2');
             }
         } as MyToolType,
-    ].map(_func => {
-        const func = _func as MyToolType;
-        // nameの補充（二重定義になると修正時漏れが怖いので、nameは一か所で定義してここで補充する）
-        func.info.name = func.definition.function.name;
-        func.definition.function.description = `${func.info.group}\n${func.definition.function.description}`;
-        return func;
-    }).filter((func, index, self) => func.info.isActive && index === self.findIndex(t => t.definition.function.name === func.definition.function.name)) as MyToolType[];
-    return functionDefinitions;
+    ]
 }
 
 export interface ElasticsearchResponse {
@@ -210,8 +325,8 @@ export interface ElasticsearchResponse {
             _id: string;
             _score: number;
             _source: {
-                "ai.content": string;
-                "ai.title": string;
+                'ai.content': string;
+                'ai.title': string;
                 filetype: string;
                 completion: string;
                 sitename: string;
@@ -222,8 +337,8 @@ export interface ElasticsearchResponse {
                 content_length: string;
             };
             highlight: {
-                "ai.content": string[];
-                "ai.title": string[];
+                'ai.content': string[];
+                'ai.title': string[];
                 title_ja: string[];
                 content_ja: string[];
             };
@@ -235,7 +350,7 @@ export interface ElasticsearchResponse {
 export async function getOAuthAccount(req: UserRequest, provider: string): Promise<{ e: OAuth2Env, oAuthAccount: OAuthAccountEntity }> {
     const user_id = req.info.user.id;
     if (!user_id) {
-        throw new Error("User ID is required.");
+        throw new Error('User ID is required.');
     }
     const e = readOAuth2Env(provider);
     const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
@@ -268,7 +383,7 @@ export function reform(obj: any, deleteProps: boolean = true): any {
                 continue;
             }
 
-            // "_at"で終わるキーの特別処理（日付関連）
+            // '_at'で終わるキーの特別処理（日付関連）
             if ((key.toLowerCase().endsWith('_at') || key.toLowerCase().endsWith('time')) && typeof obj[key] === 'number') {
                 // console.log(`key=${key}, value=${obj[key]}  ${typeof obj[key]}`);
                 obj[key] = Utils.formatDate(new Date(obj[key]));
@@ -362,4 +477,80 @@ export function reform(obj: any, deleteProps: boolean = true): any {
 
     // 文字列やその他の型はそのまま返す
     return obj;
+}
+
+
+interface CustomSearchResponse {
+    kind: string;
+    url: UrlInfo;
+    queries: Queries;
+    context: Context;
+    searchInformation: SearchInformation;
+    items?: SearchResult[];
+}
+
+interface UrlInfo {
+    type: string;
+    template: string;
+}
+
+interface Queries {
+    request: QueryRequest[];
+    nextPage?: QueryRequest[];
+}
+
+interface QueryRequest {
+    title: string;
+    totalResults: string;
+    searchTerms: string;
+    count: number;
+    startIndex: number;
+    inputEncoding: string;
+    outputEncoding: string;
+    safe: string;
+    cx: string;
+}
+
+interface Context {
+    title: string;
+}
+
+interface SearchInformation {
+    searchTime: number;
+    formattedSearchTime: string;
+    totalResults: string;
+    formattedTotalResults: string;
+}
+
+interface SearchResult {
+    kind: string;
+    title: string;
+    htmlTitle: string;
+    link: string;
+    displayLink: string;
+    snippet: string;
+    htmlSnippet: string;
+    formattedUrl: string;
+    htmlFormattedUrl: string;
+    pagemap?: PageMap;
+}
+
+interface PageMap {
+    cse_thumbnail?: Thumbnail[];
+    metatags?: MetaTag[];
+    cse_image?: Image[];
+}
+
+interface Thumbnail {
+    src: string;
+    width: string;
+    height: string;
+}
+
+interface MetaTag {
+    [key: string]: string;
+}
+
+interface Image {
+    src: string;
 }

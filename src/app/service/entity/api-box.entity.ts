@@ -7,7 +7,7 @@ export enum BoxItemType {
 }
 
 @Entity() // テーブル名を指定
-@Unique(['userId', 'type', 'itemId']) // ここで複合ユニーク制約を設定
+@Unique(['userId', 'type', 'itemId', 'offset', 'limit']) // ここで複合ユニーク制約を設定
 export class BoxItemEntity extends MyBaseEntity {
 
     @Column()
@@ -18,6 +18,12 @@ export class BoxItemEntity extends MyBaseEntity {
 
     @Column()
     itemId!: string;
+
+    @Column({ default: 0 })
+    offset!: number;
+
+    @Column({ default: 100 })
+    limit!: number;
 
     @Column({ type: 'jsonb' })
     data!: BoxApiFolder; // または interface で型を定義

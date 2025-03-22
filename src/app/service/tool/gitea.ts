@@ -670,11 +670,11 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得`, },
+            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得（ls風）`, responseType: 'text' },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_repository_tree`,
-                    description: `指定したリポジトリ内のファイルとディレクトリ一覧を取得`,
+                    description: `指定したリポジトリ内のファイルとディレクトリ一覧をls形式で取得`,
                     parameters: {
                         type: 'object',
                         properties: {
@@ -698,7 +698,12 @@ export function giteaFunctionDefinitions(providerSubName: string,
                             },
                             recursive: {
                                 type: 'boolean',
-                                description: '再帰的に取得するかどうか',
+                                description: '再帰的に取得するかどうか (trueの場合、サブディレクトリも含めて全取得)',
+                                default: true
+                            },
+                            show_directories: {
+                                type: 'boolean',
+                                description: 'ディレクトリも表示するかどうか',
                                 default: false
                             }
                         },
@@ -706,40 +711,115 @@ export function giteaFunctionDefinitions(providerSubName: string,
                     }
                 }
             },
-            handler: async (args: { owner: string, repo: string, path: string, ref: string, recursive: boolean }): Promise<any> => {
-                let { owner, repo, path, ref, recursive } = args;
+            handler: async (args: { owner: string, repo: string, path: string, ref: string, recursive: boolean, show_directories: boolean }): Promise<any> => {
+                let { owner, repo, path, ref, recursive, show_directories } = args;
                 path = path || '';
                 ref = ref || 'main';
-                recursive = recursive || false;
+                recursive = recursive !== false; // 明示的にfalseの場合のみfalse
+                show_directories = show_directories === true; // 明示的にtrueの場合のみtrue
 
                 const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
-                let url;
+                // GitEAの再帰的な取得とパス解決のためのロジック
+                let allItems: any[] = [];
+
+                try {
                 if (recursive) {
                     // 再帰的な場合は git trees API を使用
-                    url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=${recursive}`;
-                    if (path) {
-                        // pathが指定されている場合は、先にそのパスのSHAを取得する必要がある
-                        const pathUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`;
-                        const pathResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(pathUrl));
+                        let treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=true`;
 
+                    if (path) {
+                            // パスが指定されている場合、そのパスのSHAを取得する必要がある
+                        const pathUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`;
+                            try {
+                        const pathResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(pathUrl));
                         if (Array.isArray(pathResponse.data) && pathResponse.data.length > 0) {
-                            // ディレクトリの場合
-                            url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(ref)}:${encodeURIComponent(path)}?recursive=${recursive}`;
+                                    // これはディレクトリ
+                                    const dirSha = pathResponse.data[0].sha;
+                                    treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${dirSha}?recursive=true`;
+                                } else if (pathResponse.data && pathResponse.data.type === 'dir') {
+                                    // 単一のディレクトリオブジェクト
+                                    const dirSha = pathResponse.data.sha;
+                                    treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${dirSha}?recursive=true`;
+                                }
+                            } catch (err) {
+                                // パス解決に失敗した場合、ルートから再帰的に取得
+                                console.error("Path resolution failed:", err);
+                            }
+                        }
+
+                        const treeResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(treeUrl));
+                        if (treeResponse.data && treeResponse.data.tree) {
+                            // GitEAのツリー構造をフラット化
+                            allItems = treeResponse.data.tree.map((item: any) => {
+                                return {
+                                    name: item.path.split('/').pop(),
+                                    path: item.path,
+                                    type: item.type === 'tree' ? 'tree' : 'blob',
+                                    mode: item.mode || '100644',
+                                    sha: item.sha,
+                                    size: item.size || 0
+                                };
+                            });
+
+                            // パスでフィルタリング（指定されたパスのサブディレクトリのみを表示）
+                            if (path) {
+                                const normalizedPath = path.endsWith('/') ? path : path + '/';
+                                allItems = allItems.filter(item =>
+                                    item.path.startsWith(normalizedPath) &&
+                                    item.path !== normalizedPath
+                                );
                         }
                     }
                 } else {
                     // 非再帰的な場合は contents API を使用
-                    url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`;
+                        const contentsUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`;
+                        const contentsResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(contentsUrl));
+
+                        if (Array.isArray(contentsResponse.data)) {
+                            allItems = contentsResponse.data.map((item: any) => {
+                                return {
+                                    name: item.name,
+                                    path: item.path,
+                                    type: item.type === 'dir' ? 'tree' : 'blob',
+                                    mode: item.type === 'dir' ? '040000' : '100644',
+                                    sha: item.sha,
+                                    size: item.size || 0
+                                };
+                            });
+                        }
                 }
 
-                try {
-                    const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                    // 結果をソート
+                    allItems.sort((a, b) => {
+                        // 1. タイプでソート (ディレクトリが先)
+                        if (a.type !== b.type) {
+                            return a.type === 'tree' ? -1 : 1;
+                        }
+                        // 2. パス名でソート
+                        return a.path.localeCompare(b.path);
+                    });
 
-                    reform(result);
-                    // result.me = reform(JSON.parse(oAuthAccount.userInfo));
-                    result.uriBase = e.uriBase;
-                    return result;
+                    // 表示用にフィルタリング
+                    if (!show_directories) {
+                        allItems = allItems.filter(item => item.type !== 'tree');
+                    }
+
+                    // 出力形式
+                    let output = `# Repository files for ${owner}/${repo}, path: ${path || '/'}, recursive: ${recursive}\n`;
+                    output += `# uriBase=${e.uriBase}\n\n`;
+
+                    // ls風の表示
+                    const formattedItems = allItems.map(item => {
+                        const type = item.type === 'tree' ? 'd' : '-';
+                        const mode = item.mode || '100644'; // デフォルトパーミッション
+                        const formattedMode = formatMode(mode);
+                        const fullPath = item.path;
+                        return `${type}${formattedMode} ${item.sha} ${fullPath}${item.type === 'tree' ? '/' : ''}`;
+                    });
+
+                    output += formattedItems.join('\n');
+                    return output;
                 } catch (error) {
                     return {
                         error: "ファイル一覧の取得に失敗しました",
@@ -747,6 +827,27 @@ export function giteaFunctionDefinitions(providerSubName: string,
                     };
                 }
             }
-        },
-    ];
-};
+        }
+    ]
+}
+// Git modeをls -l風の権限表記に変換する補助関数
+function formatMode(mode: string): string {
+    // Gitのモード (例: 100644) をls風の表記 (例: rwxr-xr-x) に変換
+    const m = parseInt(mode, 8); // 8進数として解釈
+
+    let result = '';
+    // オーナー権限
+    result += (m & 0o400) ? 'r' : '-';
+    result += (m & 0o200) ? 'w' : '-';
+    result += (m & 0o100) ? 'x' : '-';
+    // グループ権限
+    result += (m & 0o40) ? 'r' : '-';
+    result += (m & 0o20) ? 'w' : '-';
+    result += (m & 0o10) ? 'x' : '-';
+    // その他の権限
+    result += (m & 0o4) ? 'r' : '-';
+    result += (m & 0o2) ? 'w' : '-';
+    result += (m & 0o1) ? 'x' : '-';
+
+    return result;
+}

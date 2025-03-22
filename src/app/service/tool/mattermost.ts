@@ -25,13 +25,13 @@ export function mattermostFunctionDefinitions(
             info: { group: 'mattermost', isActive: true, isInteractive: false, label: `投稿を検索`, },
             definition: {
                 type: 'function', function: {
-                    name: 'mm_search_posts',
-                    description: `指定された条件に基づいてMattermost投稿を検索する。チームを跨いだ検索はできないが、詳細な条件を指定した検索が可能。\n投稿内容を提示する際はリンクもセットで提示するよ良い。`,
+                    name: 'mm_search_team_posts',
+                    description: `[Mattermost] 指定された条件に基づいてMattermost投稿を検索する。チームを跨いだ検索はできないが、詳細な条件を指定した検索が可能。\n投稿内容を提示する際はリンクもセットで提示するよ良い。`,
                     parameters: {
                         type: 'object',
                         properties: {
                             limit: { type: 'number', description: '取得する最大数', default: 50, minimum: 1, maximum: 200 },
-                            teamId: { type: 'string', description: 'チームID' },
+                            teamId: { type: 'string', description: 'teamId（ランダムな英数字26文字）。teamNameと混同する人が非常に多いので注意が必要。\nまた、「all」のように全体を指定することや、複数のチームを指定することは"出来ない"ので注意すること!!チームが特定されている場合にしかの検索は役に立ちません。' },
                             term: {
                                 type: 'string',
                                 description: Utils.trimLines(`
@@ -79,7 +79,7 @@ export function mattermostFunctionDefinitions(
                     },
                 })).data;
                 reform(result);
-                console.dir(result);
+                // console.dir(result);
                 // result.me = reform(userInfo);
                 result.uriBase = e.uriBase;
                 return result;
@@ -90,7 +90,7 @@ export function mattermostFunctionDefinitions(
             definition: {
                 type: 'function', function: {
                     name: 'mm_user_info',
-                    description: `mattermost：自分のユーザー情報`,
+                    description: `[Mattermost] 自分のユーザー情報`,
                     parameters: { type: 'object', properties: {}, }
                 }
             },
@@ -123,7 +123,7 @@ export function mattermostFunctionDefinitions(
                 type: 'function',
                 function: {
                     name: 'mm_find_users',
-                    description: '指定された条件に基づいてMattermostユーザーを検索する',
+                    description: '[Mattermost] 指定された条件に基づいてMattermostユーザーを検索する',
                     parameters: {
                         type: 'object',
                         properties: {
@@ -188,7 +188,7 @@ export function mattermostFunctionDefinitions(
                 type: 'function',
                 function: {
                     name: 'mm_find_user_alter_name_by_ids',
-                    description: '指定されたMattermostユーザーIDのリストを元に、ユーザーのメンション用キーワード（username）と表示用名（nickname）を取得する。',
+                    description: '[Mattermost] 指定されたMattermostユーザーIDのリストを元に、ユーザーのメンション用キーワード（username）と表示用名（nickname）を取得する。',
                     parameters: {
                         type: 'object',
                         properties: {
@@ -233,7 +233,7 @@ export function mattermostFunctionDefinitions(
                 function: {
                     name: 'mm_get_channels',
                     description: Utils.trimLines(`
-                        ユーザーの所属する全チャンネルの一覧を取得する。
+                        [Mattermost] ユーザーの所属する全チャンネルの一覧を取得する。
                         取得可能な項目が多く、データ量が爆発しやすいので必要な項目のみに絞って取得すること。
                         取得可能な項目：id,create_at,update_at,delete_at,team_id,type,display_name,name,header,purpose,last_post_at,total_msg_count,extra_update_at,creator_id,scheme_id,props,group_constrained,shared,total_msg_count_root,policy_id,last_root_post_at
                     `),
@@ -310,7 +310,10 @@ export function mattermostFunctionDefinitions(
                 //     queryParams.append('term', args.term);
                 // }
                 if (!args.columns || args.columns.length === 0) {
-                    args.columns = ['id', 'create_at', 'update_at', 'type', 'display_name', 'name', 'last_post_at', 'total_msg_count',];
+                    args.columns = ['id', 'create_at', 'update_at', 'type', 'display_name', 'name', 'last_post_at', 'total_msg_count', 'team_id'];
+                }
+                if (!args.columns.includes('team_id')) {
+                    args.columns.push('team_id');
                 }
                 if (args.not_associated_to_group !== undefined) {
                     queryParams.append('not_associated_to_group', args.not_associated_to_group);
