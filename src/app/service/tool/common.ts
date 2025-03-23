@@ -23,9 +23,12 @@ import puppeteer from 'puppeteer';
 
 const turndownService = new TurndownService();
 
+const { PUPPETTER_ARGS_PROXY } = process.env as { PUPPETTER_ARGS_PROXY: string; };
+
 async function fetchRenderedText(url: string): Promise<string> {
     // headless: "new"
-    const browser = await puppeteer.launch({}); // ヘッドレスブラウザを起動
+    const args = PUPPETTER_ARGS_PROXY ? PUPPETTER_ARGS_PROXY.split(' ') : [];
+    const browser = await puppeteer.launch({ args }); // ヘッドレスブラウザを起動
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: 'networkidle2' }); // JSが実行されるまで待つ
 
@@ -141,7 +144,7 @@ export function commonFunctionDefinitions(
             },
         },
         {
-            info: { group: 'web', isActive: true, isInteractive: false, label: 'Webページを開く（複数可）。', },
+            info: { group: 'web', isActive: true, isInteractive: false, label: 'Webページを開く（複数可）', },
             definition: {
                 type: 'function', function: {
                     name: 'get_web_page_contents',
