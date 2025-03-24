@@ -170,7 +170,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                     const committerName = commit.committer?.username || '';
 
                     // Markdownテーブル行を作成
-                    markdownTable += `| ${commit.sha.substring(0, 7)} | ${createdDate} | ${message} | ${authorName} | ${committerName} | ${stats} | [リンク](${commit.html_url}) |\n`;
+                    markdownTable += `| ${commit.sha.substring(0, 7)} | ${createdDate} | ${message.replaceAll(/\|/g, '\\|')} | ${authorName} | ${committerName} | ${stats} | [リンク](${commit.html_url}) |\n`;
                 }
 
                 // Markdownテーブルを返す

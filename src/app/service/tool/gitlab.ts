@@ -204,15 +204,15 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 // 各コミットをテーブル行に変換
                 for (const commit of result) {
                     // 日付部分のみ抽出 (YYYY-MM-DD形式)
-                    const createdDate = commit.created_at.split('T')[0];
-                    const authoredDate = commit.authored_date.split('T')[0];
-                    const committedDate = commit.committed_date.split('T')[0];
+                    const createdDate = commit.created_at;
+                    const authoredDate = commit.authored_date;
+                    const committedDate = commit.committed_date;
 
                     // 親コミットIDを文字列に変換
                     const parentIds = commit.parent_ids.join(', ');
 
                     // Markdownテーブル行を作成
-                    markdownTable += `| ${commit.id} | ${commit.short_id} | ${createdDate} | ${parentIds} | ${commit.title} | ${commit.message.trim()} | ${commit.author_name} | ${commit.author_email} | ${authoredDate} | ${commit.committer_name} | ${commit.committer_email} | ${committedDate} | [リンク](${commit.web_url}) |\n`;
+                    markdownTable += `| ${commit.id} | ${commit.short_id} | ${createdDate} | ${parentIds} | ${commit.title.replaceAll(/\|/g, '\\|')} | ${commit.message.trim().replaceAll(/\|/g, '\\|')} | ${commit.author_name} | ${commit.author_email} | ${authoredDate} | ${commit.committer_name} | ${commit.committer_email} | ${committedDate} | [リンク](${commit.web_url}) |\n`;
                 }
 
                 // 元のJSONデータとMarkdownデータの両方を返す
@@ -242,40 +242,27 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                             },
                             search: {
                                 type: 'string',
-                                description: '検索キーワード（名前でフィルタリング）',
-                                default: ''
+                                description: 'Return list of branches containing the search string. Use ^term to find branches that begin with term, and term$ to find branches that end with term.',
                             },
-                            sort: {
+                            regex: {
                                 type: 'string',
-                                description: 'ソート順（最新順または名前順）',
-                                enum: ['updated', 'name'],
-                                default: 'updated'
+                                description: 'Return list of branches with names matching a re2 regular expression.',
                             },
-                            per_page: {
-                                type: 'number',
-                                description: '1ページあたりの結果数（最大100）',
-                                default: 20,
-                                minimum: 1,
-                                maximum: 100
-                            },
-                            page: {
-                                type: 'number',
-                                description: 'ページ番号',
-                                default: 1,
-                                minimum: 1
-                            }
                         },
                         required: ['project_id']
                     }
                 }
             },
-            handler: async (args: { project_id: number, ref_type: string, search: string, sort: string, per_page: number, page: number }): Promise<any> => {
-                const { project_id, ref_type = 'branches', search = '', sort = 'updated', per_page = 20, page = 1 } = args;
+            handler: async (args: { project_id: number, ref_type: string, search?: string, regex?: string }): Promise<any> => {
+                const { project_id, ref_type = 'branches', search, regex, } = args;
 
                 const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+                const queryMap = {} as { [key: string]: string };
+                if (search) queryMap.search = search;
+                if (regex) queryMap.regex = regex;
 
                 // ref_typeに基づいてURLを構築
-                const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/${ref_type}?search=${encodeURIComponent(search)}&sort=${sort}&per_page=${per_page}&page=${page}`;
+                const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/${ref_type}?${new URLSearchParams(queryMap)}`;
                 const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
 
                 reform(result);
