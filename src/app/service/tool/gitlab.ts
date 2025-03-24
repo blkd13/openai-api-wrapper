@@ -135,7 +135,275 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 return result;
             }
         },
+        {   // For retrieving commit logs
+            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのコミット履歴`, responseType: 'markdown' },
+            definition: {
+                type: 'function', function: {
+                    name: `gitlab_${providerSubName}_repository_commits`,
+                    description: `指定したプロジェクトのコミット履歴を取得`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            project_id: {
+                                type: 'number',
+                                description: 'プロジェクトID'
+                            },
+                            ref_name: {
+                                type: 'string',
+                                description: 'ブランチ名、タグ名、またはコミットSHA',
+                            },
+                            path: {
+                                type: 'string',
+                                description: '特定のファイルパスに限定する場合、そのパス',
+                            },
+                            per_page: {
+                                type: 'number',
+                                description: '1ページあたりの結果数（最大100）',
+                                default: 20,
+                                minimum: 1,
+                                maximum: 100
+                            },
+                            page: {
+                                type: 'number',
+                                description: 'ページ番号',
+                                default: 1,
+                                minimum: 1
+                            }
+                        },
+                        required: ['project_id']
+                    }
+                }
+            },
+            handler: async (args: { project_id: number, ref_name?: string, path?: string, per_page?: number, page?: number }): Promise<any> => {
+                const { project_id, ref_name, path = '', per_page = 20, page = 1 } = args;
+                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+                const queryMap = {} as { [key: string]: string };
+                if (path) queryMap.path = path;
+                if (per_page) queryMap.per_page = per_page + '';
+                if (page) queryMap.page = page + '';
+                if (ref_name) queryMap.ref_name = ref_name;
+                const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/commits?${new URLSearchParams(queryMap)}`;
+                // console.log(url);
+                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
 
+                // reform(result);
+                // result.uriBase = e.uriBase;
+
+                // JSONをMarkdownテーブルに変換
+                let markdownTable = '## GitLabコミット履歴\n\n';
+                markdownTable += `- uriBase: ${e.uriBase}`;
+                // markdownTable += `- プロジェクトID: ${project_id}`;
+                // markdownTable += `- ブランチ/タグ: ${ref_name || '全て'}`;
+                // markdownTable += `- ファイルパス: ${path || '全て'}`;
+                // markdownTable += `- ページ: ${page}`;
+                // markdownTable += `- 1ページあたりの結果数: ${per_page}\n\n`;
+                markdownTable += `\n\n`;
+                markdownTable += '| ID | Short ID | 作成日 | 親コミットID | タイトル | メッセージ | 作成者名 | 作成者メール | 作成日時 | コミッター名 | コミッターメール | コミット日時 | Web URL |\n';
+                markdownTable += '|---|----------|--------|-------------|---------|-----------|----------|--------------|---------|------------|-----------------|-----------|--------|\n';
+
+                // 各コミットをテーブル行に変換
+                for (const commit of result) {
+                    // 日付部分のみ抽出 (YYYY-MM-DD形式)
+                    const createdDate = commit.created_at.split('T')[0];
+                    const authoredDate = commit.authored_date.split('T')[0];
+                    const committedDate = commit.committed_date.split('T')[0];
+
+                    // 親コミットIDを文字列に変換
+                    const parentIds = commit.parent_ids.join(', ');
+
+                    // Markdownテーブル行を作成
+                    markdownTable += `| ${commit.id} | ${commit.short_id} | ${createdDate} | ${parentIds} | ${commit.title} | ${commit.message.trim()} | ${commit.author_name} | ${commit.author_email} | ${authoredDate} | ${commit.committer_name} | ${commit.committer_email} | ${committedDate} | [リンク](${commit.web_url}) |\n`;
+                }
+
+                // 元のJSONデータとMarkdownデータの両方を返す
+                // フロントエンドでMarkdownを使いたい場合はmarkdownTable、
+                // 既存の処理との互換性のためにresultも残す
+                return markdownTable;
+            }
+        },
+        {   // ブランチとタグ一覧を統合した関数
+            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのブランチ/タグ一覧`, },
+            definition: {
+                type: 'function', function: {
+                    name: `gitlab_${providerSubName}_repository_refs`,
+                    description: `指定したプロジェクトのブランチまたはタグ一覧を取得`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            project_id: {
+                                type: 'number',
+                                description: 'プロジェクトID'
+                            },
+                            ref_type: {
+                                type: 'string',
+                                description: '取得する参照タイプ',
+                                enum: ['branches', 'tags'],
+                                default: 'branches'
+                            },
+                            search: {
+                                type: 'string',
+                                description: '検索キーワード（名前でフィルタリング）',
+                                default: ''
+                            },
+                            sort: {
+                                type: 'string',
+                                description: 'ソート順（最新順または名前順）',
+                                enum: ['updated', 'name'],
+                                default: 'updated'
+                            },
+                            per_page: {
+                                type: 'number',
+                                description: '1ページあたりの結果数（最大100）',
+                                default: 20,
+                                minimum: 1,
+                                maximum: 100
+                            },
+                            page: {
+                                type: 'number',
+                                description: 'ページ番号',
+                                default: 1,
+                                minimum: 1
+                            }
+                        },
+                        required: ['project_id']
+                    }
+                }
+            },
+            handler: async (args: { project_id: number, ref_type: string, search: string, sort: string, per_page: number, page: number }): Promise<any> => {
+                const { project_id, ref_type = 'branches', search = '', sort = 'updated', per_page = 20, page = 1 } = args;
+
+                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+
+                // ref_typeに基づいてURLを構築
+                const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/${ref_type}?search=${encodeURIComponent(search)}&sort=${sort}&per_page=${per_page}&page=${page}`;
+                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+
+                reform(result);
+                result.uriBase = e.uriBase;
+                result.ref_type = ref_type; // どちらのタイプを取得したかを結果に含める
+                return result;
+            }
+        },
+        {   // For viewing commit differences (diff)
+            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `コミット間の差分を取得`, responseType: 'markdown' },
+            definition: {
+                type: 'function', function: {
+                    name: `gitlab_${providerSubName}_repository_compare`,
+                    description: `指定したプロジェクトの2つのコミット（ブランチやタグ）間の差分を取得`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            project_id: {
+                                type: 'number',
+                                description: 'プロジェクトID'
+                            },
+                            from: {
+                                type: 'string',
+                                description: '比較元のブランチ名、タグ名、またはコミットSHA'
+                            },
+                            to: {
+                                type: 'string',
+                                description: '比較先のブランチ名、タグ名、またはコミットSHA'
+                            },
+                            straight: {
+                                type: 'boolean',
+                                description: '比較方法（trueの場合は直接比較、falseの場合はマージベース比較）',
+                                default: true
+                            }
+                        },
+                        required: ['project_id', 'from', 'to']
+                    }
+                }
+            },
+            handler: async (args: { project_id: number, from: string, to: string, straight: boolean }): Promise<any> => {
+                const { project_id, from, to, straight = true } = args;
+
+                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+
+                const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/compare?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&straight=${straight}`;
+                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+
+                // Format the output as markdown
+                let markdown = `# 比較結果: ${from} → ${to}\n\n`;
+
+                if (result.commits && result.commits.length > 0) {
+                    markdown += `## コミット (${result.commits.length}件)\n\n`;
+                    result.commits.forEach((commit: any) => {
+                        markdown += `- **${commit.id.substring(0, 8)}** ${commit.title} (${commit.author_name}, ${new Date(commit.created_at).toLocaleString()})\n`;
+                    });
+                    markdown += '\n';
+                }
+
+                if (result.diffs && result.diffs.length > 0) {
+                    markdown += `## 変更されたファイル (${result.diffs.length}件)\n\n`;
+                    result.diffs.forEach((diff: any) => {
+                        markdown += `### ${diff.new_path}\n`;
+                        markdown += '```diff\n' + diff.diff + '\n```\n\n';
+                    });
+                }
+
+                return markdown;
+            }
+        },
+        {   // For viewing a specific commit
+            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `特定コミットの詳細`, },
+            definition: {
+                type: 'function', function: {
+                    name: `gitlab_${providerSubName}_repository_commit`,
+                    description: `指定したプロジェクトの特定のコミット詳細と変更内容を取得`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            project_id: {
+                                type: 'number',
+                                description: 'プロジェクトID'
+                            },
+                            commit_id: {
+                                type: 'string',
+                                description: 'コミットSHA'
+                            },
+                            stats: {
+                                type: 'boolean',
+                                description: '統計情報を含めるかどうか',
+                                default: true
+                            }
+                        },
+                        required: ['project_id', 'commit_id']
+                    }
+                }
+            },
+            handler: async (args: { project_id: number, commit_id: string, stats: boolean }): Promise<any> => {
+                const { project_id, commit_id, stats = true } = args;
+
+                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+
+                // Get commit details
+                const commitUrl = `${e.uriBase}/api/v4/projects/${project_id}/repository/commits/${encodeURIComponent(commit_id)}?stats=${stats}`;
+                console.log(commitUrl);
+                const commitResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(commitUrl))).data;
+                console.dir(commitResult);
+
+                // Get commit diff
+                const diffUrl = `${e.uriBase}/api/v4/projects/${project_id}/repository/commits/${encodeURIComponent(commit_id)}/diff`;
+                console.log(diffUrl);
+                const diffResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(diffUrl))).data;
+                console.dir(diffResult);
+
+                const result = {
+                    ...commitResult,
+                    diffs: diffResult,
+                    uriBase: e.uriBase
+                };
+
+                try {
+                    reform(result);
+                } catch (e) {
+                    console.log('Error in reforming result');
+                    console.error(e);
+                }
+                return result;
+            }
+        },
         // {
         //     info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリ全ファイル一覧を取得`, },
         //     definition: {
@@ -392,7 +660,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得（ls風）`, responseType: 'text' },
+            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得（ls風）`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_repository_tree`,
@@ -432,11 +700,19 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             handler: async (args: { project_id: number, path: string, ref: string, recursive: boolean, show_directories: boolean }): Promise<any> => {
                 let { project_id, path, ref, recursive, show_directories } = args;
                 path = path || '';
-                ref = ref || 'main';
                 recursive = recursive !== false; // 明示的にfalseの場合のみfalse
                 show_directories = show_directories === true; // 明示的にtrueの場合のみtrue
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+
+                if (ref) {
+                    // ブランチ名、タグ名、SHAのいずれかが指定されている場合
+                } else {
+                    // デフォルトのブランチを取得
+                    const defaultBranchUrl = `${e.uriBase}/api/v4/projects/${project_id}`;
+                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(defaultBranchUrl))).data;
+                    ref = defaultBranchResult.default_branch || 'main';
+                }
 
                 // GitLabのAPIでは最大100件しか一度に取得できないので、100に設定
                 const per_page = 100;
@@ -447,22 +723,14 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 // 全ページ取得
                 while (hasMorePages) {
                     const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/tree?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}&recursive=${recursive}&per_page=${per_page}&page=${currentPage}`;
+                    const response = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url));
+                    const result = response.data;
 
-                    try {
-                        const response = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url));
-                        const result = response.data;
-
-                        if (result.length > 0) {
-                            allItems = allItems.concat(result);
-                            currentPage++;
-                        } else {
-                            hasMorePages = false;
-                        }
-                    } catch (error) {
-                        return {
-                            error: "ファイル一覧の取得に失敗しました",
-                            details: Utils.errorFormattedObject(error),
-                        };
+                    if (result.length > 0) {
+                        allItems = allItems.concat(result);
+                        currentPage++;
+                    } else {
+                        hasMorePages = false;
                     }
                 }
 
@@ -483,7 +751,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
 
                 // 出力形式
                 let output = `# Repository files for project ${project_id}, path: ${path || '/'}, recursive: ${recursive}\n`;
-                output += `# uriBase=${e.uriBase}\n\n`;
+                output += `## uriBase=${e.uriBase}\n\n`;
 
                 // ls風の表示
                 const formattedItems = allItems.map(item => {
@@ -495,10 +763,10 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                     return `${type}${formattedMode} ${item.id} ${fullPath}${item.type === 'tree' ? '/' : ''}`;
                 });
 
-                output += formattedItems.join('\n');
+                output += `\`\`\`text\n${formattedItems.join('\n')}\`\`\``;
                 return output;
             }
-            }
+        }
     ];
 };
 

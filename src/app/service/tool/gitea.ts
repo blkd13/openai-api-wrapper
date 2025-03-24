@@ -15,6 +15,7 @@ import { ds } from "../db.js";
 import { OAuthAccountEntity } from "../entity/auth.entity.js";
 import { decrypt } from "../controllers/tool-call.js";
 import { getOAuthAccount, reform } from "./common.js";
+import { GiteaRepository } from "../api/api-gitea.js";
 
 // 1. 関数マッピングの作成
 export function giteaFunctionDefinitions(providerSubName: string,
@@ -87,7 +88,250 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 return result;
             }
         },
+        {   // コミット履歴取得
+            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのコミット履歴`, },
+            definition: {
+                type: 'function', function: {
+                    name: `gitea_${providerSubName}_repository_commits`,
+                    description: `指定したプロジェクトのコミット履歴を取得`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            project_id: {
+                                type: 'number',
+                                description: 'プロジェクトID'
+                            },
+                            sha: {
+                                type: 'string',
+                                description: 'ブランチ名、タグ名、またはコミットSHA',
+                            },
+                            path: {
+                                type: 'string',
+                                description: '特定のファイルパスに限定する場合、そのパス',
+                            },
+                            limit: {
+                                type: 'number',
+                                description: '取得する最大コミット数',
+                                default: 20,
+                                minimum: 1,
+                                maximum: 100
+                            },
+                            page: {
+                                type: 'number',
+                                description: 'ページ番号',
+                                default: 1,
+                                minimum: 1
+                            }
+                        },
+                        required: ['project_id']
+                    }
+                }
+            },
+            handler: async (args: { project_id: number, sha?: string, path?: string, limit: number, page: number }): Promise<any> => {
+                const { project_id, sha, path, limit = 20, page = 1 } = args;
 
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+                const queryMap = {} as { [key: string]: string };
+                if (sha) queryMap.sha = sha;
+                if (path) queryMap.path = path;
+                queryMap.limit = limit.toString();
+                queryMap.page = page.toString();
+                // Giteaでは/api/v1/repos/{owner}/{repo}/commitsの形式
+                // project_idからリポジトリ情報を取得するためのリクエスト
+                const repoUrl = `${e.uriBase}/api/v1/repositories/${project_id}`;
+                const repoInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(repoUrl))).data;
+                const owner = repoInfo.owner.username;
+                const repo = repoInfo.name;
+
+                const url = `${e.uriBase}/api/v1/repos/${owner}/${repo}/commits?${Object.entries(queryMap).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}`;
+                console.log(url);
+                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+
+                reform(result);
+                result.uriBase = e.uriBase;
+                return result;
+            }
+        },
+        {   // ブランチとタグ一覧の統合関数
+            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのブランチ/タグ一覧`, },
+            definition: {
+                type: 'function', function: {
+                    name: `gitea_${providerSubName}_repository_refs`,
+                    description: `指定したプロジェクトのブランチまたはタグ一覧を取得`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            project_id: {
+                                type: 'number',
+                                description: 'プロジェクトID'
+                            },
+                            ref_type: {
+                                type: 'string',
+                                description: '取得する参照タイプ',
+                                enum: ['branches', 'tags'],
+                                default: 'branches'
+                            },
+                            query: {
+                                type: 'string',
+                                description: '検索キーワード（名前でフィルタリング）',
+                                default: ''
+                            },
+                            limit: {
+                                type: 'number',
+                                description: '取得する最大件数',
+                                default: 20,
+                                minimum: 1,
+                                maximum: 100
+                            },
+                            page: {
+                                type: 'number',
+                                description: 'ページ番号',
+                                default: 1,
+                                minimum: 1
+                            }
+                        },
+                        required: ['project_id']
+                    }
+                }
+            },
+            handler: async (args: { project_id: number, ref_type: string, query: string, limit: number, page: number }): Promise<any> => {
+                const { project_id, ref_type = 'branches', query = '', limit = 20, page = 1 } = args;
+
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+
+                // project_idからリポジトリ情報を取得するためのリクエスト
+                const repoUrl = `${e.uriBase}/api/v1/repositories/${project_id}`;
+                const repoInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(repoUrl))).data;
+                const owner = repoInfo.owner.username;
+                const repo = repoInfo.name;
+
+                // ref_typeに基づいてURLを構築
+                const url = `${e.uriBase}/api/v1/repos/${owner}/${repo}/${ref_type}?q=${encodeURIComponent(query)}&limit=${limit}&page=${page}`;
+                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+
+                reform(result);
+                result.uriBase = e.uriBase;
+                result.ref_type = ref_type; // どちらのタイプを取得したかを結果に含める
+                return result;
+            }
+        },
+        {   // コミット間の差分を取得
+            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `コミット間の差分を取得`, responseType: 'markdown' },
+            definition: {
+                type: 'function', function: {
+                    name: `gitea_${providerSubName}_repository_compare`,
+                    description: `指定したプロジェクトの2つのコミット（ブランチやタグ）間の差分を取得`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            project_id: {
+                                type: 'number',
+                                description: 'プロジェクトID'
+                            },
+                            base: {
+                                type: 'string',
+                                description: '比較元のブランチ名、タグ名、またはコミットSHA'
+                            },
+                            head: {
+                                type: 'string',
+                                description: '比較先のブランチ名、タグ名、またはコミットSHA'
+                            }
+                        },
+                        required: ['project_id', 'base', 'head']
+                    }
+                }
+            },
+            handler: async (args: { project_id: number, base: string, head: string }): Promise<any> => {
+                const { project_id, base, head } = args;
+
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+
+                // project_idからリポジトリ情報を取得するためのリクエスト
+                const repoUrl = `${e.uriBase}/api/v1/repositories/${project_id}`;
+                const repoInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(repoUrl))).data;
+                const owner = repoInfo.owner.username;
+                const repo = repoInfo.name;
+
+                const url = `${e.uriBase}/api/v1/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+
+                // Format the output as markdown
+                let markdown = `# 比較結果: ${base} → ${head}\n\n`;
+
+                if (result.commits && result.commits.length > 0) {
+                    markdown += `## コミット (${result.commits.length}件)\n\n`;
+                    result.commits.forEach((commit: any) => {
+                        markdown += `- **${commit.sha.substring(0, 8)}** ${commit.commit.message.split('\n')[0]} (${commit.author?.login || commit.commit.author.name}, ${new Date(commit.commit.author.date).toLocaleString()})\n`;
+                    });
+                    markdown += '\n';
+                }
+
+                if (result.files && result.files.length > 0) {
+                    markdown += `## 変更されたファイル (${result.files.length}件)\n\n`;
+                    result.files.forEach((file: any) => {
+                        markdown += `### ${file.filename}\n`;
+                        if (file.patch) {
+                            markdown += '```diff\n' + file.patch + '\n```\n\n';
+                        } else {
+                            markdown += `*ファイルタイプ: ${file.status}*\n\n`;
+                        }
+                    });
+                }
+
+                return markdown;
+            }
+        },
+        {   // 特定コミットの詳細
+            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `特定コミットの詳細`, },
+            definition: {
+                type: 'function', function: {
+                    name: `gitea_${providerSubName}_repository_commit`,
+                    description: `指定したプロジェクトの特定のコミット詳細と変更内容を取得`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            project_id: {
+                                type: 'number',
+                                description: 'プロジェクトID'
+                            },
+                            sha: {
+                                type: 'string',
+                                description: 'コミットSHA'
+                            }
+                        },
+                        required: ['project_id', 'sha']
+                    }
+                }
+            },
+            handler: async (args: { project_id: number, sha: string }): Promise<any> => {
+                const { project_id, sha } = args;
+
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+
+                // project_idからリポジトリ情報を取得するためのリクエスト
+                const repoUrl = `${e.uriBase}/api/v1/repositories/${project_id}`;
+                const repoInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(repoUrl))).data;
+                const owner = repoInfo.owner.username;
+                const repo = repoInfo.name;
+
+                // Get commit details
+                const commitUrl = `${e.uriBase}/api/v1/repos/${owner}/${repo}/git/commits/${encodeURIComponent(sha)}`;
+                const commitResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(commitUrl))).data;
+
+                // Get commit files
+                const filesUrl = `${e.uriBase}/api/v1/repos/${owner}/${repo}/commits/${encodeURIComponent(sha)}`;
+                const filesResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(filesUrl))).data;
+
+                const result = {
+                    commit: commitResult,
+                    files: filesResult.files,
+                    uriBase: e.uriBase
+                };
+
+                reform(result);
+                return result;
+            }
+        },
         // {
         //     info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリ全ファイル一覧を取得`, },
         //     definition: {
@@ -714,118 +958,118 @@ export function giteaFunctionDefinitions(providerSubName: string,
             handler: async (args: { owner: string, repo: string, path: string, ref: string, recursive: boolean, show_directories: boolean }): Promise<any> => {
                 let { owner, repo, path, ref, recursive, show_directories } = args;
                 path = path || '';
-                ref = ref || 'main';
                 recursive = recursive !== false; // 明示的にfalseの場合のみfalse
                 show_directories = show_directories === true; // 明示的にtrueの場合のみtrue
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+
+                if (ref) {
+                    // ブランチ名、タグ名、またはコミットSHAが指定されている場合はそのまま
+                } else {
+                    const defaultBranchUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get<GiteaRepository>(defaultBranchUrl))).data;
+                    ref = ref || defaultBranchResult.default_branch || 'main';
+                }
 
                 // GitEAの再帰的な取得とパス解決のためのロジック
                 let allItems: any[] = [];
 
-                try {
                 if (recursive) {
                     // 再帰的な場合は git trees API を使用
-                        let treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=true`;
+                    let treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=true`;
 
                     if (path) {
-                            // パスが指定されている場合、そのパスのSHAを取得する必要がある
+                        // パスが指定されている場合、そのパスのSHAを取得する必要がある
                         const pathUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`;
-                            try {
-                        const pathResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(pathUrl));
-                        if (Array.isArray(pathResponse.data) && pathResponse.data.length > 0) {
-                                    // これはディレクトリ
-                                    const dirSha = pathResponse.data[0].sha;
-                                    treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${dirSha}?recursive=true`;
-                                } else if (pathResponse.data && pathResponse.data.type === 'dir') {
-                                    // 単一のディレクトリオブジェクト
-                                    const dirSha = pathResponse.data.sha;
-                                    treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${dirSha}?recursive=true`;
-                                }
-                            } catch (err) {
-                                // パス解決に失敗した場合、ルートから再帰的に取得
-                                console.error("Path resolution failed:", err);
+                        try {
+                            const pathResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(pathUrl));
+                            if (Array.isArray(pathResponse.data) && pathResponse.data.length > 0) {
+                                // これはディレクトリ
+                                const dirSha = pathResponse.data[0].sha;
+                                treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${dirSha}?recursive=true`;
+                            } else if (pathResponse.data && pathResponse.data.type === 'dir') {
+                                // 単一のディレクトリオブジェクト
+                                const dirSha = pathResponse.data.sha;
+                                treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${dirSha}?recursive=true`;
                             }
+                        } catch (err) {
+                            // パス解決に失敗した場合、ルートから再帰的に取得
+                            console.error("Path resolution failed:", err);
                         }
+                    }
 
-                        const treeResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(treeUrl));
-                        if (treeResponse.data && treeResponse.data.tree) {
-                            // GitEAのツリー構造をフラット化
-                            allItems = treeResponse.data.tree.map((item: any) => {
-                                return {
-                                    name: item.path.split('/').pop(),
-                                    path: item.path,
-                                    type: item.type === 'tree' ? 'tree' : 'blob',
-                                    mode: item.mode || '100644',
-                                    sha: item.sha,
-                                    size: item.size || 0
-                                };
-                            });
+                    const treeResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(treeUrl));
+                    if (treeResponse.data && treeResponse.data.tree) {
+                        // GitEAのツリー構造をフラット化
+                        allItems = treeResponse.data.tree.map((item: any) => {
+                            return {
+                                name: item.path.split('/').pop(),
+                                path: item.path,
+                                type: item.type === 'tree' ? 'tree' : 'blob',
+                                mode: item.mode || '100644',
+                                sha: item.sha,
+                                size: item.size || 0
+                            };
+                        });
 
-                            // パスでフィルタリング（指定されたパスのサブディレクトリのみを表示）
-                            if (path) {
-                                const normalizedPath = path.endsWith('/') ? path : path + '/';
-                                allItems = allItems.filter(item =>
-                                    item.path.startsWith(normalizedPath) &&
-                                    item.path !== normalizedPath
-                                );
+                        // パスでフィルタリング（指定されたパスのサブディレクトリのみを表示）
+                        if (path) {
+                            const normalizedPath = path.endsWith('/') ? path : path + '/';
+                            allItems = allItems.filter(item =>
+                                item.path.startsWith(normalizedPath) &&
+                                item.path !== normalizedPath
+                            );
                         }
                     }
                 } else {
                     // 非再帰的な場合は contents API を使用
-                        const contentsUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`;
-                        const contentsResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(contentsUrl));
+                    const contentsUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`;
+                    const contentsResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(contentsUrl));
 
-                        if (Array.isArray(contentsResponse.data)) {
-                            allItems = contentsResponse.data.map((item: any) => {
-                                return {
-                                    name: item.name,
-                                    path: item.path,
-                                    type: item.type === 'dir' ? 'tree' : 'blob',
-                                    mode: item.type === 'dir' ? '040000' : '100644',
-                                    sha: item.sha,
-                                    size: item.size || 0
-                                };
-                            });
-                        }
-                }
-
-                    // 結果をソート
-                    allItems.sort((a, b) => {
-                        // 1. タイプでソート (ディレクトリが先)
-                        if (a.type !== b.type) {
-                            return a.type === 'tree' ? -1 : 1;
-                        }
-                        // 2. パス名でソート
-                        return a.path.localeCompare(b.path);
-                    });
-
-                    // 表示用にフィルタリング
-                    if (!show_directories) {
-                        allItems = allItems.filter(item => item.type !== 'tree');
+                    if (Array.isArray(contentsResponse.data)) {
+                        allItems = contentsResponse.data.map((item: any) => {
+                            return {
+                                name: item.name,
+                                path: item.path,
+                                type: item.type === 'dir' ? 'tree' : 'blob',
+                                mode: item.type === 'dir' ? '040000' : '100644',
+                                sha: item.sha,
+                                size: item.size || 0
+                            };
+                        });
                     }
-
-                    // 出力形式
-                    let output = `# Repository files for ${owner}/${repo}, path: ${path || '/'}, recursive: ${recursive}\n`;
-                    output += `# uriBase=${e.uriBase}\n\n`;
-
-                    // ls風の表示
-                    const formattedItems = allItems.map(item => {
-                        const type = item.type === 'tree' ? 'd' : '-';
-                        const mode = item.mode || '100644'; // デフォルトパーミッション
-                        const formattedMode = formatMode(mode);
-                        const fullPath = item.path;
-                        return `${type}${formattedMode} ${item.sha} ${fullPath}${item.type === 'tree' ? '/' : ''}`;
-                    });
-
-                    output += formattedItems.join('\n');
-                    return output;
-                } catch (error) {
-                    return {
-                        error: "ファイル一覧の取得に失敗しました",
-                        details: Utils.errorFormattedObject(error),
-                    };
                 }
+
+                // 結果をソート
+                allItems.sort((a, b) => {
+                    // 1. タイプでソート (ディレクトリが先)
+                    if (a.type !== b.type) {
+                        return a.type === 'tree' ? -1 : 1;
+                    }
+                    // 2. パス名でソート
+                    return a.path.localeCompare(b.path);
+                });
+
+                // 表示用にフィルタリング
+                if (!show_directories) {
+                    allItems = allItems.filter(item => item.type !== 'tree');
+                }
+
+                // 出力形式
+                let output = `# Repository files for ${owner}/${repo}, path: ${path || '/'}, recursive: ${recursive}\n`;
+                output += `# uriBase=${e.uriBase}\n\n`;
+
+                // ls風の表示
+                const formattedItems = allItems.map(item => {
+                    const type = item.type === 'tree' ? 'd' : '-';
+                    const mode = item.mode || '100644'; // デフォルトパーミッション
+                    const formattedMode = formatMode(mode);
+                    const fullPath = item.path;
+                    return `${type}${formattedMode} ${item.sha} ${fullPath}${item.type === 'tree' ? '/' : ''}`;
+                });
+
+                output += formattedItems.join('\n');
+                return output;
             }
         }
     ]
