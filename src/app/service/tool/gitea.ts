@@ -89,7 +89,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {   // コミット履歴取得
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのコミット履歴`, },
+            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのコミット履歴`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_repository_commits`,
@@ -147,9 +147,34 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 console.log(url);
                 const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
 
-                reform(result);
-                result.uriBase = e.uriBase;
-                return result;
+                // JSONをMarkdownテーブルに変換
+                let markdownTable = '## Giteaコミット履歴\n\n';
+                markdownTable += `- uriBase: ${e.uriBase}\n\n`;
+                markdownTable += '| SHA | 作成日 | メッセージ | 作成者 | コミッター | 統計情報 | URL |\n';
+                markdownTable += '|-----|--------|----------|---------|-----------|------------|-----|\n';
+
+                // 各コミットをテーブル行に変換
+                for (const commit of result) {
+                    // 日付のフォーマット (YYYY-MM-DD形式)
+                    const createdDate = commit.created;
+
+                    // 統計情報
+                    const stats = commit.stats ?
+                        `追加: ${commit.stats.additions}, 削除: ${commit.stats.deletions}, 合計: ${commit.stats.total}` : '';
+
+                    // コミットメッセージの改行を取り除く
+                    const message = commit.commit?.message?.trim().replace(/\n/g, ' ') || '';
+
+                    // 作成者とコミッターのユーザー名
+                    const authorName = commit.author?.username || '';
+                    const committerName = commit.committer?.username || '';
+
+                    // Markdownテーブル行を作成
+                    markdownTable += `| ${commit.sha.substring(0, 7)} | ${createdDate} | ${message} | ${authorName} | ${committerName} | ${stats} | [リンク](${commit.html_url}) |\n`;
+                }
+
+                // Markdownテーブルを返す
+                return markdownTable;
             }
         },
         {   // ブランチとタグ一覧の統合関数
