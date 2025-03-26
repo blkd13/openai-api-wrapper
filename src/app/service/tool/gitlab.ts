@@ -896,7 +896,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
 
                 // フィルタしたアイテムの配列を取得
                 const filteredItems = allItems.filter(item => item.type !== 'tree');
-                const batchSize = 3; // 10件ずつバッチ処理
+                const batchSize = 20; // バッチサイズ
                 const results = [];
                 for (let i = 0; i < filteredItems.length; i += batchSize) {
                     const batch = filteredItems.slice(i, i + batchSize);
