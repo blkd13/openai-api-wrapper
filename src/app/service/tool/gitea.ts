@@ -3,7 +3,7 @@ import { EntityManager } from "typeorm";
 import { map, toArray } from "rxjs";
 
 
-const { GITEA_CONFIDENCIAL_OWNERS } = process.env as { GITEA_CONFIDENCIAL_OWNERS: string };
+const { GITEA_CONFIDENCIAL_OWNERS = '' } = process.env as { GITEA_CONFIDENCIAL_OWNERS: string };
 
 import { MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
 import { UserRequest } from "../models/info.js";
@@ -906,7 +906,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 ref = ref || 'main';
                 const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
                 if (GITEA_CONFIDENCIAL_OWNERS.split(',').includes(owner)) {
-                    return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\`\`\``);
+                    return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\n\`\`\``);
                 } else { }
 
                 if (ref) {
@@ -942,10 +942,10 @@ export function giteaFunctionDefinitions(providerSubName: string,
                         // return result;
                         let trg = file_path.split('\.').at(-1) || '';
                         trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
-                        return `\`\`\`${trg} ${file_path}\n\n${content}\`\`\`\n`;
+                        return `\`\`\`${trg} ${file_path}\n\n${content}\n\`\`\`\n`;
                     } catch (error) {
                         // ファイルが見つからない場合など
-                        return `\`\`\`json\n{ "error": "ファイルが見つかりません", "details": ${JSON.stringify(Utils.errorFormattedObject(error))} }\`\`\`\n\n`;
+                        return `\`\`\`json\n{ "error": "ファイルが見つかりません", "details": ${JSON.stringify(Utils.errorFormattedObject(error))} }\n\`\`\`\n\n`;
                     }
                 })).then(results => results.join('\n'));
             }
@@ -995,7 +995,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 const provider = `gitea-${providerSubName}`;
                 const { e } = await getOAuthAccount(req, provider);
                 if (GITEA_CONFIDENCIAL_OWNERS.split(',').includes(owner)) {
-                    return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\`\`\``);
+                    return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\n\`\`\``);
                 } else { }
 
                 if (ref) {
@@ -1020,8 +1020,8 @@ export function giteaFunctionDefinitions(providerSubName: string,
 
                         let trg = file_path.split('\.').at(-1) || '';
                         trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
-                        const codeBlock = `\`\`\`${trg} ${file_path}\n\n${content}\`\`\`\n`;
-                        const codeInfoBlock = `\`\`\`json\n${JSON.stringify(contentInfo, null, 2)}\`\`\`\n`; // ファイル情報
+                        const codeBlock = `\`\`\`${trg} ${file_path}\n\n${content}\n\`\`\`\n`;
+                        const codeInfoBlock = `\`\`\`json\n${JSON.stringify(contentInfo, null, 2)}\n\`\`\`\n`; // ファイル情報
 
                         const systemPrompt = 'アシスタントAI';
                         const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
@@ -1080,7 +1080,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                         });
                     } catch (error) {
                         // ファイルが見つからない場合など
-                        return `\`\`\`json\n{ "error": "ファイルが見つかりません", "details": ${JSON.stringify(Utils.errorFormattedObject(error))} }\`\`\`\n\n`;
+                        return `\`\`\`json\n{ "error": "ファイルが見つかりません", "details": ${JSON.stringify(Utils.errorFormattedObject(error))} }\n\`\`\`\n\n`;
                     }
                 })).then(results => results.join('\n'));
             }
@@ -1117,11 +1117,11 @@ export function giteaFunctionDefinitions(providerSubName: string,
                                 description: '再帰的に取得するかどうか (trueの場合、サブディレクトリも含めて全取得)',
                                 default: true
                             },
-                            show_directories: {
-                                type: 'boolean',
-                                description: 'ディレクトリも表示するかどうか',
-                                default: false
-                            }
+                            // show_directories: {
+                            //     type: 'boolean',
+                            //     description: 'ディレクトリも表示するかどうか',
+                            //     default: false
+                            // }
                         },
                         required: ['owner', 'repo']
                     }
@@ -1232,13 +1232,15 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 output += `# uriBase=${e.uriBase}\n\n`;
 
                 // ls風の表示
-                const formattedItems = allItems.map(item => {
+                const maxSizeLen = Math.max(...allItems.filter(item => item.type !== 'tree').map(item => (item.size + '').length));
+                const formattedItems = allItems.filter(item => item.type !== 'tree').map(item => {
                     const type = item.type === 'tree' ? 'd' : '-';
                     const mode = item.mode || '100644'; // デフォルトパーミッション
                     const formattedMode = formatMode(mode);
                     const fullPath = item.path;
-                    return `${type}${formattedMode} ${item.sha} ${fullPath}${item.type === 'tree' ? '/' : ''}`;
+                    return `${type}${formattedMode} ${String(item.size).padStart(maxSizeLen, ' ')} ${fullPath}${item.type === 'tree' ? '/' : ''}`;
                 });
+                // const formattedItems = allItems.filter(item => item.type !== 'tree').map(item => item.path);
 
                 output += formattedItems.join('\n');
                 return output;

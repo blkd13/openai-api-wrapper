@@ -654,7 +654,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                     let trg = file_path.split('\.').at(-1) || '';
                     trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
 
-                    return `\`\`\`${trg} ${file_path}\n\n${result.decoded_content}\`\`\`\n`;
+                    return `\`\`\`${trg} ${file_path}\n\n${result.decoded_content}\n\`\`\`\n`;
                 })).then((results) => results.join('\n'));
             }
         },
@@ -720,8 +720,8 @@ export function gitlabFunctionDefinitions(providerSubName: string,
 
                     let trg = file_path.split('\.').at(-1) || '';
                     trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
-                    const codeBlock = `\`\`\`${trg} ${file_path}\n\n${result.decoded_content}\`\`\`\n`;
-                    // const codeInfoBlock = `\`\`\`json\n${JSON.stringify(contentInfo, null, 2)}\`\`\`\n`; // ファイル情報
+                    const codeBlock = `\`\`\`${trg} ${file_path}\n\n${result.decoded_content}\n\`\`\`\n`;
+                    // const codeInfoBlock = `\`\`\`json\n${JSON.stringify(contentInfo, null, 2)}\n\`\`\`\n`; // ファイル情報
 
                     const systemPrompt = 'アシスタントAI';
                     const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
@@ -809,11 +809,11 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                                 description: '再帰的に取得するかどうか (trueの場合、サブディレクトリも含めて全取得)',
                                 default: true
                             },
-                            show_directories: {
-                                type: 'boolean',
-                                description: 'ディレクトリも表示するかどうか',
-                                default: false
-                            }
+                            // show_directories: {
+                            //     type: 'boolean',
+                            //     description: 'ディレクトリも表示するかどうか',
+                            //     default: false
+                            // }
                         },
                         required: ['project_id']
                     }
@@ -826,26 +826,35 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 show_directories = show_directories === true; // 明示的にtrueの場合のみtrue
 
                 const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+                const axios = await e.axiosWithAuth.then(g => g(req.info.user.id));
 
                 if (ref) {
                     // ブランチ名、タグ名、SHAのいずれかが指定されている場合
                 } else {
                     // デフォルトのブランチを取得
                     const defaultBranchUrl = `${e.uriBase}/api/v4/projects/${project_id}`;
-                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(defaultBranchUrl))).data;
+                    const defaultBranchResult = (await axios.get(defaultBranchUrl)).data;
                     ref = defaultBranchResult.default_branch || 'main';
                 }
 
-                // GitLabのAPIでは最大100件しか一度に取得できないので、100に設定
-                const per_page = 100;
+
                 let allItems: any[] = [];
                 let currentPage = 1;
                 let hasMorePages = true;
 
+                const queryMap = {} as { [key: string]: string };
+                queryMap.per_page = 100 + '';// GitLabのAPIでは最大100件しか一度に取得できないので、100に設定
+                if (path) queryMap.path = path;
+                if (ref) queryMap.ref = ref;
+                if (recursive) queryMap.recursive = recursive + '';
+
+                const query = new URLSearchParams(queryMap);
+
                 // 全ページ取得
                 while (hasMorePages) {
-                    const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/tree?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}&recursive=${recursive}&per_page=${per_page}&page=${currentPage}`;
-                    const response = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url));
+                    // TODO pagination=keyset
+                    const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/tree?${query.toString()}&page=${currentPage}`;
+                    const response = await axios.get(url);
                     const result = response.data;
 
                     if (result.length > 0) {
@@ -876,16 +885,41 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 output += `## uriBase=${e.uriBase}\n\n`;
 
                 // ls風の表示
-                const formattedItems = allItems.map(item => {
+                // const formattedItems = allItems.map(item => {
+                //     const type = item.type === 'tree' ? 'd' : '-';
+                //     const mode = item.mode || '100644'; // デフォルトパーミッション
+                //     const formattedMode = formatMode(mode);
+                //     const name = item.path.split('/').pop(); // パスの最後の部分を取得
+                //     const fullPath = item.path;
+                //     return `${type}${formattedMode} ${item.id} ${fullPath}${item.type === 'tree' ? '/' : ''}`;
+                // });
+
+                // フィルタしたアイテムの配列を取得
+                const filteredItems = allItems.filter(item => item.type !== 'tree');
+                const batchSize = 3; // 10件ずつバッチ処理
+                const results = [];
+                for (let i = 0; i < filteredItems.length; i += batchSize) {
+                    const batch = filteredItems.slice(i, i + batchSize);
+                    const batchResults = await Promise.all(
+                        batch.map(async item => {
+                            const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/files/${encodeURIComponent(item.path)}?ref=${ref}`;
+                            const response = await axios.head(url);
+                            return { ...item, size: response.headers['x-gitlab-size'] };
+                        })
+                    );
+                    results.push(...batchResults);
+                }
+                const maxSizeLen = Math.max(...results.map(item => (item.size + '').length));
+                const formattedItems = results.map(item => {
                     const type = item.type === 'tree' ? 'd' : '-';
                     const mode = item.mode || '100644'; // デフォルトパーミッション
                     const formattedMode = formatMode(mode);
-                    const name = item.path.split('/').pop(); // パスの最後の部分を取得
                     const fullPath = item.path;
-                    return `${type}${formattedMode} ${item.id} ${fullPath}${item.type === 'tree' ? '/' : ''}`;
+                    console.log(item.size, item.path);
+                    return `${type}${formattedMode} ${String(item.size).padStart(maxSizeLen, ' ')} ${fullPath}${item.type === 'tree' ? '/' : ''}`;
                 });
 
-                output += `\`\`\`text\n${formattedItems.join('\n')}\`\`\``;
+                output += `\`\`\`text\n${formattedItems.join('\n')}\n\`\`\``;
                 return output;
             }
         }
