@@ -62,7 +62,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 page = Math.max(page || 1, 1); // 1以上
                 scope = scope || 'projects';
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
 
                 const url = `${e.uriBase}/api/v4/search?scope=${scope}&search=${encodeURIComponent(args.search)}&per_page=${per_page}&page=${page}`;
                 const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
@@ -124,7 +124,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 order_by = order_by || 'created_at';
                 sort = sort || 'desc';
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
 
                 const url = `${e.uriBase}/api/v4/projects?membership=${membership}&per_page=${per_page}&page=${page}&order_by=${order_by}&sort=${sort}`;
                 const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
@@ -421,7 +421,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
         //     handler: async (args: { owner: string, repo: string, ref?: string }): Promise<any> => {
         //         const { owner, repo } = args;
         //         const ref = args.ref || 'main';
-        //         const { e, oAuthAccount } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+        //         const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
 
         //         // GitLabではプロジェクトIDは "owner/repo" をURLエンコードしたものを利用
         //         const projectId = encodeURIComponent(`${owner}/${repo}`);
@@ -507,7 +507,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 page = Math.max(page || 1, 1); // 1以上
                 state = state || 'opened';
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
 
                 const url = `${e.uriBase}/api/v4/projects/${project_id}/issues?state=${state}&per_page=${per_page}&page=${page}`;
                 const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
@@ -561,7 +561,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 page = Math.max(page || 1, 1); // 1以上
                 state = state || 'opened';
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
 
                 const url = `${e.uriBase}/api/v4/projects/${project_id}/merge_requests?state=${state}&per_page=${per_page}&page=${page}`;
                 const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
@@ -606,9 +606,13 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                                 type: 'number',
                                 description: 'プロジェクトID'
                             },
-                            file_path: {
-                                type: 'string',
-                                description: 'ファイルのパス（例: src/main.js, docs/README.md）'
+                            file_path_list: {
+                                type: 'array',
+                                items: {
+                                    type: 'string'
+                                },
+                                description: 'ファイルパスのリスト（例: src/main.js, docs/README.md）',
+                                example: ['src/index.js', 'README.md']
                             },
                             ref: {
                                 type: 'string',
@@ -616,34 +620,165 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                                 default: 'main'
                             }
                         },
-                        required: ['project_id', 'file_path']
+                        required: ['project_id', 'file_path_list']
                     }
                 }
             },
-            handler: async (args: { project_id: number, file_path: string, ref: string }): Promise<any> => {
-                let { project_id, file_path, ref } = args;
-                ref = ref || 'main';
+            handler: async (args: { project_id: number, file_path_list: string[], ref: string }): Promise<any> => {
+                let { project_id, file_path_list, ref } = args;
+                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+                if (ref) {
+                    // ブランチ名、タグ名、SHAのいずれかが指定されている場合
+                } else {
+                    // デフォルトのブランチを取得
+                    const defaultBranchUrl = `${e.uriBase}/api/v4/projects/${project_id}`;
+                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(defaultBranchUrl))).data;
+                    ref = defaultBranchResult.default_branch || 'main';
+                }
 
-                const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/files/${encodeURIComponent(file_path)}?ref=${encodeURIComponent(ref)}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                return await Promise.all(file_path_list.map(async (file_path) => {
+                    const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/files/${encodeURIComponent(file_path)}?ref=${encodeURIComponent(ref)}`;
+                    const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
 
-                // Base64デコードしてファイル内容を取得
-                if (result && result.content) {
-                    result.decoded_content = Buffer.from(result.content, 'base64').toString('utf-8');
-                } else { }
+                    // Base64デコードしてファイル内容を取得
+                    if (result && result.content) {
+                        result.decoded_content = Buffer.from(result.content, 'base64').toString('utf-8');
+                    } else { }
 
-                // reform(result);
-                // // result.me = reform(JSON.parse(oAuthAccount.userInfo));
-                // result.uriBase = e.uriBase;
-                // return result;
+                    // reform(result);
+                    // // result.me = reform(JSON.parse(oAuthAccount.userInfo));
+                    // result.uriBase = e.uriBase;
+                    // return result;
 
-                // ファイル情報も取得
-                let trg = file_path.split('\.').at(-1) || '';
-                trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
+                    let trg = file_path.split('\.').at(-1) || '';
+                    trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
 
-                return `\`\`\`${trg} ${file_path}\n\n${result.decoded_content}\`\`\`\n`;
+                    return `\`\`\`${trg} ${file_path}\n\n${result.decoded_content}\`\`\`\n`;
+                })).then((results) => results.join('\n'));
+            }
+        },
+        {
+            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
+            definition: {
+                type: 'function', function: {
+                    name: `gitlab_${providerSubName}_file_content`,
+                    description: `指定したプロジェクトのリポジトリからファイル内容を取得`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            userPrompt: {
+                                type: 'string',
+                                description: 'AI要約に置けるプロンプト（例: "関数一覧のみを抽出してください"）',
+                                default: '要約してください'
+                            },
+                            project_id: {
+                                type: 'number',
+                                description: 'プロジェクトID'
+                            },
+                            file_path_list: {
+                                type: 'array',
+                                items: {
+                                    type: 'string'
+                                },
+                                description: 'ファイルパスのリスト（例: src/main.js, docs/README.md）',
+                                example: ['src/index.js', 'README.md']
+                            },
+                            ref: {
+                                type: 'string',
+                                description: 'ブランチ名、タグ名、またはコミットSHA',
+                                default: 'main'
+                            }
+                        },
+                        required: ['project_id', 'file_path_list']
+                    }
+                }
+            },
+            handler: async (args: { userPrompt?: string, project_id: number, file_path_list: string[], ref: string }): Promise<any> => {
+                let { userPrompt = '要約してください', project_id, file_path_list, ref } = args;
+                const provider = `gitlab-${providerSubName}`;
+                const { e } = await getOAuthAccount(req, provider);
+
+                if (ref) {
+                    // ブランチ名、タグ名、SHAのいずれかが指定されている場合
+                } else {
+                    // デフォルトのブランチを取得
+                    const defaultBranchUrl = `${e.uriBase}/api/v4/projects/${project_id}`;
+                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(defaultBranchUrl))).data;
+                    ref = defaultBranchResult.default_branch || 'main';
+                }
+
+                return await Promise.all(file_path_list.map(async (file_path) => {
+                    const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/files/${encodeURIComponent(file_path)}?ref=${encodeURIComponent(ref)}`;
+                    const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+
+                    // Base64デコードしてファイル内容を取得
+                    if (result && result.content) {
+                        result.decoded_content = Buffer.from(result.content, 'base64').toString('utf-8');
+                    } else { }
+
+
+                    let trg = file_path.split('\.').at(-1) || '';
+                    trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
+                    const codeBlock = `\`\`\`${trg} ${file_path}\n\n${result.decoded_content}\`\`\`\n`;
+                    // const codeInfoBlock = `\`\`\`json\n${JSON.stringify(contentInfo, null, 2)}\`\`\`\n`; // ファイル情報
+
+                    const systemPrompt = 'アシスタントAI';
+                    const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
+                    // inDto.args.model = 'gemini-1.5-pro';
+                    inDto.args.messages = [
+                        { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
+                        {
+                            role: 'user', content: [
+                                { type: 'text', text: userPrompt },
+                                // { type: 'text', text: codeInfoBlock },
+                                { type: 'text', text: codeBlock },
+                            ],
+                        },
+                    ];
+                    // toolは使わないので空にしておく
+                    delete inDto.args.tool_choice;
+                    delete inDto.args.tools;
+
+                    const aiProvider = providerPrediction(inDto.args.model);
+
+                    const newLabel = `${label}-call_ai-${inDto.args.model}`;
+                    // レスポンス返した後にゆるりとヒストリーを更新しておく。
+                    const history = new PredictHistoryWrapperEntity();
+                    history.connectionId = connectionId;
+                    history.streamId = streamId;
+                    history.messageId = message.id;
+                    history.label = newLabel;
+                    history.model = inDto.args.model;
+                    history.provider = provider;
+                    history.createdBy = req.info.user.id;
+                    history.updatedBy = req.info.user.id;
+                    history.createdIp = req.info.ip;
+                    history.updatedIp = req.info.ip;
+                    await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+
+                    return new Promise((resolve, reject) => {
+                        let text = '';
+                        // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
+                        aiApi.chatCompletionObservableStream(
+                            inDto.args, { label: newLabel }, aiProvider,
+                        ).pipe(
+                            map(res => res.choices.map(choice => choice.delta.content).join('')),
+                            toArray(),
+                            map(res => res.join('')),
+                        ).subscribe({
+                            next: next => {
+                                text += next;
+                            },
+                            error: error => {
+                                reject(error);
+                            },
+                            complete: () => {
+                                resolve(text);
+                            },
+                        });;
+                    });
+                })).then((results) => results.join('\n'));
             }
         },
         {

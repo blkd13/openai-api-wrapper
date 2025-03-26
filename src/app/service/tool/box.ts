@@ -63,7 +63,7 @@ export function boxFunctionDefinitions(
             handler: async (args: { file_id: string, userPrompt?: string, }): Promise<any> => {
                 const provider = 'box';
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, provider);
+                const { e } = await getOAuthAccount(req, provider);
                 const axiosWithAuth = await e.axiosWithAuth.then(g => g(req.info.user.id));
 
                 const boxFile = await boxDownloadCore(provider, args.file_id, req.info.user.id, req.info.ip);
@@ -373,7 +373,7 @@ export function boxFunctionDefinitions(
             }): Promise<any> => {
                 const provider = 'box';
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, provider);
+                const { e } = await getOAuthAccount(req, provider);
                 const axiosWithAuth = await e.axiosWithAuth.then(g => g(req.info.user.id));
 
                 // クエリパラメータの構築
@@ -438,7 +438,7 @@ export function boxFunctionDefinitions(
             },
             handler: async (args: { target: string }): Promise<any> => {
                 const provider = 'box';
-                const { e, oAuthAccount } = await getOAuthAccount(req, provider);
+                const { e } = await getOAuthAccount(req, provider);
                 const axiosWithAuth = await e.axiosWithAuth.then(g => g(req.info.user.id));
 
                 let url;

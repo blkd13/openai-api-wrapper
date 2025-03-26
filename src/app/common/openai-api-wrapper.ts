@@ -1239,10 +1239,10 @@ export class OpenAIApiWrapper {
         options = options || {};
         // ツール呼び出しのカウンターをインクリメントする。
         const toolLabel = options.toolCallCounter === undefined ? '' : `-tool-${options.toolCallCounter}`;
-        const toolCounterLimit = 20;
-        if (options.toolCallCounter && options.toolCallCounter > toolCounterLimit) {
-            throw new Error(`toolCallCounter over ${toolCounterLimit}`);
-        } else { }
+        // const toolCounterLimit = 20;
+        // if (options.toolCallCounter && options.toolCallCounter > toolCounterLimit) {
+        //     throw new Error(`toolCallCounter over ${toolCounterLimit}`);
+        // } else { }
 
         // 
         (args as any).cachedContent = (args as any).cachedContent || options?.cachedContent;
@@ -1390,6 +1390,14 @@ export class OpenAIApiWrapper {
                         // console.dir(toolCall);
                         // console.log(`options.functions ${options.functions}---------------------------------------------`);
                         if (options && options.functions && toolCall.id && toolCall.function && toolCall.function.name && options.functions[toolCall.function.name]) {
+                            options.toolCallCounter = options.toolCallCounter || 0;
+
+                            // TODO 20回目で継続するかどうかを問うためにinteractiveをtrueにする。でもこれ40回の時には出ないバグになってる。。直したい。isInteractiveはbooleanだが、intにした方が使いやすかったなぁ。。
+                            if ((options.toolCallCounter > 1 && ((options.toolCallCounter - 1) % 20) === 0) && options.functions) {
+                                // TODO ここ、functionsは定義なので静的な前提な気もするので破壊するのは気まずいが大丈夫なんだろうか。。
+                                options.functions[toolCall.function.name].info.isInteractive = true;
+                            } else { }
+
                             console.log(`info ${toolCall.index} ${toolCall.id} ${toolCall.function.name}`);
                             const choice = {
                                 delta: {

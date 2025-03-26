@@ -68,7 +68,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 let url = `${e.uriBase}/api/v1/repos/search?q=${encodeURIComponent(keyword)}&limit=${limit}&page=${page}`;
 
@@ -387,7 +387,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
         //     handler: async (args: { owner: string, repo: string, ref?: string }): Promise<any> => {
         //         let { owner, repo } = args;
         //         const ref = args.ref || 'main';
-        //         const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+        //         const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
         //         // リポジトリのツリー情報を再帰的に取得
         //         const treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=true`;
@@ -488,7 +488,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
         //         max_size_mb = max_size_mb || 5;
         //         const max_size_bytes = max_size_mb * 1024 * 1024;
 
-        //         const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+        //         const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
         //         // 正規表現パターンを準備
         //         const regexPatterns = exclude_patterns.map(pattern => new RegExp(pattern));
@@ -650,7 +650,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 page = Math.max(page || 1, 1); // 1以上
                 state = state || 'open';
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 let url = `${e.uriBase}/api/v1/repos/issues/search?limit=${limit}&page=${page}&state=${state}`;
 
@@ -709,7 +709,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 const url = `${e.uriBase}/api/v1/user/repos?limit=${limit}&page=${page}`;
                 const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
@@ -771,7 +771,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 page = Math.max(page || 1, 1); // 1以上
                 state = state || 'open';
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 let url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?limit=${limit}&page=${page}&state=${state}`;
 
@@ -834,7 +834,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 page = Math.max(page || 1, 1); // 1以上
                 state = state || 'open';
 
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 const url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?limit=${limit}&page=${page}&state=${state}`;
                 const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
@@ -883,9 +883,13 @@ export function giteaFunctionDefinitions(providerSubName: string,
                                 type: 'string',
                                 description: 'リポジトリ名'
                             },
-                            file_path: {
-                                type: 'string',
-                                description: 'ファイルのパス（例: src/main.js, docs/README.md）'
+                            file_path_list: {
+                                type: 'array',
+                                items: {
+                                    type: 'string'
+                                },
+                                description: 'ファイルパスのリスト（例: src/main.js, docs/README.md）',
+                                example: ['src/index.js', 'README.md']
                             },
                             ref: {
                                 type: 'string',
@@ -893,49 +897,192 @@ export function giteaFunctionDefinitions(providerSubName: string,
                                 default: 'main'
                             }
                         },
-                        required: ['owner', 'repo', 'file_path']
+                        required: ['owner', 'repo', 'file_path_list']
                     }
                 }
             },
-            handler: async (args: { owner: string, repo: string, file_path: string, ref: string }): Promise<string | { error: string, details: unknown | string }> => {
-                let { owner, repo, file_path, ref } = args;
+            handler: async (args: { owner: string, repo: string, file_path_list: string[], ref: string }): Promise<string> => {
+                let { owner, repo, file_path_list, ref } = args;
                 ref = ref || 'main';
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
                 if (GITEA_CONFIDENCIAL_OWNERS.split(',').includes(owner)) {
-                    return { error: `このリポジトリは共有禁止されています。`, details: owner };
+                    return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\`\`\``);
                 } else { }
-                const url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/raw/${encodeURIComponent(ref)}/${encodeURIComponent(file_path)}`;
-                try {
-                    // raw contentを取得
-                    const contentResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url, { responseType: 'text' }));
-                    const content = contentResponse.data;
 
-                    // ファイル情報も取得
-                    const contentUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(file_path)}?ref=${encodeURIComponent(ref)}`;
-                    const contentInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(contentUrl))).data;
-                    console.log('contentInfo:START');
-                    console.dir(contentInfo);
-                    console.log('contentInfo:END');
-                    // // 結合したレスポンス
-                    // const result = {
-                    //     content: content,
-                    //     file_info: contentInfo
-                    // } as any;
-                    // reform(result);
-                    // // result.me = reform(JSON.parse(oAuthAccount.userInfo));
-                    // result.uriBase = e.uriBase;
-                    // return result;
-                    let trg = file_path.split('\.').at(-1) || '';
-                    trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
-
-                    return `\`\`\`${trg} ${file_path}\n\n${content}\`\`\`\n`;
-                } catch (error) {
-                    // ファイルが見つからない場合など
-                    return {
-                        error: "ファイルの取得に失敗しました",
-                        details: Utils.errorFormattedObject(error),
-                    };
+                if (ref) {
+                    // ブランチ名、タグ名、またはコミットSHAが指定されている場合はそのまま
+                } else {
+                    const defaultBranchUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get<GiteaRepository>(defaultBranchUrl))).data;
+                    ref = ref || defaultBranchResult.default_branch || 'main';
                 }
+
+                // ファイルの内容を取得
+                return await Promise.all(file_path_list.map(async (file_path) => {
+                    const url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/raw/${encodeURIComponent(ref)}/${encodeURIComponent(file_path)}`;
+                    try {
+                        // raw contentを取得
+                        const contentResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url, { responseType: 'text' }));
+                        const content = contentResponse.data;
+
+                        // ファイル情報も取得
+                        const contentUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(file_path)}?ref=${encodeURIComponent(ref)}`;
+                        const contentInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(contentUrl))).data;
+                        // console.log('contentInfo:START');
+                        // console.dir(contentInfo);
+                        // console.log('contentInfo:END');
+                        // // 結合したレスポンス
+                        // const result = {
+                        //     content: content,
+                        //     file_info: contentInfo
+                        // } as any;
+                        // reform(result);
+                        // // result.me = reform(JSON.parse(oAuthAccount.userInfo));
+                        // result.uriBase = e.uriBase;
+                        // return result;
+                        let trg = file_path.split('\.').at(-1) || '';
+                        trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
+                        return `\`\`\`${trg} ${file_path}\n\n${content}\`\`\`\n`;
+                    } catch (error) {
+                        // ファイルが見つからない場合など
+                        return `\`\`\`json\n{ "error": "ファイルが見つかりません", "details": ${JSON.stringify(Utils.errorFormattedObject(error))} }\`\`\`\n\n`;
+                    }
+                })).then(results => results.join('\n'));
+            }
+        },
+        {
+            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
+            definition: {
+                type: 'function', function: {
+                    name: `gitea_${providerSubName}_file_content_ai_summary`,
+                    description: `指定したリポジトリからファイル内容のAI要約を取得`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            userPrompt: {
+                                type: 'string',
+                                description: 'AI要約に置けるプロンプト（例: "関数一覧のみを抽出してください"）',
+                                default: '要約してください'
+                            },
+                            owner: {
+                                type: 'string',
+                                description: 'リポジトリのオーナー（ユーザー名）'
+                            },
+                            repo: {
+                                type: 'string',
+                                description: 'リポジトリ名'
+                            },
+                            file_path_list: {
+                                type: 'array',
+                                items: {
+                                    type: 'string'
+                                },
+                                description: 'ファイルパスのリスト（例: src/main.js, docs/README.md）',
+                                example: ['src/index.js', 'README.md']
+                            },
+                            ref: {
+                                type: 'string',
+                                description: 'ブランチ名、タグ名、またはコミットSHA',
+                                default: 'main'
+                            }
+                        },
+                        required: ['owner', 'repo', 'file_path_list']
+                    }
+                }
+            },
+            handler: async (args: { userPrompt?: string, owner: string, repo: string, file_path_list: string[], ref: string }): Promise<string> => {
+                let { userPrompt = '要約してください', owner, repo, file_path_list, ref } = args;
+                const provider = `gitea-${providerSubName}`;
+                const { e } = await getOAuthAccount(req, provider);
+                if (GITEA_CONFIDENCIAL_OWNERS.split(',').includes(owner)) {
+                    return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\`\`\``);
+                } else { }
+
+                if (ref) {
+                    // ブランチ名、タグ名、またはコミットSHAが指定されている場合はそのまま
+                } else {
+                    const defaultBranchUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get<GiteaRepository>(defaultBranchUrl))).data;
+                    ref = ref || defaultBranchResult.default_branch || 'main';
+                }
+
+                // ファイルの内容を取得
+                return await Promise.all(file_path_list.map(async (file_path) => {
+                    const url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/raw/${encodeURIComponent(ref)}/${encodeURIComponent(file_path)}`;
+                    try {
+                        // raw contentを取得
+                        const contentResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url, { responseType: 'text' }));
+                        const content = contentResponse.data;
+
+                        // ファイル情報も取得
+                        const contentUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(file_path)}?ref=${encodeURIComponent(ref)}`;
+                        const contentInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(contentUrl))).data;
+
+                        let trg = file_path.split('\.').at(-1) || '';
+                        trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
+                        const codeBlock = `\`\`\`${trg} ${file_path}\n\n${content}\`\`\`\n`;
+                        const codeInfoBlock = `\`\`\`json\n${JSON.stringify(contentInfo, null, 2)}\`\`\`\n`; // ファイル情報
+
+                        const systemPrompt = 'アシスタントAI';
+                        const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
+                        // inDto.args.model = 'gemini-1.5-pro';
+                        inDto.args.messages = [
+                            { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
+                            {
+                                role: 'user', content: [
+                                    { type: 'text', text: userPrompt },
+                                    { type: 'text', text: codeInfoBlock },
+                                    { type: 'text', text: codeBlock },
+                                ],
+                            },
+                        ];
+                        // toolは使わないので空にしておく
+                        delete inDto.args.tool_choice;
+                        delete inDto.args.tools;
+
+                        const aiProvider = providerPrediction(inDto.args.model);
+
+                        const newLabel = `${label}-call_ai-${inDto.args.model}`;
+                        // レスポンス返した後にゆるりとヒストリーを更新しておく。
+                        const history = new PredictHistoryWrapperEntity();
+                        history.connectionId = connectionId;
+                        history.streamId = streamId;
+                        history.messageId = message.id;
+                        history.label = newLabel;
+                        history.model = inDto.args.model;
+                        history.provider = provider;
+                        history.createdBy = req.info.user.id;
+                        history.updatedBy = req.info.user.id;
+                        history.createdIp = req.info.ip;
+                        history.updatedIp = req.info.ip;
+                        await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+
+                        return new Promise((resolve, reject) => {
+                            let text = '';
+                            // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
+                            aiApi.chatCompletionObservableStream(
+                                inDto.args, { label: newLabel }, aiProvider,
+                            ).pipe(
+                                map(res => res.choices.map(choice => choice.delta.content).join('')),
+                                toArray(),
+                                map(res => res.join('')),
+                            ).subscribe({
+                                next: next => {
+                                    text += next;
+                                },
+                                error: error => {
+                                    reject(error);
+                                },
+                                complete: () => {
+                                    resolve(text);
+                                },
+                            });;
+                        });
+                    } catch (error) {
+                        // ファイルが見つからない場合など
+                        return `\`\`\`json\n{ "error": "ファイルが見つかりません", "details": ${JSON.stringify(Utils.errorFormattedObject(error))} }\`\`\`\n\n`;
+                    }
+                })).then(results => results.join('\n'));
             }
         },
         {
