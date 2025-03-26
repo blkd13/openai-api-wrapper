@@ -903,7 +903,6 @@ export function giteaFunctionDefinitions(providerSubName: string,
             },
             handler: async (args: { owner: string, repo: string, file_path_list: string[], ref: string }): Promise<string> => {
                 let { owner, repo, file_path_list, ref } = args;
-                ref = ref || 'main';
                 const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
                 if (GITEA_CONFIDENCIAL_OWNERS.split(',').includes(owner)) {
                     return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\n\`\`\``);
