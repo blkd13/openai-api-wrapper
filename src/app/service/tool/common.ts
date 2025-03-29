@@ -1,6 +1,8 @@
-import { Request, response, Response } from 'express';
-import { EntityManager } from 'typeorm';
 import { map, toArray } from 'rxjs';
+import TurndownService from 'turndown';
+// import * as cheerio from 'cheerio';
+import puppeteer from 'puppeteer';
+import { AxiosInstance } from 'axios';
 
 import { MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
 import { UserRequest } from '../models/info.js';
@@ -8,34 +10,42 @@ import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWra
 import { OAuth2Env, readOAuth2Env } from '../controllers/auth.js';
 import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { Utils } from '../../common/utils.js';
-import { boxFunctionDefinitions } from './box.js';
-import { mattermostFunctionDefinitions } from './mattermost.js';
-import { confluenceFunctionDefinitions } from './confluence.js';
-import { jiraFunctionDefinitions } from './jira.js';
 import { ds } from '../db.js';
 import { OAuthAccountEntity } from '../entity/auth.entity.js';
-import { gitlabFunctionDefinitions } from './gitlab.js';
-import { giteaFunctionDefinitions } from './gitea.js';
-import axios from 'axios';
-import TurndownService from 'turndown';
-import * as cheerio from 'cheerio';
-import puppeteer from 'puppeteer';
+import { getAxios, getProxyUrl } from '../../common/http-client.js';
 
 const turndownService = new TurndownService();
 
-const { PUPPETTER_ARGS_PROXY } = process.env as { PUPPETTER_ARGS_PROXY: string; };
-
 async function fetchRenderedText(url: string): Promise<string> {
     // headless: "new"
-    const args = PUPPETTER_ARGS_PROXY ? PUPPETTER_ARGS_PROXY.split(' ') : [];
-    const browser = await puppeteer.launch({ args }); // ヘッドレスブラウザを起動
+    const args = ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors'];
+    let proxyUrl = '';
+    try {
+        proxyUrl = await getProxyUrl(url);
+        if (proxyUrl) {
+            args.push(`--proxy-server=${proxyUrl}`);
+        } else {
+            args.push(`--no-proxy-server`);
+        }
+    } catch (err) {
+        args.push('--no-proxy-server');
+        console.error('getProxyUrlError');
+        console.error(err);
+    }
+    const browser = await puppeteer.launch({
+        headless: true,
+        // ignoreHTTPSErrors: true,  // SSL証明書エラーを無視
+        args,
+    }); // ヘッドレスブラウザを起動
+    console.log(`puppeteer ${proxyUrl ? 'proxy' : 'direct'} url=${url}`);
     const page = await browser.newPage();
+    // console.log(`fetch2 url=${url}`);
     await page.goto(url, { waitUntil: 'networkidle2' }); // JSが実行されるまで待つ
 
     // console.log('page loaded');
     const text = await page.evaluate(() => {
-        console.log('page evaluate');
-        console.log(document.body.innerText);
+        // console.log('page evaluate');
+        // console.log(document.body.innerText);
         return document.body.innerText; // ページの本文のテキストを取得
     });
     // console.log('text:', text);
@@ -56,30 +66,6 @@ const aiModels = [
     { 'model': 'claude-3-7-sonnet-20250219', 'description': '推論、コーディング、コンテンツ作成など多様なタスクに対応。安全性と倫理的な配慮が重視されており、企業での利用に適している。バランスの取れた性能も評価されている。ツール利用が得意', },
 ];
 
-
-// 1. 関数マッピングの作成
-export function functionDefinitions(
-    obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
-    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
-): MyToolType[] {
-    const functionDefinitions = [
-        ...mattermostFunctionDefinitions(obj, req, aiApi, connectionId, streamId, message, label),
-        ...boxFunctionDefinitions(obj, req, aiApi, connectionId, streamId, message, label),
-        ...confluenceFunctionDefinitions('', obj, req, aiApi, connectionId, streamId, message, label),
-        ...jiraFunctionDefinitions('', obj, req, aiApi, connectionId, streamId, message, label),
-        ...giteaFunctionDefinitions('local', obj, req, aiApi, connectionId, streamId, message, label),
-        ...gitlabFunctionDefinitions('local', obj, req, aiApi, connectionId, streamId, message, label),
-        ...commonFunctionDefinitions(obj, req, aiApi, connectionId, streamId, message, label),
-    ].map(_func => {
-        const func = _func as MyToolType;
-        // nameの補充（二重定義になると修正時漏れが怖いので、nameは一か所で定義してここで補充する）
-        func.info.name = func.definition.function.name;
-        func.definition.function.description = `${func.info.group}\n${func.definition.function.description}`;
-        return func;
-    }).filter((func, index, self) => func.info.isActive && index === self.findIndex(t => t.definition.function.name === func.definition.function.name)) as MyToolType[];
-    return functionDefinitions;
-}
-
 export function commonFunctionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
@@ -96,55 +82,65 @@ export function commonFunctionDefinitions(
                         properties: {
                             query: { type: 'string', description: '検索クエリ' },
                             num: { type: 'number', description: '検索結果の最大数', default: 10 },
+                            loadContent: { type: 'boolean', description: 'コンテンツを読み込むかどうか', default: false },
                         },
                         required: ['query']
                     }
                 }
             },
-            handler: async (args: { query: string, num: number }): Promise<{ title: string, link: string }[]> => {
-                const { query, num = 10 } = args;
+            handler: async (args: { query: string, num?: number, loadContent?: boolean }): Promise<{ title: string, link: string }[]> => {
+                const { query, num = 10, loadContent = false } = args;
                 const GOOGLE_CUSTOM_SEARCH_API_KEY = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY || '';
                 const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID || '';
                 const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(GOOGLE_CUSTOM_SEARCH_API_KEY)}&cx=${encodeURIComponent(GOOGLE_CSE_ID)}&q=${encodeURIComponent(query)}&num=${num}`;
-                const response = await axios.get<CustomSearchResponse>(url);
+                const response = await (await getAxios(url)).get<CustomSearchResponse>(url);
                 const items = response.data.items || [];
-                const res = await Promise.all(items.map(async item => {
-                    const response = await axios.get(item.link);
-                    if (response.headers['content-type'].includes('text/html')) {
+
+                if (!loadContent) {
+                    return items.map(item => ({ title: item.title, link: item.link }));
+                } else {
+                    // console.dir(items);
+                    const res = await Promise.all(items.map(async item => {
                         try {
                             const text = await fetchRenderedText(item.link);
                             return { title: item.title, link: item.link, body: text };
                         } catch (e) {
+                            console.log('fetchRenderedTextError');
+                            console.error(e);
                             return { title: item.title, link: item.link, body: response.data };
                         }
-                        // const turndownService = new TurndownService();
-                        // try {
-                        //     const markdown = turndownService.turndown(response.data);
-                        //     console.log(markdown);
-                        //     const text = await fetchRenderedText(item.link);
-                        //     return { title: item.title, link: item.link, body: text };
-                        //     // // return { title: item.title, link: item.link, body: markdown };
-                        //     // const $ = cheerio.load(response.data);
-                        //     // const text = $('body').text().replace(/\s+/g, ' ').trim(); // 余計な空白を削除
-                        //     // return { title: item.title, link: item.link, body: text };
-                        // } catch (e) {
+                        // const response = await axios.get(item.link);
+                        // if (response.headers['content-type'].includes('text/html')) {
+                        //     // const turndownService = new TurndownService();
+                        //     // try {
+                        //     //     const markdown = turndownService.turndown(response.data);
+                        //     //     console.log(markdown);
+                        //     //     const text = await fetchRenderedText(item.link);
+                        //     //     return { title: item.title, link: item.link, body: text };
+                        //     //     // // return { title: item.title, link: item.link, body: markdown };
+                        //     //     // const $ = cheerio.load(response.data);
+                        //     //     // const text = $('body').text().replace(/\s+/g, ' ').trim(); // 余計な空白を削除
+                        //     //     // return { title: item.title, link: item.link, body: text };
+                        //     // } catch (e) {
+                        //     //     return { title: item.title, link: item.link, body: response.data };
+                        //     // }
+                        // } else if (response.headers['content-type'].includes('application/json')) {
+                        //     return { title: item.title, link: item.link, body: response.data };
+                        // } else if (response.headers['content-type'].includes('application/pdf')) {
+                        //     return { title: item.title, link: item.link, body: response.data };
+                        // } else if (response.headers['content-type'].includes('application/msword')) {
+                        //     return { title: item.title, link: item.link, body: response.data };
+                        // } else {
                         //     return { title: item.title, link: item.link, body: response.data };
                         // }
-                    } else if (response.headers['content-type'].includes('application/json')) {
-                        return { title: item.title, link: item.link, body: response.data };
-                    } else if (response.headers['content-type'].includes('application/pdf')) {
-                        return { title: item.title, link: item.link, body: response.data };
-                    } else if (response.headers['content-type'].includes('application/msword')) {
-                        return { title: item.title, link: item.link, body: response.data };
-                    } else {
-                        return { title: item.title, link: item.link, body: response.data };
-                    }
-                }));
-                return res;
+                    }));
+                    // console.dir(res);
+                    return res;
+                }
             },
         },
         {
-            info: { group: 'web', isActive: true, isInteractive: false, label: 'Webページを開く（複数可）', },
+            info: { group: 'web', isActive: true, isInteractive: false, label: 'Webページを開く（複数可）。', },
             definition: {
                 type: 'function', function: {
                     name: 'get_web_page_contents',
@@ -350,16 +346,25 @@ export interface ElasticsearchResponse {
 }
 
 
-export async function getOAuthAccount(req: UserRequest, provider: string): Promise<{ e: OAuth2Env, oAuthAccount: OAuthAccountEntity }> {
+export async function getOAuthAccountForTool(req: UserRequest, provider: string): Promise<{ e: OAuth2Env, oAuthAccount: OAuthAccountEntity, axiosWithAuth: AxiosInstance }> {
+    const e = readOAuth2Env(provider);
     const user_id = req.info.user.id;
     if (!user_id) {
         throw new Error('User ID is required.');
     }
-    const e = readOAuth2Env(provider);
     const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
         where: { provider, userId: req.info.user.id },
     });
-    return { e, oAuthAccount };
+    let axiosWithAuth;
+    if (provider.startsWith('mattermost')) {
+        // Mattermostの場合はCookieを使う
+        axiosWithAuth = await getAxios(e.uriBase);
+        axiosWithAuth.defaults.headers.common['Authorization'] = `Bearer ${req.cookies.MMAUTHTOKEN}`
+        axiosWithAuth.defaults.headers.post['X-Requested-With'] = 'XMLHttpRequest';
+    } else {
+        axiosWithAuth = await e.axiosWithAuth.then(g => g(req.info.user.id));
+    }
+    return { e, oAuthAccount, axiosWithAuth };
 }
 
 

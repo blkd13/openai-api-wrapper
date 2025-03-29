@@ -16,6 +16,7 @@ import { convertToMapSet, handleFileUpload } from '../controllers/file-manager.j
 import { FileAccessEntity, FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
 import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../controllers/chat-by-project-model.js';
 import { plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
+import { getAxios } from '../../common/http-client.js';
 
 export const getMmUsers = [
     body('ids').optional().trim(),
@@ -275,6 +276,7 @@ export const mattermostToAi = [
         // console.log(req.body);
         const provider = 'mattermost';
         const e = readOAuth2Env(provider);
+        const axios = await getAxios(e.uriBase);
 
         const initialArgs = {
             args: {
@@ -376,7 +378,7 @@ export const mattermostToAi = [
                         }
                         // 
                         // console.log(`str   : ${url}`);
-                        const response = await e.axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
+                        const response = await axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
                         console.log(`end ${response.data.order.length}: ${url}`);
                         resObj.posts = { ...resObj.posts, ...response.data.posts };
                         resObj.order = resObj.order.concat(response.data.order);
@@ -414,7 +416,7 @@ export const mattermostToAi = [
             const include_deleted = false;
             const channelUrl = `${e.uriBase}/api/v4/users/me/channels?last_delete_at=${last_delete_at}&include_deleted=${include_deleted}`;
             // console.log(`str   : ${channelUrl}`);
-            const response = await e.axios.get(channelUrl, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
+            const response = await axios.get(channelUrl, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
             console.log(`end ${response.data.length}: ${channelUrl}`);
             const mmChannelMas = (response.data as MattermostChannel[]).reduce((acc, channel) => {
                 acc[channel.id] = channel;
@@ -620,7 +622,7 @@ export const mattermostToAi = [
                                 // await掛ける前にリストに入れておかないと順序が崩れる。
                                 contents.push(fileObj as FileContentPart);
                                 // console.log(imageUrl, file.mime_type, file.dataUrl?.substring(0, 50).replaceAll(/\n/g, ''), file.dataUrl?.length, file.name);
-                                file.dataUrl = await downloadImageAsDataURL(e.axios, `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, imageUrl);
+                                file.dataUrl = await downloadImageAsDataURL(axios, `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, imageUrl);
                                 fileObj.dataUrl = file.dataUrl || '';
                                 (fileObj as any).postId = post.id; // postIdで紐づげグルーピングができるようにしておく
                             });
@@ -836,7 +838,7 @@ export const mattermostToAi = [
                             case ContentPartType.FILE:
                                 // fileは登録済みなので無視
                                 contentPart.text = content.text;
-                                contentPart.linkId = fileIdFileGroupIdMap[(content as any ).fileId || '']; // linkeIdではなくfileIdであることに注意
+                                contentPart.linkId = fileIdFileGroupIdMap[(content as any).fileId || '']; // linkeIdではなくfileIdであることに注意
                                 break;
                         }
                         if (content.type === ContentPartType.FILE && fileGroupIdSet.has(contentPart.linkId)) {

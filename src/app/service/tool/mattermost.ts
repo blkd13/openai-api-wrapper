@@ -1,28 +1,25 @@
-import { Request, Response } from 'express';
-import { EntityManager, In } from 'typeorm';
-import { map, toArray } from 'rxjs';
+import { In } from 'typeorm';
 
 import { MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
 import { UserRequest } from '../models/info.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
-import { readOAuth2Env } from '../controllers/auth.js';
 import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
-import { OAuthAccountEntity } from '../entity/auth.entity.js';
 import { GetChannelsPostsResponse, MattermostChannel, MattermostUser } from '../../agent/api-mattermost/api.js';
 import { MmUserEntity } from '../entity/api-mattermost.entity.js';
-import { reform } from './common.js';
+import { getOAuthAccountForTool, reform } from './common.js';
 
 
 // 1. 関数マッピングの作成
-export function mattermostFunctionDefinitions(
+export async function mattermostFunctionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
-): MyToolType[] {
+): Promise<MyToolType[]> {
+    const provider = 'mattermost';
     return [
         {
-            info: { group: 'mattermost', isActive: true, isInteractive: false, label: `投稿を検索`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `投稿を検索`, },
             definition: {
                 type: 'function', function: {
                     name: 'mm_search_team_posts',
@@ -31,7 +28,7 @@ export function mattermostFunctionDefinitions(
                         type: 'object',
                         properties: {
                             limit: { type: 'number', description: '取得する最大数', default: 50, minimum: 1, maximum: 200 },
-                            teamId: { type: 'string', description: 'teamId（ランダムな英数字26文字）。teamNameと混同する人が非常に多いので注意が必要。\nまた、「all」のように全体を指定することや、複数のチームを指定することは"出来ない"ので注意すること!!チームが特定されている場合にしかの検索は役に立ちません。' },
+                            teamName: { type: 'string', description: 'チーム名' },
                             term: {
                                 type: 'string',
                                 description: Utils.trimLines(`
@@ -50,34 +47,24 @@ export function mattermostFunctionDefinitions(
                             },
 
                         },
-                        required: ['teamId', 'term'],
+                        required: ['teamName', 'term'],
                     },
                 }
             },
-            handler: async (args: { limit: number, teamId: string, term: string }): Promise<any> => {
+            handler: async (args: { limit: number, teamName: string, term: string }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, term } = args;
                 limit = Math.max(Math.min(limit || 50, 200), 1); // 1以上200以下
                 const user_id = req.info.user.id;
                 if (!user_id) {
                     throw new Error('User ID is required.');
                 }
-                const provider = 'mattermost';
-                const e = readOAuth2Env(provider);
-                const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
-                    where: { provider, userId: req.info.user.id }
-                });
-                const userInfo = JSON.parse(oAuthAccount.userInfo) as MattermostUser;
 
                 let url, data;
-                const { teamId } = args;
-                url = `${e.uriBase}/api/v4/teams/${teamId}/posts/search`;
+                const { teamName } = args;
+                url = `${e.uriBase}/api/v4/teams/${teamName}/posts/search`;
                 data = { 'terms': `${term}`, 'is_or_search': false, 'include_deleted_channels': false, 'time_zone_offset': 32400, 'page': 0, 'per_page': limit };
-                const result = (await e.axios.post(url, data, {
-                    headers: {
-                        Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`,
-                        'X-Requested-With': 'XMLHttpRequest',
-                    },
-                })).data;
+                const result = (await axiosWithAuth.post(url, data)).data;
                 reform(result);
                 // console.dir(result);
                 // result.me = reform(userInfo);
@@ -86,7 +73,7 @@ export function mattermostFunctionDefinitions(
             }
         },
         {
-            info: { group: 'mattermost', isActive: true, isInteractive: false, label: `mattermost：自分のユーザー情報`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `mattermost：自分のユーザー情報`, },
             definition: {
                 type: 'function', function: {
                     name: 'mm_user_info',
@@ -95,22 +82,10 @@ export function mattermostFunctionDefinitions(
                 }
             },
             handler: async (args: {}): Promise<any> => {
-                const user_id = req.info.user.id;
-                if (!user_id) {
-                    throw new Error('User ID is required.');
-                }
-                const provider = 'mattermost';
-                const e = readOAuth2Env(provider);
-                const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
-                    where: { provider, userId: req.info.user.id }
-                });
-                const userInfo = JSON.parse(oAuthAccount.userInfo) as MattermostUser;
-
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let url;
                 url = `${e.uriBase}${e.pathUserInfo}`;
-                const result = (await e.axios.get(url, {
-                    headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }
-                })).data;
+                const result = (await axiosWithAuth.get(url)).data;
                 reform(result);
                 // console.log(result);
                 result.uriBase = e.uriBase;
@@ -118,7 +93,7 @@ export function mattermostFunctionDefinitions(
             }
         },
         {
-            info: { group: 'mattermost', isActive: true, label: 'ユーザー検索', },
+            info: { group: provider, isActive: true, label: 'ユーザー検索', },
             definition: {
                 type: 'function',
                 function: {
@@ -146,6 +121,7 @@ export function mattermostFunctionDefinitions(
             },
             handler: async (args: { term: string, team_id?: string, not_in_team_id?: string, in_channel_id?: string, not_in_channel_id?: string, in_group_id?: string, group_constrained?: boolean, allow_inactive?: boolean, without_team?: boolean, limit?: number, allow_full_names?: boolean, allow_emails?: boolean, }):
                 Promise<{ name: string, id: string, text: string }[]> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const keys = ['term', 'team_id', 'not_in_team_id', 'in_channel_id', 'not_in_channel_id', 'in_group_id', 'group_constrained', 'allow_inactive', 'without_team', 'limit', 'allow_full_names', 'allow_emails'];
 
                 // APIリクエストのbodyを作成
@@ -164,15 +140,8 @@ export function mattermostFunctionDefinitions(
                 if (args.allow_full_names !== undefined) requestBody.allow_full_names = args.allow_full_names || true;
                 if (args.allow_emails !== undefined) requestBody.allow_emails = args.allow_emails || true;
 
-                const provider = 'mattermost';
-                const e = readOAuth2Env(provider);
-                const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
-                    where: { provider, userId: req.info.user.id }
-                });
-                const userInfo = JSON.parse(oAuthAccount.userInfo) as MattermostUser;
-
                 const url = `${e.uriBase}/api/v4/users/search`;
-                const resultList = (await e.axios.post(url, requestBody, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, 'X-Requested-With': 'XMLHttpRequest', } })).data;
+                const resultList = (await axiosWithAuth.post(url, requestBody)).data;
 
                 const result = {} as any;
                 result.list = resultList;
@@ -183,7 +152,7 @@ export function mattermostFunctionDefinitions(
             }
         },
         {
-            info: { group: 'mattermost', isActive: true, label: 'ユーザー検索', },
+            info: { group: provider, isActive: true, label: 'ユーザー検索', },
             definition: {
                 type: 'function',
                 function: {
@@ -204,15 +173,8 @@ export function mattermostFunctionDefinitions(
             },
             handler: async (args: { ids: string[], }):
                 Promise<{ name: string, id: string, text: string }[]> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { ids } = args;
-                // APIリクエストのbodyを作成
-                const provider = 'mattermost';
-                const e = readOAuth2Env(provider);
-                const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
-                    where: { provider, userId: req.info.user.id }
-                });
-                const userInfo = JSON.parse(oAuthAccount.userInfo) as MattermostUser;
-
                 const resultList = await ds.getRepository(MmUserEntity).find({
                     select: ['id', 'username', 'nickname'],
                     where: { id: In(ids) },
@@ -227,7 +189,7 @@ export function mattermostFunctionDefinitions(
                 return result;
             }
         }, {
-            info: { group: 'mattermost', isActive: true, isInteractive: false, label: `チャンネル一覧を取得`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `チャンネル一覧を取得`, },
             definition: {
                 type: 'function',
                 function: {
@@ -240,10 +202,10 @@ export function mattermostFunctionDefinitions(
                     parameters: {
                         type: 'object',
                         properties: {
-                            // term: {
-                            //     type: 'string',
-                            //     description: `チャンネル名の絞り込み文字列`,
-                            // },
+                            term: {
+                                type: 'string',
+                                description: `チャンネル名の絞り込み文字列`,
+                            },
                             columns: {
                                 type: 'array',
                                 items: { type: 'string' },
@@ -283,11 +245,13 @@ export function mattermostFunctionDefinitions(
                                 description: 'データ保持ポリシーの対象となっているチャンネルを除外するかどうか。sysconsole_read_compliance権限が必要。サーバーバージョン5.35以上が必要。',
                                 default: false
                             }
-                        }
+                        },
+                        required: ['term'],
                     }
                 }
             },
             handler: async (args: {
+                term: string,
                 columns: string[],
                 not_associated_to_group?: string,
                 page?: number,
@@ -297,11 +261,7 @@ export function mattermostFunctionDefinitions(
                 include_total_count?: boolean,
                 exclude_policy_constrained?: boolean
             }): Promise<any> => {
-                const provider = 'mattermost';
-                const e = readOAuth2Env(provider);
-                const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
-                    where: { provider, userId: req.info.user.id }
-                });
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const userInfo = JSON.parse(oAuthAccount.userInfo) as MattermostUser;
 
                 // クエリパラメータの構築
@@ -339,9 +299,7 @@ export function mattermostFunctionDefinitions(
 
                 const url = `${e.uriBase}/api/v4/users/me/channels${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
 
-                const resultResponse = (await e.axios.get(url, {
-                    headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, 'X-Requested-With': 'XMLHttpRequest' }
-                })).data;
+                const resultResponse = (await axiosWithAuth.get(url)).data;
                 const channels = resultResponse as MattermostChannel[];
                 const result = {} as any;
 
@@ -441,7 +399,7 @@ export function mattermostFunctionDefinitions(
             }
         },
         {
-            info: { group: 'mattermost', isActive: true, isInteractive: true, label: 'メッセージ送信', },
+            info: { group: provider, isActive: true, isInteractive: true, label: 'メッセージ送信', },
             definition: {
                 type: 'function',
                 function: {
@@ -464,13 +422,7 @@ export function mattermostFunctionDefinitions(
                 }
             },
             handler: async (args: { channel_id: string, message: string, root_id?: string, file_ids?: string[], props?: any, metadata?: any, set_online?: boolean }): Promise<any> => {
-                const provider = 'mattermost';
-                const e = readOAuth2Env(provider);
-                const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
-                    where: { provider, userId: req.info.user.id }
-                });
-                const userInfo = JSON.parse(oAuthAccount.userInfo) as MattermostUser;
-
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 // クエリパラメータの構築
                 const queryParams = args.set_online !== undefined ? `?set_online=${args.set_online}` : '';
 
@@ -488,7 +440,7 @@ export function mattermostFunctionDefinitions(
 
                 const url = `${e.uriBase}/api/v4/posts${queryParams}`;
 
-                const result = (await e.axios.post(url, requestBody, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, 'X-Requested-With': 'XMLHttpRequest', } })).data;
+                const result = (await axiosWithAuth.post(url, requestBody)).data;
                 reform(result);
                 // result.me = reform(userInfo);
                 result.uriBase = e.uriBase;

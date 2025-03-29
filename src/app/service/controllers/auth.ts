@@ -16,11 +16,10 @@ import { ds } from '../db.js';
 import { ProjectEntity, TeamEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
 import { ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType } from '../models/values.js';
 import { Utils } from '../../common/utils.js';
-import axios, { Axios, AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
-import fetch from 'node-fetch';
+import { AxiosInstance } from 'axios';
 
-const { SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_FLOW_STATE_JWT_SECRET, OAUTH2_FLOW_STATE_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH, OAUTH2_STATE_JWT_SECRET, AXIOS_EXTERNAL_PROXY_PROTOCOL, AXIOS_EXTERNAL_PROXY_HOST, AXIOS_EXTERNAL_PROXY_PORT, AXIOS_EXTERNAL_PROXY_USER, AXIOS_EXTERNAL_PROXY_PASSWORD } = process.env as Record<string, string>;
-if (SMTP_USER && SMTP_PASSWORD && SMTP_ALIAS && FRONT_BASE_URL && SMTP_SERVER && SMTP_PORT && SMTP_DOMAIN && MAIL_DOMAIN_WHITELIST && MAIL_EXPIRES_IN && OAUTH2_FLOW_STATE_JWT_SECRET && OAUTH2_FLOW_STATE_EXPIRES_IN && OAUTH2_PATH_MAIL_MESSAGE && OAUTH2_PATH_MAIL_AUTH && OAUTH2_STATE_JWT_SECRET && AXIOS_EXTERNAL_PROXY_PROTOCOL && AXIOS_EXTERNAL_PROXY_HOST && AXIOS_EXTERNAL_PROXY_PORT) {
+const { SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_FLOW_STATE_JWT_SECRET, OAUTH2_FLOW_STATE_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH, OAUTH2_STATE_JWT_SECRET, } = process.env as Record<string, string>;
+if (SMTP_USER && SMTP_PASSWORD && SMTP_ALIAS && FRONT_BASE_URL && SMTP_SERVER && SMTP_PORT && SMTP_DOMAIN && MAIL_DOMAIN_WHITELIST && MAIL_EXPIRES_IN && OAUTH2_FLOW_STATE_JWT_SECRET && OAUTH2_FLOW_STATE_EXPIRES_IN && OAUTH2_PATH_MAIL_MESSAGE && OAUTH2_PATH_MAIL_AUTH && OAUTH2_STATE_JWT_SECRET) {
 } else {
     console.log(SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH);
     throw Error('環境変数が足りない');
@@ -28,26 +27,27 @@ if (SMTP_USER && SMTP_PASSWORD && SMTP_ALIAS && FRONT_BASE_URL && SMTP_SERVER &&
 
 // httpsの証明書検証スキップ用のエージェント。社内だから検証しなくていい。
 // import https from 'https';
-import { HttpsProxyAgent } from 'https-proxy-agent';
 import { getAccessToken } from '../api/api-proxy.js';
 import { decrypt, encrypt } from './tool-call.js';
-export const agent = new HttpsProxyAgent(`${AXIOS_EXTERNAL_PROXY_PROTOCOL}://${AXIOS_EXTERNAL_PROXY_HOST}:${AXIOS_EXTERNAL_PROXY_PORT}`);
-// export const agent = new https.Agent({});
+import { getAxios } from '../../common/http-client.js';
+// import { HttpsProxyAgent } from 'https-proxy-agent';
+// export const agent = new HttpsProxyAgent(`${AXIOS_EXTERNAL_PROXY_PROTOCOL}://${AXIOS_EXTERNAL_PROXY_HOST}:${AXIOS_EXTERNAL_PROXY_PORT}`);
+// // export const agent = new https.Agent({});
 
-// プロキシ無しaxios
-export const axiosWithoutProxy = axios.create({ httpAgent: false, httpsAgent: false, proxy: false, });
-// export const axiosWithProxy = axios.create({ httpAgent: agent, httpsAgent: agent, proxy: { host: AXIOS_EXTERNAL_PROXY_HOST, port: Number(AXIOS_EXTERNAL_PROXY_PORT), }, });
-export const axiosWithProxy = axios.create({ httpAgent: agent, httpsAgent: agent, proxy: false, });
-// export const axiosWithProxy = axios.create({
-//     httpAgent: false, httpsAgent: agent, proxy: {
-//         host: AXIOS_EXTERNAL_PROXY_HOST,
-//         port: Number(AXIOS_EXTERNAL_PROXY_PORT),
-//         auth: {
-//             username: AXIOS_EXTERNAL_PROXY_USER || '',
-//             password: AXIOS_EXTERNAL_PROXY_PASSWORD || '',
-//         },
-//     },
-// });
+// // プロキシ無しaxios
+// export const axiosWithoutProxy = axios.create({ httpAgent: false, httpsAgent: false, proxy: false, });
+// // export const axiosWithProxy = axios.create({ httpAgent: agent, httpsAgent: agent, proxy: { host: AXIOS_EXTERNAL_PROXY_HOST, port: Number(AXIOS_EXTERNAL_PROXY_PORT), }, });
+// export const axiosWithProxy = axios.create({ httpAgent: agent, httpsAgent: agent, proxy: false, });
+// // export const axiosWithProxy = axios.create({
+// //     httpAgent: false, httpsAgent: agent, proxy: {
+// //         host: AXIOS_EXTERNAL_PROXY_HOST,
+// //         port: Number(AXIOS_EXTERNAL_PROXY_PORT),
+// //         auth: {
+// //             username: AXIOS_EXTERNAL_PROXY_USER || '',
+// //             password: AXIOS_EXTERNAL_PROXY_PASSWORD || '',
+// //         },
+// //     },
+// // });
 
 export type OAuth2TokenDto = { access_token: string, token_type: string, expires_in: number, scope: string, refresh_token: string, id_token: string, };
 
@@ -284,7 +284,7 @@ export const genApiToken = [
     }
 ];
 
-export type OAuth2Env = { uriBaseAuth: string, uriBase: string, pathAuthorize: string, pathAccessToken: string, pathUserInfo: string, clientId: string, scope: string, redirectUri: string, requireMailAuth: string, useProxy: boolean, axios: Axios, axiosWithAuth: Promise<((userId: string) => Promise<AxiosInstance>)>, postType: string, clientSecret: string, pathTop: string, };
+export type OAuth2Env = { uriBaseAuth: string, uriBase: string, pathAuthorize: string, pathAccessToken: string, pathUserInfo: string, clientId: string, scope: string, redirectUri: string, requireMailAuth: string, axiosWithAuth: Promise<((userId: string) => Promise<AxiosInstance>)>, postType: string, clientSecret: string, pathTop: string, };
 export function readOAuth2Env(provider: string): OAuth2Env {
     const uProvider = provider.toUpperCase().replaceAll('-', '_');
 
@@ -298,8 +298,8 @@ export function readOAuth2Env(provider: string): OAuth2Env {
         scope: process.env[`OAUTH2_${uProvider}_SCOPE`] as string,
         redirectUri: process.env[`OAUTH2_${uProvider}_REDIRECT_URI`] as string,
         requireMailAuth: process.env[`OAUTH2_${uProvider}_REQUIRE_MAIL_AUTH`] as string, // 追加のメール認証が必要かどうか（独自認証のproviderをそのまま使うと危ないので）
-        useProxy: (process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true') as boolean, // proxyを使うかどうか
-        axios: (process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true') ? axiosWithProxy : axiosWithoutProxy,
+        // useProxy: (process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true') as boolean, // proxyを使うかどうか
+        // axios: (process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true') ? axiosWithProxy : axiosWithoutProxy,
         axiosWithAuth: getOAuthClient(provider),
         postType: process.env[`OAUTH2_${uProvider}_POST_TYPE`] as string, // POSTの中身をparamsでやるかbodyに書くか。
         clientSecret: process.env[`OAUTH2_${uProvider}_CLIENT_SECRET`] as string,
@@ -319,6 +319,7 @@ export async function getOAuthClient(provider: string): Promise<((userId: string
 
         const oAuthAccount = await getAccessToken(userId, provider);
 
+        console.log(`getOAuthClient ${provider} ${oAuthAccount.accessToken}`);
         const headers = {
             Authorization: `Bearer ${decrypt(oAuthAccount.accessToken)}`,
             'Content-Type': 'application/json',
@@ -327,11 +328,13 @@ export async function getOAuthClient(provider: string): Promise<((userId: string
         // axiosInstanceをconstにしたかったので無理して三項演算子
         // const flag = process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true';
         // console.log(`flag=${flag}`)
-        const axiosInstance: AxiosInstance = process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true'
-            // proxyありの場合はHttpsProxyAgentを噛ませる
-            ? (agent => axios.create({ headers, httpAgent: agent, httpsAgent: agent, proxy: false, }))(new HttpsProxyAgent(`${AXIOS_EXTERNAL_PROXY_PROTOCOL}://${AXIOS_EXTERNAL_PROXY_HOST}:${AXIOS_EXTERNAL_PROXY_PORT}`))
-            // proxy無しの場合はそのまま
-            : axios.create({ headers, httpAgent: false, httpsAgent: false, proxy: false });
+
+        // const axiosInstance: AxiosInstance = process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true'
+        //     // proxyありの場合はHttpsProxyAgentを噛ませる
+        //     ? (agent => axios.create({ headers, httpAgent: agent, httpsAgent: agent, proxy: false, }))(new HttpsProxyAgent(`${AXIOS_EXTERNAL_PROXY_PROTOCOL}://${AXIOS_EXTERNAL_PROXY_HOST}:${AXIOS_EXTERNAL_PROXY_PORT}`))
+        //     // proxy無しの場合はそのまま
+        //     : axios.create({ headers, httpAgent: false, httpsAgent: false, proxy: false });
+        const axiosInstance: AxiosInstance = await getAxios(process.env[`OAUTH2_${uProvider}_URI_BASE`] as string, headers);
 
         // let axiosInstance: AxiosInstance;
         // if ((process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true')) {
@@ -642,14 +645,15 @@ export const userLoginOAuth2Callback = [
 
                 // アクセストークンを取得するためのリクエスト
                 // const token = await e.axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, body, { params });
+                const axios = await getAxios(e.uriBase);
                 let token = null;
                 if (params) {
-                    token = await e.axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, {}, { params });
+                    token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, {}, { params });
                 } else {
                     // console.dir(body, { depth: null });
                     // console.log(`--------------------852--`);
                     // console.log(`curl -X POST -H 'Content-Type: application/json' -d '${JSON.stringify(body)}' ${e.uriBase}${e.pathAccessToken}`);
-                    token = await e.axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, body, { headers: { 'Content-Type': 'application/json' }, });
+                    token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, body, { headers: { 'Content-Type': 'application/json' }, });
                     // proxy: false, httpsAgent: agent 
                     // console.log(`--------------------840--`);
                     // console.log(`--------------------853--`);
@@ -671,7 +675,7 @@ export const userLoginOAuth2Callback = [
                 // console.log('AccessToken:', accessToken);
                 // console.log(e.axios);
                 // APIを呼び出してみる
-                const userInfo = await e.axios.get<{ id: string, username?: string, email: string, login?: string }>(`${e.uriBase}${e.pathUserInfo}`, {
+                const userInfo = await axios.get<{ id: string, username?: string, email: string, login?: string }>(`${e.uriBase}${e.pathUserInfo}`, {
                     headers: { Authorization: `Bearer ${accessToken}` }
                 });
                 const oAuthUserInfo = userInfo.data;
@@ -1547,7 +1551,7 @@ export const getDepartmentMemberLog = [
         const predictHistory = await ds.query(`
             SELECT created_at, model, provider, take, cost, req_token, res_token, status
             FROM predict_history_view 
-            WHERE created_by = '${userId}';
+            WHERE name = (SELECT name FROM user_entity WHERE id='{${userId}}') ;
           `);
         // 纏める
         res.json({ predictHistory });
@@ -1563,12 +1567,13 @@ export const getDepartmentMemberLogForUser = [
         const predictHistory = await ds.query(`
             SELECT created_at, model, provider, take, cost, req_token, res_token, status
             FROM predict_history_view 
-            WHERE created_by = '${userId}';
+            WHERE name = (SELECT name FROM user_entity WHERE id='{${userId}}') ;
           `);
         // 纏める
         res.json({ predictHistory });
     }
 ];
+
 
 /**
  * [user認証] 部員管理（主に緊急停止用）

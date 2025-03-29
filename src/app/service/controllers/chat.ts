@@ -23,7 +23,6 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
 
 import { countChars, GenerateContentRequestForCache, mapForGemini } from '../../common/my-vertexai.js';
 import { Utils } from '../../common/utils.js';
-import { ChatCompletionStream } from 'openai/lib/ChatCompletionStream.js';
 import { Observer } from 'rxjs/dist/types/index.js';
 
 // Eventクライアントリスト

@@ -35,7 +35,7 @@ import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAcco
 import { Utils, EnhancedRequestLimiter } from '../../common/utils.js';
 import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
 import { readOAuth2Env } from './auth.js';
-import { functionDefinitions } from '../tool/common.js';
+import { functionDefinitions } from '../tool/_index.js';
 import { ToolCallPart, ToolCallPartBody, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallGroupEntity, ToolCallPartInfo, ToolCallPartInfoBody, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
 import { appendToolCallPart } from './tool-call.js';
 
@@ -913,6 +913,23 @@ export const chatCompletionByProjectModel = [
                     return { provider, toolCallCallList };
                 }))
             });
+
+            // toolCall用の関数定義
+            const toolCallFunctions = await Promise.all(responseObjectList.map(async (obj, index) => {
+                const inDto = obj.inDto;
+                const messageSet = obj.messageSet;
+                const message = messageSet.message;
+                const label = req.body.options?.idempotencyKey || `chat-${clientId}-${streamId}-${id}`;
+                const functions = (await functionDefinitions(
+                    obj, req, aiApi, connectionId, streamId, message, label
+                )).reduce((prev, curr) => {
+                    prev[curr.definition.function.name] = curr;
+                    curr.info.name = curr.definition.function.name;
+                    return prev;
+                }, {} as { [functionName: string]: MyToolType });
+                return { inDto, messageSet, functions };
+            }));
+
             // ここは1本のトランザクションで囲ってしまうとツールコールの時に呼出の繰り返し毎にコミットが出来なくなるのでこのようにした。save(inser/update)のみなので競合は起きないはず、、
             await Promise.all(responseObjectList.map(async (obj, index) => {
                 const inDto = obj.inDto;
@@ -922,14 +939,7 @@ export const chatCompletionByProjectModel = [
                 const label = req.body.options?.idempotencyKey || `chat-${clientId}-${streamId}-${id}`;
                 const provider = providerAndToolCallCallListAry[index].provider;
 
-                // toolCall用の関数定義
-                const functions = functionDefinitions(
-                    obj, req, aiApi, connectionId, streamId, message, label
-                ).reduce((prev, curr) => {
-                    prev[curr.definition.function.name] = curr;
-                    curr.info.name = curr.definition.function.name;
-                    return prev;
-                }, {} as { [functionName: string]: MyToolType });
+                const functions = toolCallFunctions[index].functions;
                 if (inDto.args.tool_choice && inDto.args.tool_choice !== 'none' && inDto.args.tools && inDto.args.tools.length > 0) {
                     // 直近のfunctions定義を当てる。
                     const dupCheck: Set<string> = new Set();

@@ -5,10 +5,11 @@ import { ds } from '../db.js';
 import { OAuthUserRequest } from '../models/info.js';
 import { ProjectEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
 import { FileGroupType, ProjectVisibility } from '../models/values.js';
-import { axiosWithoutProxy, axiosWithProxy, readOAuth2Env } from '../controllers/auth.js';
+import { readOAuth2Env } from '../controllers/auth.js';
 import { GitProjectCommitEntity } from '../entity/api-git.entity.js';
 import { FileGroupEntity } from '../entity/file-models.entity.js';
 import { copyFromFirst, gitFetchCommitId } from './git-core.js';
+import { getAxios } from '../../common/http-client.js';
 
 export const fetchCommit = [
     param('provider').isString().notEmpty(),
@@ -50,7 +51,7 @@ export const fetchCommit = [
             if (!e.uriBase) {
                 return res.status(400).json({ error: 'Provider not found' });
             }
-            const _axios = e.useProxy ? axiosWithProxy : axiosWithoutProxy;
+            const _axios = await getAxios(e.uriBase);
 
             // Gitea baseUrl およびアクセストークン
             const baseUrl = e.uriBase;

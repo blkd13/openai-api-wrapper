@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import https from 'https';
 import { ds } from "../db.js";
-import jwt from 'jsonwebtoken';
 import { OAuthAccountEntity, OAuthAccountStatus } from "../entity/auth.entity.js";
 import { validationErrorHandler } from "../middleware/validation.js";
 import { OAuthUserRequest, UserRequest } from "../models/info.js";
@@ -9,10 +8,8 @@ import { OAuth2TokenDto, readOAuth2Env, verifyJwt } from '../controllers/auth.js
 import { header, param, query } from 'express-validator';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { NextFunction } from 'http-proxy-middleware/dist/types.js';
-import { HttpsProxyAgent } from 'https-proxy-agent/dist/index.js';
 import { decrypt, encrypt } from '../controllers/tool-call.js';
-
-const { AXIOS_EXTERNAL_PROXY_PROTOCOL, AXIOS_EXTERNAL_PROXY_HOST, AXIOS_EXTERNAL_PROXY_PORT, OAUTH2_STATE_JWT_SECRET } = process.env as { AXIOS_EXTERNAL_PROXY_PROTOCOL: string, AXIOS_EXTERNAL_PROXY_HOST: string, AXIOS_EXTERNAL_PROXY_PORT: string, OAUTH2_STATE_JWT_SECRET: string };
+import { getAxios, getProxyUrl } from '../../common/http-client.js';
 
 export async function getAccessToken(userId: string, provider: string): Promise<OAuthAccountEntity> {
     const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
@@ -33,11 +30,12 @@ export async function getAccessToken(userId: string, provider: string): Promise<
             }
 
             let token = null;
+            const axios = await getAxios(e.uriBase);
             // アクセストークンを取得するためのリクエスト
             if (params) {
-                token = await e.axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, {}, { params });
+                token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, {}, { params });
             } else {
-                token = await e.axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, body);
+                token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, body);
             }
 
             // console.log(token.data);
@@ -96,7 +94,8 @@ export const getOAuthApiProxy = [
             //     // console.log('CONSOLE', user.id, provider);
             //     accessToken = (await getAccessToken(user.id, provider)).accessToken;
             // }
-            const target = e.useProxy ? `${AXIOS_EXTERNAL_PROXY_PROTOCOL}://${AXIOS_EXTERNAL_PROXY_HOST}:${AXIOS_EXTERNAL_PROXY_PORT}` : e.uriBase;
+            const proxyUrl = await getProxyUrl(e.uriBase);
+            const target = proxyUrl || e.uriBase;
             const MMAUTHTOKEN = req.cookies.MMAUTHTOKEN;
 
             // console.log(`target=${target}`);
@@ -132,7 +131,7 @@ export const getOAuthApiProxy = [
                             proxyReq.setHeader('Authorization', `Bearer ${accessToken}`);
                             // console.log(`Authorization: Bearer ${accessToken}`);
                         }
-                        if (e.useProxy) {
+                        if (proxyUrl) {
                             // console.log(`host=${req.headers.host} ${proxyReq.getHeaders().host}`)
                             // 二重プロキシの場合はパスにhostを埋め込む。
                             // console.log(`USE_PROXY: target=${target} path=${proxyReq.path} url=${req.url}`)
@@ -145,14 +144,12 @@ export const getOAuthApiProxy = [
                             // console.dir(req);
                             // console.dir(proxyReq);
                             // console.log(`USE_PROXY: target=${target} path=${proxyReq.path} url=${req.url}`)
-                        } else {
-                        }
+                        } else { }
                         if (['POST', 'PUT', 'PATCH'].includes(req.method || '') && (req as any).body) {
                             const bodyData = JSON.stringify((req as any).body);
                             // proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
                             proxyReq.write(bodyData);
-                        } else {
-                        }
+                        } else { }
                     },
                     proxyRes: async (proxyRes, req, res) => {
                         // // 必要に応じてヘッダーを設定

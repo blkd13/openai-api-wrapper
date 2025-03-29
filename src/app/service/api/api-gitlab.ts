@@ -2,12 +2,13 @@ import { Request, Response } from 'express';
 import { body, param } from "express-validator";
 import { OAuthUserRequest } from "../models/info.js";
 import { ds } from '../db.js';
-import { axiosWithoutProxy, axiosWithProxy, readOAuth2Env } from '../controllers/auth.js';
+import { readOAuth2Env } from '../controllers/auth.js';
 import { GitLabProject } from './gitlab-api-types.js';
 import { ProjectEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
 import { FileGroupType, ProjectVisibility, } from '../models/values.js';
 import { GitProjectCommitEntity } from '../entity/api-git.entity.js';
 import { copyFromFirst, gitFetchCommitId } from './git-core.js';
+import { getAxios } from '../../common/http-client.js';
 
 export const fetchCommit = [
     param('provider').isString().notEmpty(),
@@ -41,7 +42,7 @@ export const fetchCommit = [
             } else {
                 return res.status(400).json({ error: 'Provider not found' });
             }
-            const _axios = e.useProxy ? axiosWithProxy : axiosWithoutProxy;
+            const _axios = await getAxios(e.uriBase);
 
             // provider から GitLab の baseUrl などを取り出す想定
             // 例: readOAuth2Env(provider) の結果を使う

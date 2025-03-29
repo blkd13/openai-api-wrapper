@@ -1,30 +1,25 @@
-import { Request, Response } from "express";
-import { EntityManager } from "typeorm";
 import { map, toArray } from "rxjs";
-
 
 const { GITEA_CONFIDENCIAL_OWNERS = '' } = process.env as { GITEA_CONFIDENCIAL_OWNERS: string };
 
 import { MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
 import { UserRequest } from "../models/info.js";
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { readOAuth2Env } from "../controllers/auth.js";
 import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
 import { Utils } from "../../common/utils.js";
 import { ds } from "../db.js";
-import { OAuthAccountEntity } from "../entity/auth.entity.js";
-import { decrypt } from "../controllers/tool-call.js";
-import { getOAuthAccount, reform } from "./common.js";
+import { getOAuthAccountForTool, reform } from "./common.js";
 import { GiteaRepository } from "../api/api-gitea.js";
 
 // 1. 関数マッピングの作成
-export function giteaFunctionDefinitions(providerSubName: string,
+export async function giteaFunctionDefinitions(providerSubName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
-): MyToolType[] {
+): Promise<MyToolType[]> {
+    const provider = `gitea-${providerSubName}`;
     return [
         {
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリ検索`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリ検索`, },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_search_repos`,
@@ -64,11 +59,10 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { keyword: string, uid?: number, limit: number, page: number, private: boolean }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, page, keyword, uid } = args;
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
-
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 let url = `${e.uriBase}/api/v1/repos/search?q=${encodeURIComponent(keyword)}&limit=${limit}&page=${page}`;
 
@@ -80,7 +74,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                     url += `&private=${args.private}`;
                 }
 
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 // result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -89,7 +83,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {   // コミット履歴取得
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのコミット履歴`, responseType: 'markdown' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリのコミット履歴`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_repository_commits`,
@@ -128,9 +122,9 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, sha?: string, path?: string, limit: number, page: number }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, sha, path, limit = 20, page = 1 } = args;
 
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
                 const queryMap = {} as { [key: string]: string };
                 if (sha) queryMap.sha = sha;
                 if (path) queryMap.path = path;
@@ -139,13 +133,13 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 // Giteaでは/api/v1/repos/{owner}/{repo}/commitsの形式
                 // project_idからリポジトリ情報を取得するためのリクエスト
                 const repoUrl = `${e.uriBase}/api/v1/repositories/${project_id}`;
-                const repoInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(repoUrl))).data;
+                const repoInfo = (await axiosWithAuth.get(repoUrl)).data;
                 const owner = repoInfo.owner.username;
                 const repo = repoInfo.name;
 
                 const url = `${e.uriBase}/api/v1/repos/${owner}/${repo}/commits?${Object.entries(queryMap).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}`;
                 console.log(url);
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 // JSONをMarkdownテーブルに変換
                 let markdownTable = '## Giteaコミット履歴\n\n';
@@ -178,7 +172,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {   // ブランチとタグ一覧の統合関数
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのブランチ/タグ一覧`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリのブランチ/タグ一覧`, },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_repository_refs`,
@@ -220,19 +214,18 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, ref_type: string, query: string, limit: number, page: number }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, ref_type = 'branches', query = '', limit = 20, page = 1 } = args;
-
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 // project_idからリポジトリ情報を取得するためのリクエスト
                 const repoUrl = `${e.uriBase}/api/v1/repositories/${project_id}`;
-                const repoInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(repoUrl))).data;
+                const repoInfo = (await axiosWithAuth.get(repoUrl)).data;
                 const owner = repoInfo.owner.username;
                 const repo = repoInfo.name;
 
                 // ref_typeに基づいてURLを構築
                 const url = `${e.uriBase}/api/v1/repos/${owner}/${repo}/${ref_type}?q=${encodeURIComponent(query)}&limit=${limit}&page=${page}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 result.uriBase = e.uriBase;
@@ -241,7 +234,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {   // コミット間の差分を取得
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `コミット間の差分を取得`, responseType: 'markdown' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `コミット間の差分を取得`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_repository_compare`,
@@ -267,18 +260,17 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, base: string, head: string }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, base, head } = args;
-
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 // project_idからリポジトリ情報を取得するためのリクエスト
                 const repoUrl = `${e.uriBase}/api/v1/repositories/${project_id}`;
-                const repoInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(repoUrl))).data;
+                const repoInfo = (await axiosWithAuth.get(repoUrl)).data;
                 const owner = repoInfo.owner.username;
                 const repo = repoInfo.name;
 
                 const url = `${e.uriBase}/api/v1/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 // Format the output as markdown
                 let markdown = `# 比較結果: ${base} → ${head}\n\n`;
@@ -307,7 +299,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {   // 特定コミットの詳細
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `特定コミットの詳細`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `特定コミットの詳細`, },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_repository_commit`,
@@ -329,23 +321,22 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, sha: string }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, sha } = args;
-
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 // project_idからリポジトリ情報を取得するためのリクエスト
                 const repoUrl = `${e.uriBase}/api/v1/repositories/${project_id}`;
-                const repoInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(repoUrl))).data;
+                const repoInfo = (await axiosWithAuth.get(repoUrl)).data;
                 const owner = repoInfo.owner.username;
                 const repo = repoInfo.name;
 
                 // Get commit details
                 const commitUrl = `${e.uriBase}/api/v1/repos/${owner}/${repo}/git/commits/${encodeURIComponent(sha)}`;
-                const commitResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(commitUrl))).data;
+                const commitResult = (await axiosWithAuth.get(commitUrl)).data;
 
                 // Get commit files
                 const filesUrl = `${e.uriBase}/api/v1/repos/${owner}/${repo}/commits/${encodeURIComponent(sha)}`;
-                const filesResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(filesUrl))).data;
+                const filesResult = (await axiosWithAuth.get(filesUrl)).data;
 
                 const result = {
                     commit: commitResult,
@@ -358,7 +349,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         // {
-        //     info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリ全ファイル一覧を取得`, },
+        //     info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリ全ファイル一覧を取得`, },
         //     definition: {
         //         type: 'function', function: {
         //             name: `gitea_${providerSubName}_repository_all_file_list`,
@@ -387,11 +378,11 @@ export function giteaFunctionDefinitions(providerSubName: string,
         //     handler: async (args: { owner: string, repo: string, ref?: string }): Promise<any> => {
         //         let { owner, repo } = args;
         //         const ref = args.ref || 'main';
-        //         const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+        //         const { e } = await getOAuthAccount(req, provider);
 
         //         // リポジトリのツリー情報を再帰的に取得
         //         const treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=true`;
-        //         const treeResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(treeUrl));
+        //         const treeResponse = await axiosWithAuth.get(treeUrl);
         //         const treeData = treeResponse.data;
         //         console.dir(treeData);
 
@@ -408,11 +399,11 @@ export function giteaFunctionDefinitions(providerSubName: string,
         //             const filePath = item.path;
         //             try {
         //                 const rawUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/raw/${encodeURIComponent(ref)}/${encodeURIComponent(filePath)}`;
-        //                 const contentResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(rawUrl, { responseType: 'text' }));
+        //                 const contentResponse = await axiosWithAuth.get(rawUrl, { responseType: 'text' });
         //                 const content = contentResponse.data;
 
         //                 const infoUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(ref)}`;
-        //                 const infoResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(infoUrl));
+        //                 const infoResponse = await axiosWithAuth.get(infoUrl);
         //                 const fileInfo = infoResponse.data;
 
         //                 return { path: filePath, content, file_info: fileInfo };
@@ -429,7 +420,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
         //  * リポジトリの全ファイルを一度に取得する関数
         //  */
         // {
-        //     info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリ全ファイル取得`, },
+        //     info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリ全ファイル取得`, },
         //     definition: {
         //         type: 'function', function: {
         //             name: `gitea_${providerSubName}_get_all_repository_files`,
@@ -488,7 +479,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
         //         max_size_mb = max_size_mb || 5;
         //         const max_size_bytes = max_size_mb * 1024 * 1024;
 
-        //         const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
+        //         const { e } = await getOAuthAccount(req, provider);
 
         //         // 正規表現パターンを準備
         //         const regexPatterns = exclude_patterns.map(pattern => new RegExp(pattern));
@@ -522,7 +513,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
         //         try {
         //             // 1. まずリポジトリの全ファイル一覧を再帰的に取得
         //             const treeUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=true`;
-        //             const treeResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(treeUrl));
+        //             const treeResponse = await axiosWithAuth.get(treeUrl);
         //             const tree = treeResponse.data;
 
         //             // 2. ファイルのみをフィルタリング
@@ -550,7 +541,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
 
         //                     try {
         //                         const contentUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/raw/${encodeURIComponent(ref)}/${encodeURIComponent(file.path)}`;
-        //                         const contentResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(contentUrl, { responseType: 'text' }));
+        //                         const contentResponse = await axiosWithAuth.get(contentUrl, { responseType: 'text' });
         //                         return {
         //                             path: file.path,
         //                             content: contentResponse.data,
@@ -597,7 +588,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
         //     }
         // },
         {
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `課題検索`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `課題検索`, },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_search_issues`,
@@ -645,12 +636,11 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { keyword?: string, owner?: string, repo?: string, state?: string, labels?: string, limit: number, page: number }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, page, state } = args;
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
                 state = state || 'open';
-
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 let url = `${e.uriBase}/api/v1/repos/issues/search?limit=${limit}&page=${page}&state=${state}`;
 
@@ -670,7 +660,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                     url += `&labels=${encodeURIComponent(args.labels)}`;
                 }
 
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 // result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -679,7 +669,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `自分のリポジトリ一覧`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `自分のリポジトリ一覧`, },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_my_repos`,
@@ -705,14 +695,13 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { limit: number, page: number }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, page } = args;
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
 
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
-
                 const url = `${e.uriBase}/api/v1/user/repos?limit=${limit}&page=${page}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 // result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -721,7 +710,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリの課題一覧`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリの課題一覧`, },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_repo_issues`,
@@ -766,12 +755,11 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { owner: string, repo: string, state?: string, labels?: string, limit: number, page: number }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, page, state, owner, repo } = args;
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
                 state = state || 'open';
-
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
 
                 let url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?limit=${limit}&page=${page}&state=${state}`;
 
@@ -779,7 +767,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                     url += `&labels=${encodeURIComponent(args.labels)}`;
                 }
 
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 // result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -788,7 +776,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのプルリクエスト一覧`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリのプルリクエスト一覧`, },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_repo_pulls`,
@@ -829,15 +817,14 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { owner: string, repo: string, state?: string, limit: number, page: number }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, page, state, owner, repo } = args;
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
                 state = state || 'open';
 
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
-
                 const url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?limit=${limit}&page=${page}&state=${state}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 // result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -846,7 +833,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `gitea-${providerSubName}：自分のユーザー情報`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `gitea-${providerSubName}：自分のユーザー情報`, },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_user_info`,
@@ -855,10 +842,9 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: {}): Promise<any> => {
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitea-${providerSubName}`);
-
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const url = `${e.uriBase}/api/v1/user`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -867,7 +853,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_file_content`,
@@ -902,8 +888,8 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { owner: string, repo: string, file_path_list: string[], ref: string }): Promise<string> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { owner, repo, file_path_list, ref } = args;
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
                 if (GITEA_CONFIDENCIAL_OWNERS.split(',').includes(owner)) {
                     return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\n\`\`\``);
                 } else { }
@@ -912,7 +898,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                     // ブランチ名、タグ名、またはコミットSHAが指定されている場合はそのまま
                 } else {
                     const defaultBranchUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get<GiteaRepository>(defaultBranchUrl))).data;
+                    const defaultBranchResult = (await axiosWithAuth.get<GiteaRepository>(defaultBranchUrl)).data;
                     ref = ref || defaultBranchResult.default_branch || 'main';
                 }
 
@@ -921,12 +907,12 @@ export function giteaFunctionDefinitions(providerSubName: string,
                     const url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/raw/${encodeURIComponent(ref)}/${encodeURIComponent(file_path)}`;
                     try {
                         // raw contentを取得
-                        const contentResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url, { responseType: 'text' }));
+                        const contentResponse = await axiosWithAuth.get(url, { responseType: 'text' });
                         const content = contentResponse.data;
 
                         // ファイル情報も取得
                         const contentUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(file_path)}?ref=${encodeURIComponent(ref)}`;
-                        const contentInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(contentUrl))).data;
+                        const contentInfo = (await axiosWithAuth.get(contentUrl)).data;
                         // console.log('contentInfo:START');
                         // console.dir(contentInfo);
                         // console.log('contentInfo:END');
@@ -950,7 +936,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_file_content_ai_summary`,
@@ -990,9 +976,8 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { userPrompt?: string, owner: string, repo: string, file_path_list: string[], ref: string }): Promise<string> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { userPrompt = '要約してください', owner, repo, file_path_list, ref } = args;
-                const provider = `gitea-${providerSubName}`;
-                const { e } = await getOAuthAccount(req, provider);
                 if (GITEA_CONFIDENCIAL_OWNERS.split(',').includes(owner)) {
                     return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\n\`\`\``);
                 } else { }
@@ -1001,7 +986,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                     // ブランチ名、タグ名、またはコミットSHAが指定されている場合はそのまま
                 } else {
                     const defaultBranchUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get<GiteaRepository>(defaultBranchUrl))).data;
+                    const defaultBranchResult = (await axiosWithAuth.get<GiteaRepository>(defaultBranchUrl)).data;
                     ref = ref || defaultBranchResult.default_branch || 'main';
                 }
 
@@ -1010,12 +995,12 @@ export function giteaFunctionDefinitions(providerSubName: string,
                     const url = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/raw/${encodeURIComponent(ref)}/${encodeURIComponent(file_path)}`;
                     try {
                         // raw contentを取得
-                        const contentResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url, { responseType: 'text' }));
+                        const contentResponse = await axiosWithAuth.get(url, { responseType: 'text' });
                         const content = contentResponse.data;
 
                         // ファイル情報も取得
                         const contentUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(file_path)}?ref=${encodeURIComponent(ref)}`;
-                        const contentInfo = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(contentUrl))).data;
+                        const contentInfo = (await axiosWithAuth.get(contentUrl)).data;
 
                         let trg = file_path.split('\.').at(-1) || '';
                         trg = { cob: 'cobol', cbl: 'cobol', pco: 'cobol', htm: 'html' }[trg] || trg;
@@ -1085,7 +1070,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitea-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得（ls風）`, responseType: 'text' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得（ls風）`, responseType: 'text' },
             definition: {
                 type: 'function', function: {
                     name: `gitea_${providerSubName}_repository_tree`,
@@ -1127,18 +1112,17 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { owner: string, repo: string, path: string, ref: string, recursive: boolean, show_directories: boolean }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { owner, repo, path, ref, recursive, show_directories } = args;
                 path = path || '';
                 recursive = recursive !== false; // 明示的にfalseの場合のみfalse
                 show_directories = show_directories === true; // 明示的にtrueの場合のみtrue
 
-                const { e } = await getOAuthAccount(req, `gitea-${providerSubName}`);
-
                 if (ref) {
                     // ブランチ名、タグ名、またはコミットSHAが指定されている場合はそのまま
                 } else {
                     const defaultBranchUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get<GiteaRepository>(defaultBranchUrl))).data;
+                    const defaultBranchResult = (await axiosWithAuth.get<GiteaRepository>(defaultBranchUrl)).data;
                     ref = ref || defaultBranchResult.default_branch || 'main';
                 }
 
@@ -1153,7 +1137,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                         // パスが指定されている場合、そのパスのSHAを取得する必要がある
                         const pathUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`;
                         try {
-                            const pathResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(pathUrl));
+                            const pathResponse = await axiosWithAuth.get(pathUrl);
                             if (Array.isArray(pathResponse.data) && pathResponse.data.length > 0) {
                                 // これはディレクトリ
                                 const dirSha = pathResponse.data[0].sha;
@@ -1169,7 +1153,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                         }
                     }
 
-                    const treeResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(treeUrl));
+                    const treeResponse = await axiosWithAuth.get(treeUrl);
                     if (treeResponse.data && treeResponse.data.tree) {
                         // GitEAのツリー構造をフラット化
                         allItems = treeResponse.data.tree.map((item: any) => {
@@ -1195,7 +1179,7 @@ export function giteaFunctionDefinitions(providerSubName: string,
                 } else {
                     // 非再帰的な場合は contents API を使用
                     const contentsUrl = `${e.uriBase}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`;
-                    const contentsResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(contentsUrl));
+                    const contentsResponse = await axiosWithAuth.get(contentsUrl);
 
                     if (Array.isArray(contentsResponse.data)) {
                         allItems = contentsResponse.data.map((item: any) => {

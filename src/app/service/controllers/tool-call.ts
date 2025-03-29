@@ -5,7 +5,7 @@ import { UserRequest } from "../models/info.js";
 import { ProjectEntity, TeamMemberEntity } from "../entity/project-models.entity.js";
 import { validationErrorHandler } from "../middleware/validation.js";
 import { ds } from "../db.js";
-import { functionDefinitions } from "../tool/common.js";
+import { functionDefinitions } from '../tool/_index.js';
 import { ToolCallPartEntity, ToolCallGroupEntity, ToolCallPartStatus, ToolCallPart, ToolCallPartInfoBody, ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartResultBody, ToolCallPartType } from "../entity/tool-call.entity.js";
 import { ProjectVisibility } from "../models/values.js";
 import { EntityNotFoundError } from "typeorm/index.js";
@@ -14,6 +14,7 @@ import crypto from 'crypto';
 import { OAuthAccountEntity, OAuthAccountStatus } from "../entity/auth.entity.js";
 import { readOAuth2Env } from "./auth.js";
 import { Utils } from "../../common/utils.js";
+import { getAxios } from "../../common/http-client.js";
 
 
 const { API_KEY_HAND_REGISTRATION_PROVIDERS, ENCRYPTION_KEY } = process.env as { API_KEY_HAND_REGISTRATION_PROVIDERS: string, ENCRYPTION_KEY: string };
@@ -23,7 +24,7 @@ export const getFunctionDefinitions = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         // 汚い。。。
-        const funcDefs = functionDefinitions({ inDto: { args: {} as any }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy');
+        const funcDefs = await functionDefinitions({ inDto: { args: {} as any }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy');
         res.json(funcDefs.map(f => {
             f.info.name = f.definition.function.name;
             return ({ info: f.info, definition: f.definition });
@@ -237,7 +238,8 @@ export const registApiKey = [
                 const e = readOAuth2Env(provider);
                 const url = `${e.uriBase}${e.pathUserInfo}`;
                 console.log(url);
-                const axiosResponse = (await e.axios.get(url, {
+                const axios = await getAxios(url);
+                const axiosResponse = (await axios.get(url, {
                     headers: { 'Authorization': `Bearer ${accessToken}`, }
                 }));
                 const result = axiosResponse.data;

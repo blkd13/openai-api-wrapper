@@ -15,6 +15,7 @@ import { BoxApiCollection, BoxApiCollectionItem, BoxApiCollectionList, BoxApiFol
 import { myDetectFile } from '../controllers/file-manager.js';
 import { FileBodyEntity } from '../entity/file-models.entity.js';
 import { Utils } from '../../common/utils.js';
+import { getAxios } from '../../common/http-client.js';
 
 const { BOX_DOWNLOAD_DIR } = process.env;
 
@@ -59,7 +60,8 @@ export const boxApiItem = [
                 const url = `${e.uriBase}/2.0/${types}/${itemId}${type === 'collection' ? '/items' : ''}?offset=${offset}&limit=${limit}`;
                 // console.log(url);
 
-                const response = await e.axios.get<BoxApiFolder>(url, { headers: { Authorization: `Bearer ${req.info.oAuth.accessToken}`, }, });
+                const axios = await getAxios(url);
+                const response = await axios.get<BoxApiFolder>(url, { headers: { Authorization: `Bearer ${req.info.oAuth.accessToken}`, }, });
                 const folder = response.data;
                 console.log(`Retrieved ${folder.item_collection.entries.length} items. Total count: ${folder.item_collection.total_count}`);
                 if (folder.item_collection.entries.length > 0) {
@@ -237,11 +239,12 @@ export const upsertBoxApiCollection = [
                 return res.status(400).json({ error: 'Provider not found' });
             }
             const url = `${e.uriBase}/2.0/collections/${collectionId}`;
-            const response = await e.axios.get<BoxApiCollection>(url, { headers: { Authorization: `Bearer ${req.info.oAuth.accessToken}`, }, });
+            const axios = await getAxios(url);
+            const response = await axios.get<BoxApiCollection>(url, { headers: { Authorization: `Bearer ${req.info.oAuth.accessToken}`, }, });
             const collection = response.data;
 
             const urlItem = `${e.uriBase}/2.0/collections/${collectionId}/items?${ITEM_QUERY}`;
-            const responseItem = await e.axios.get<BoxApiCollectionItem>(urlItem, { headers: { Authorization: `Bearer ${req.info.oAuth.accessToken}`, }, });
+            const responseItem = await axios.get<BoxApiCollectionItem>(urlItem, { headers: { Authorization: `Bearer ${req.info.oAuth.accessToken}`, }, });
             const collectionItem = responseItem.data;
 
             const savedCollection = await ds.transaction(async (tm) => {
@@ -290,7 +293,8 @@ export const boxApiCollection = [
                 return res.status(400).json({ error: 'Provider not found' });
             }
             const url = `${e.uriBase}/2.0/collections`;
-            const response = await e.axios.get<BoxApiCollectionList>(url, { headers: { Authorization: `Bearer ${req.info.oAuth.accessToken}`, }, });
+            const axios = await getAxios(url);
+            const response = await axios.get<BoxApiCollectionList>(url, { headers: { Authorization: `Bearer ${req.info.oAuth.accessToken}`, }, });
             const collection = response.data;
 
             // 登録済みのコレクションを取得
@@ -361,7 +365,8 @@ export const boxUpload = [
         async function post(fileId: string, file: Express.Multer.File, attributes: Attributes) {
             const url = fileId ? `${e.uriBase}/2.0/files/${fileId}/content` : `${e.uriBase}/2.0/files/content`;
             console.log(url);
-            const response = await e.axios.request<Attributes>({
+            const axios = await getAxios(url);
+            const response = await axios.request<Attributes>({
                 url,
                 method: 'OPTIONS',
                 headers: {
@@ -379,7 +384,8 @@ export const boxUpload = [
             const blob = new Blob([uint8Array], { type: file.mimetype });
             formData.append('file', blob as any, file.originalname);
 
-            const uploadResponse = await e.axios.post(uploadInfo.upload_url, formData, {
+            const axios2 = await getAxios(uploadInfo.upload_url);
+            const uploadResponse = await axios2.post(uploadInfo.upload_url, formData, {
                 headers: {
                     Authorization: `Bearer ${req.info.oAuth.accessToken}`,
                     'Content-Type': 'multipart/form-data',

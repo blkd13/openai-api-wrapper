@@ -1,26 +1,21 @@
-import { Request, Response } from "express";
-import { EntityManager } from "typeorm";
 import { map, toArray } from "rxjs";
 
 import { MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
 import { UserRequest } from "../models/info.js";
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { readOAuth2Env } from "../controllers/auth.js";
 import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
-import { Utils } from "../../common/utils.js";
 import { ds } from "../db.js";
-import { OAuthAccountEntity } from "../entity/auth.entity.js";
-import { decrypt } from "../controllers/tool-call.js";
-import { getOAuthAccount, reform } from "./common.js";
+import { getOAuthAccountForTool, reform } from "./common.js";
 
 // 1. 関数マッピングの作成
-export function gitlabFunctionDefinitions(providerSubName: string,
+export async function gitlabFunctionDefinitions(providerSubName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
-): MyToolType[] {
+): Promise<MyToolType[]> {
+    const provider = `gitlab-${providerSubName}`;
     return [
         {
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `汎用検索`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `汎用検索`, },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_search`,
@@ -57,15 +52,14 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { scope: string, search: string, per_page: number, page: number }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { per_page, page, scope } = args;
                 per_page = Math.max(Math.min(per_page || 20, 100), 1); // 1以上100以下
                 page = Math.max(page || 1, 1); // 1以上
                 scope = scope || 'projects';
 
-                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
-
                 const url = `${e.uriBase}/api/v4/search?scope=${scope}&search=${encodeURIComponent(args.search)}&per_page=${per_page}&page=${page}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 // result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -74,7 +68,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `プロジェクト一覧取得`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `プロジェクト一覧取得`, },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_projects`,
@@ -117,6 +111,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { membership: boolean, per_page: number, page: number, order_by: string, sort: string }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { per_page, page, membership, order_by, sort } = args;
                 per_page = Math.max(Math.min(per_page || 20, 100), 1); // 1以上100以下
                 page = Math.max(page || 1, 1); // 1以上
@@ -124,10 +119,8 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 order_by = order_by || 'created_at';
                 sort = sort || 'desc';
 
-                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
-
                 const url = `${e.uriBase}/api/v4/projects?membership=${membership}&per_page=${per_page}&page=${page}&order_by=${order_by}&sort=${sort}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 // result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -136,7 +129,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {   // For retrieving commit logs
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのコミット履歴`, responseType: 'markdown' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリのコミット履歴`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_repository_commits`,
@@ -175,8 +168,8 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, ref_name?: string, path?: string, per_page?: number, page?: number }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, ref_name, path = '', per_page = 20, page = 1 } = args;
-                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
                 const queryMap = {} as { [key: string]: string };
                 if (path) queryMap.path = path;
                 if (per_page) queryMap.per_page = per_page + '';
@@ -184,7 +177,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 if (ref_name) queryMap.ref_name = ref_name;
                 const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/commits?${new URLSearchParams(queryMap)}`;
                 // console.log(url);
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 // reform(result);
                 // result.uriBase = e.uriBase;
@@ -222,7 +215,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {   // ブランチとタグ一覧を統合した関数
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリのブランチ/タグ一覧`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリのブランチ/タグ一覧`, },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_repository_refs`,
@@ -254,16 +247,16 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, ref_type: string, search?: string, regex?: string }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, ref_type = 'branches', search, regex, } = args;
 
-                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
                 const queryMap = {} as { [key: string]: string };
                 if (search) queryMap.search = search;
                 if (regex) queryMap.regex = regex;
 
                 // ref_typeに基づいてURLを構築
                 const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/${ref_type}?${new URLSearchParams(queryMap)}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 result.uriBase = e.uriBase;
@@ -272,7 +265,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {   // For viewing commit differences (diff)
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `コミット間の差分を取得`, responseType: 'markdown' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `コミット間の差分を取得`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_repository_compare`,
@@ -303,12 +296,11 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, from: string, to: string, straight: boolean }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, from, to, straight = true } = args;
 
-                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
-
                 const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/compare?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&straight=${straight}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 // Format the output as markdown
                 let markdown = `# 比較結果: ${from} → ${to}\n\n`;
@@ -333,7 +325,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {   // For viewing a specific commit
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `特定コミットの詳細`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `特定コミットの詳細`, },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_repository_commit`,
@@ -360,21 +352,20 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, commit_id: string, stats: boolean }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, commit_id, stats = true } = args;
-
-                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
 
                 // Get commit details
                 const commitUrl = `${e.uriBase}/api/v4/projects/${project_id}/repository/commits/${encodeURIComponent(commit_id)}?stats=${stats}`;
-                console.log(commitUrl);
-                const commitResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(commitUrl))).data;
-                console.dir(commitResult);
+                // console.log(commitUrl);
+                const commitResult = (await axiosWithAuth.get(commitUrl)).data;
+                // console.dir(commitResult);
 
                 // Get commit diff
                 const diffUrl = `${e.uriBase}/api/v4/projects/${project_id}/repository/commits/${encodeURIComponent(commit_id)}/diff`;
-                console.log(diffUrl);
-                const diffResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(diffUrl))).data;
-                console.dir(diffResult);
+                // console.log(diffUrl);
+                const diffResult = (await axiosWithAuth.get(diffUrl)).data;
+                // console.dir(diffResult);
 
                 const result = {
                     ...commitResult,
@@ -392,7 +383,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         // {
-        //     info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリ全ファイル一覧を取得`, },
+        //     info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリ全ファイル一覧を取得`, },
         //     definition: {
         //         type: 'function', function: {
         //             name: `gitlab_${providerSubName}_repository_all_files`,
@@ -421,14 +412,14 @@ export function gitlabFunctionDefinitions(providerSubName: string,
         //     handler: async (args: { owner: string, repo: string, ref?: string }): Promise<any> => {
         //         const { owner, repo } = args;
         //         const ref = args.ref || 'main';
-        //         const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
+        //         const { e } = await getOAuthAccount(req, provider);
 
         //         // GitLabではプロジェクトIDは "owner/repo" をURLエンコードしたものを利用
         //         const projectId = encodeURIComponent(`${owner}/${repo}`);
 
         //         // リポジトリのツリー情報を再帰的に取得（最大件数はper_page=100、必要に応じてページングの実装が必要）
         //         const treeUrl = `${e.uriBase}/api/v4/projects/${projectId}/repository/tree?recursive=true&ref=${encodeURIComponent(ref)}&per_page=1000`;
-        //         const treeResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(treeUrl));
+        //         const treeResponse = await axiosWithAuth.get(treeUrl));
         //         const treeData = treeResponse.data;
 
         //         if (!Array.isArray(treeData)) {
@@ -446,12 +437,12 @@ export function gitlabFunctionDefinitions(providerSubName: string,
         //             try {
         //                 // ファイル内容の取得
         //                 const rawUrl = `${e.uriBase}/api/v4/projects/${projectId}/repository/files/${encodeURIComponent(filePath)}/raw?ref=${encodeURIComponent(ref)}`;
-        //                 const contentResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(rawUrl, { responseType: 'text' }));
+        //                 const contentResponse = await axiosWithAuth.get(rawUrl, { responseType: 'text' }));
         //                 const content = contentResponse.data;
 
         //                 // ファイル情報の取得
         //                 const infoUrl = `${e.uriBase}/api/v4/projects/${projectId}/repository/files/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(ref)}`;
-        //                 const infoResponse = await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(infoUrl));
+        //                 const infoResponse = await axiosWithAuth.get(infoUrl));
         //                 const fileInfo = infoResponse.data;
 
         //                 return { path: filePath, content, file_info: fileInfo };
@@ -465,7 +456,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
         //     }
         // },
         {
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `プロジェクトの課題一覧`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `プロジェクトの課題一覧`, },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_project_issues`,
@@ -502,15 +493,14 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, state: string, per_page: number, page: number }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { project_id, state, per_page, page } = args;
                 per_page = Math.max(Math.min(per_page || 20, 100), 1); // 1以上100以下
                 page = Math.max(page || 1, 1); // 1以上
                 state = state || 'opened';
 
-                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
-
                 const url = `${e.uriBase}/api/v4/projects/${project_id}/issues?state=${state}&per_page=${per_page}&page=${page}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 // result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -519,7 +509,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `プロジェクトのマージリクエスト一覧`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `プロジェクトのマージリクエスト一覧`, },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_project_merge_requests`,
@@ -556,15 +546,14 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, state: string, per_page: number, page: number }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { project_id, state, per_page, page } = args;
                 per_page = Math.max(Math.min(per_page || 20, 100), 1); // 1以上100以下
                 page = Math.max(page || 1, 1); // 1以上
                 state = state || 'opened';
 
-                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
-
                 const url = `${e.uriBase}/api/v4/projects/${project_id}/merge_requests?state=${state}&per_page=${per_page}&page=${page}`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 // result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -573,7 +562,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `gitlab-${providerSubName}：自分のユーザー情報`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `gitlab-${providerSubName}：自分のユーザー情報`, },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_user_info`,
@@ -582,10 +571,9 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: {}): Promise<any> => {
-                const { e, oAuthAccount } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
-
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const url = `${e.uriBase}/api/v4/user`;
-                const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
                 result.me = reform(JSON.parse(oAuthAccount.userInfo));
@@ -594,7 +582,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_file_content`,
@@ -625,21 +613,21 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, file_path_list: string[], ref: string }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { project_id, file_path_list, ref } = args;
-                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
 
                 if (ref) {
                     // ブランチ名、タグ名、SHAのいずれかが指定されている場合
                 } else {
                     // デフォルトのブランチを取得
                     const defaultBranchUrl = `${e.uriBase}/api/v4/projects/${project_id}`;
-                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(defaultBranchUrl))).data;
+                    const defaultBranchResult = (await axiosWithAuth.get(defaultBranchUrl)).data;
                     ref = defaultBranchResult.default_branch || 'main';
                 }
 
                 return await Promise.all(file_path_list.map(async (file_path) => {
                     const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/files/${encodeURIComponent(file_path)}?ref=${encodeURIComponent(ref)}`;
-                    const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                    const result = (await axiosWithAuth.get(url)).data;
 
                     // Base64デコードしてファイル内容を取得
                     if (result && result.content) {
@@ -659,7 +647,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_file_content`,
@@ -695,22 +683,21 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { userPrompt?: string, project_id: number, file_path_list: string[], ref: string }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { userPrompt = '要約してください', project_id, file_path_list, ref } = args;
-                const provider = `gitlab-${providerSubName}`;
-                const { e } = await getOAuthAccount(req, provider);
 
                 if (ref) {
                     // ブランチ名、タグ名、SHAのいずれかが指定されている場合
                 } else {
                     // デフォルトのブランチを取得
                     const defaultBranchUrl = `${e.uriBase}/api/v4/projects/${project_id}`;
-                    const defaultBranchResult = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(defaultBranchUrl))).data;
+                    const defaultBranchResult = (await axiosWithAuth.get(defaultBranchUrl)).data;
                     ref = defaultBranchResult.default_branch || 'main';
                 }
 
                 return await Promise.all(file_path_list.map(async (file_path) => {
                     const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/files/${encodeURIComponent(file_path)}?ref=${encodeURIComponent(ref)}`;
-                    const result = (await e.axiosWithAuth.then(g => g(req.info.user.id)).then(g => g.get(url))).data;
+                    const result = (await axiosWithAuth.get(url)).data;
 
                     // Base64デコードしてファイル内容を取得
                     if (result && result.content) {
@@ -782,7 +769,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: `gitlab-${providerSubName}`, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得（ls風）`, responseType: 'markdown' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得（ls風）`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
                     name: `gitlab_${providerSubName}_repository_tree`,
@@ -820,20 +807,18 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { project_id: number, path: string, ref: string, recursive: boolean, show_directories: boolean }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { project_id, path, ref, recursive, show_directories } = args;
                 path = path || '';
                 recursive = recursive !== false; // 明示的にfalseの場合のみfalse
                 show_directories = show_directories === true; // 明示的にtrueの場合のみtrue
-
-                const { e } = await getOAuthAccount(req, `gitlab-${providerSubName}`);
-                const axios = await e.axiosWithAuth.then(g => g(req.info.user.id));
 
                 if (ref) {
                     // ブランチ名、タグ名、SHAのいずれかが指定されている場合
                 } else {
                     // デフォルトのブランチを取得
                     const defaultBranchUrl = `${e.uriBase}/api/v4/projects/${project_id}`;
-                    const defaultBranchResult = (await axios.get(defaultBranchUrl)).data;
+                    const defaultBranchResult = (await axiosWithAuth.get(defaultBranchUrl)).data;
                     ref = defaultBranchResult.default_branch || 'main';
                 }
 
@@ -854,7 +839,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                 while (hasMorePages) {
                     // TODO pagination=keyset
                     const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/tree?${query.toString()}&page=${currentPage}`;
-                    const response = await axios.get(url);
+                    const response = await axiosWithAuth.get(url);
                     const result = response.data;
 
                     if (result.length > 0) {
@@ -903,7 +888,7 @@ export function gitlabFunctionDefinitions(providerSubName: string,
                     const batchResults = await Promise.all(
                         batch.map(async item => {
                             const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/files/${encodeURIComponent(item.path)}?ref=${ref}`;
-                            const response = await axios.head(url);
+                            const response = await axiosWithAuth.head(url);
                             return { ...item, size: response.headers['x-gitlab-size'] };
                         })
                     );

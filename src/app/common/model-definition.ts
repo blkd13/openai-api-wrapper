@@ -1,6 +1,6 @@
 import { TiktokenModel } from "tiktoken/tiktoken";
 
-export const VISION_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-vision-preview', 'gemini-2.0-flash-exp', 'gemini-exp-1206', 'gemini-2.0-flash-thinking-exp-1219', 'gemini-2.0-flash-thinking-exp-01-21', 'gemini-2.0-flash-thinking-exp', 'gemini-1.5-flash-001', 'gemini-1.5-pro-001', 'gemini-1.5-flash-002', 'gemini-1.5-pro-002', 'gemini-1.0-pro-vision-001', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-flash-experimental', 'gemini-pro-experimental', 'gemini-1.0-pro-vision', 'claude-3-haiku-20240307', 'claude-3-5-sonnet-20240229', 'claude-3-opus-20240229', 'claude-3-5-sonnet-20240620', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet@20240620', 'claude-3-5-sonnet-v2@20241022', 'o1-preview', 'o1', 'o3-mini', 'gemini-2.0-flash-001', 'gemini-2.0-pro-exp-02-05', 'gemini-2.0-flash-lite-preview-02-05', 'claude-3-7-sonnet', 'claude-3-7-sonnet@20250219', 'claude-3-7-sonnet-thinking@20250219'];
+export const VISION_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-vision-preview', 'gemini-2.0-flash-exp', 'gemini-exp-1206', 'gemini-2.0-flash-thinking-exp-1219', 'gemini-2.0-flash-thinking-exp-01-21', 'gemini-2.0-flash-thinking-exp', 'gemini-1.5-flash-001', 'gemini-1.5-pro-001', 'gemini-1.5-flash-002', 'gemini-1.5-pro-002', 'gemini-1.0-pro-vision-001', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-flash-experimental', 'gemini-pro-experimental', 'gemini-1.0-pro-vision', 'claude-3-haiku-20240307', 'claude-3-5-sonnet-20240229', 'claude-3-opus-20240229', 'claude-3-5-sonnet-20240620', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet@20240620', 'claude-3-5-sonnet-v2@20241022', 'o1-preview', 'o1', 'o1-pro', 'o3-mini', 'gemini-2.0-flash-001', 'gemini-2.0-pro-exp-02-05', 'gemini-2.0-flash-lite-preview-02-05', 'claude-3-7-sonnet', 'claude-3-7-sonnet@20250219', 'claude-3-7-sonnet-thinking@20250219'];
 export const JSON_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'];
 export const GPT4_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview'];
 const azureDeployNameMap: Record<string, string> = {
@@ -23,7 +23,7 @@ const azureDeployTpmMap: Record<string, number> = {
 // TiktokenModelが新モデルに追いつくまでは自己定義で対応する。
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
 export type GPTModels = TiktokenModel
-    | 'gpt-4o-2024-05-13' | 'gpt-4o' | 'gpt-4o-mini-2024-07-18' | 'gpt-4o-mini' | 'o1-preview' | 'o1' | 'o3-mini' | 'gemini-2.0-flash-001' | 'gemini-2.0-pro-exp-02-05' | 'gemini-2.0-flash-lite-preview-02-05'
+    | 'gpt-4o-2024-05-13' | 'gpt-4o' | 'gpt-4o-mini-2024-07-18' | 'gpt-4o-mini' | 'o1-preview' | 'o1' | 'o1-pro' | 'o3-mini' | 'gemini-2.0-flash-001' | 'gemini-2.0-pro-exp-02-05' | 'gemini-2.0-flash-lite-preview-02-05'
     | 'llama2-70b-4096' | 'meta/llama3-405b-instruct-maas'
     | 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' | 'gemini-1.5-flash-002' | 'gemini-1.5-pro-002' | 'gemini-1.0-pro-001' | 'gemini-1.0-pro-vision-001'
     | 'gemini-1.5-flash' | 'gemini-1.5-pro' | 'gemini-1.0-pro' | 'gemini-1.0-pro-vision'
@@ -48,6 +48,7 @@ export const COST_TABLE: { [key: string]: { prompt: number, completion: number }
     'gpt4-om ': { prompt: 0.00015000, completion: 0.000600, },
     'o1      ': { prompt: 0.01650000, completion: 0.066000, },
     'o1-pre  ': { prompt: 0.01650000, completion: 0.066000, },
+    'o1-pro  ': { prompt: 0.15000000, completion: 0.600000, },
     'o3-mini ': { prompt: 0.00110000, completion: 0.004400, },
     'cla-1.2 ': { prompt: 0.00800000, completion: 0.024000, },
     'cla-2   ': { prompt: 0.00800000, completion: 0.024000, },
@@ -207,6 +208,7 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
     'gpt4-o  ': { maxTokens: 4096, limitRequests: 10000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
     'gpt4-om ': { maxTokens: 4096, limitRequests: 10000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
     'o1-pre  ': { maxTokens: 32768, limitRequests: 500, limitTokens: 3000000, remainingRequests: 50, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+    'o1-pro  ': { maxTokens: 100000, limitRequests: 500, limitTokens: 3000000, remainingRequests: 50, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
     'o1      ': { maxTokens: 200000, limitRequests: 500, limitTokens: 3000000, remainingRequests: 50, remainingTokens: 2280000, resetRequests: '0ms', resetTokens: '0s', },
     'o3-mini ': { maxTokens: 200000, limitRequests: 500, limitTokens: 3000000, remainingRequests: 480, remainingTokens: 3000000, resetRequests: '0ms', resetTokens: '0s', },
     // groq

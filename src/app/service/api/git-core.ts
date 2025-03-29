@@ -12,6 +12,7 @@ import { ProjectEntity } from '../entity/project-models.entity.js';
 import { uploadFileFunction } from '../controllers/file-manager.js';
 import { FileGroupType } from '../models/values.js';
 import { readOAuth2Env } from '../controllers/auth.js';
+import { getProxyUrl } from '../../common/http-client.js';
 
 const { GIT_REPOSITORIES } = process.env as { GIT_REPOSITORIES: string };
 
@@ -168,8 +169,7 @@ export async function gitCat(userId: string, ip: string, provider: string, gitla
     } else if ([GitProjectStatus.Cloning, GitProjectStatus.Fetching].includes(gitProject.status)) {
 
         const e = readOAuth2Env(provider);
-        const { AXIOS_EXTERNAL_PROXY_PROTOCOL, AXIOS_EXTERNAL_PROXY_HOST, AXIOS_EXTERNAL_PROXY_PORT } = process.env as { AXIOS_EXTERNAL_PROXY_PROTOCOL: string, AXIOS_EXTERNAL_PROXY_HOST: string, AXIOS_EXTERNAL_PROXY_PORT: string };
-        const proxy = e.useProxy ? `${AXIOS_EXTERNAL_PROXY_PROTOCOL}//${AXIOS_EXTERNAL_PROXY_HOST}/${AXIOS_EXTERNAL_PROXY_PORT}` : '';
+        const proxy = await getProxyUrl(e.uriBase) || '';
         const git = simpleGit().env('http', proxy).env('https', proxy).env('sslVerify', 'false');
         try {
             if (gitProject.status === GitProjectStatus.Cloning) {

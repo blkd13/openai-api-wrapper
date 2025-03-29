@@ -1,35 +1,30 @@
-import { includes } from 'uint8array-extras';
-import { Request, Response } from "express";
-import { EntityManager } from "typeorm";
 import { map, toArray } from "rxjs";
-import { ChatCompletionContentPart } from "openai/resources";
 import { promises as fs } from 'fs';
+import { detect } from 'jschardet';
 
 import { MyToolType, OpenAIApiWrapper, plainExtensions, plainMime, providerPrediction } from "../../common/openai-api-wrapper.js";
 import { UserRequest } from "../models/info.js";
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { readOAuth2Env } from "../controllers/auth.js";
 import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
 import { Utils } from "../../common/utils.js";
 import { ds } from "../db.js";
-import { OAuthAccountEntity } from "../entity/auth.entity.js";
 import { BoxApiItemCollection, BoxFileBodyEntity } from "../entity/api-box.entity.js";
-import { getOAuthAccount, reform } from "./common.js";
+import { getOAuthAccountForTool, reform } from "./common.js";
 import { boxDownloadCore } from "../api/api-box.js";
 import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
 import { convertPptxToPdf } from '../../common/media-funcs.js';
-import { detect } from 'jschardet';
 
 
 // 1. 関数マッピングの作成
-export function boxFunctionDefinitions(
+export async function boxFunctionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
-): MyToolType[] {
+): Promise<MyToolType[]> {
+    const provider = 'box';
     return [
         // Box コンテンツ取得 API
         {
-            info: { group: 'box', isActive: true, isInteractive: false, label: `BOXのAIにファイルについて問い合わせる`, responseType: 'markdown' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `BOXのAIにファイルについて問い合わせる`, responseType: 'markdown' },
             definition: {
                 type: 'function',
                 function: {
@@ -61,11 +56,6 @@ export function boxFunctionDefinitions(
                 }
             },
             handler: async (args: { file_id: string, userPrompt?: string, }): Promise<any> => {
-                const provider = 'box';
-
-                const { e } = await getOAuthAccount(req, provider);
-                const axiosWithAuth = await e.axiosWithAuth.then(g => g(req.info.user.id));
-
                 const boxFile = await boxDownloadCore(provider, args.file_id, req.info.user.id, req.info.ip);
                 const boxFileBody = await ds.getRepository(BoxFileBodyEntity).findOneOrFail({
                     where: { sha256: boxFile.sha256Digest },
@@ -194,7 +184,7 @@ export function boxFunctionDefinitions(
         },
         // // AI 要約 API
         // {
-        //     info: { group: 'box', isActive: true, isInteractive: false, label: `BOXのファイルコンテンツをAIで要約`, },
+        //     info: { group: provider, isActive: true, isInteractive: false, label: `BOXのファイルコンテンツをAIで要約`, },
         //     definition: {
         //         type: 'function',
         //         function: {
@@ -220,7 +210,7 @@ export function boxFunctionDefinitions(
         //         file_id: string,
         //         prompt: string,
         //     }): Promise<any> => {
-        //         const provider = 'box';
+        //         const provider = provider;
         //         const e = readOAuth2Env(provider);
 
         //         // まず、ファイルコンテンツ取得APIを内部的に呼び出す
@@ -278,7 +268,7 @@ export function boxFunctionDefinitions(
         //     }
         // },
         {
-            info: { group: 'box', isActive: true, isInteractive: false, label: `BOXのコンテンツを検索`, responseType: 'text' },
+            info: { group: provider, isActive: true, isInteractive: false, label: `BOXのコンテンツを検索`, responseType: 'text' },
             definition: {
                 type: 'function',
                 function: {
@@ -371,11 +361,7 @@ export function boxFunctionDefinitions(
                 offset?: number,
                 trash_content?: string
             }): Promise<any> => {
-                const provider = 'box';
-
-                const { e } = await getOAuthAccount(req, provider);
-                const axiosWithAuth = await e.axiosWithAuth.then(g => g(req.info.user.id));
-
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 // クエリパラメータの構築
                 const params = new URLSearchParams();
                 params.append('query', args.query);
@@ -428,7 +414,7 @@ export function boxFunctionDefinitions(
             }
         },
         {
-            info: { group: 'box', isActive: true, isInteractive: false, label: `box：自分のユーザー情報`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `box：自分のユーザー情報`, },
             definition: {
                 type: 'function', function: {
                     name: 'box_user_info',
@@ -437,10 +423,7 @@ export function boxFunctionDefinitions(
                 }
             },
             handler: async (args: { target: string }): Promise<any> => {
-                const provider = 'box';
-                const { e } = await getOAuthAccount(req, provider);
-                const axiosWithAuth = await e.axiosWithAuth.then(g => g(req.info.user.id));
-
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let url;
                 url = `${e.uriBase}${e.pathUserInfo}`;
                 const result = (await axiosWithAuth.get(url)).data;
