@@ -50,9 +50,10 @@ rootRouter.use('/invite', authInviteRouter);
 app.use('/api', rootRouter);
 // 認証系ルート設定終了
 
+const port = process.env.SERVER_PORT || 3000;
 // サーバー起動
-const server = app.listen(3000, () => {
-    console.log('Server is running on port 3000');
+const server = app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
 });
 server.setMaxListeners(20); // 最大リスナー数を20に設定
 
