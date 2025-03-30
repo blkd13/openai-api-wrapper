@@ -33,7 +33,7 @@ export type GPTModels = TiktokenModel
     | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-5-sonnet-20240229' | 'claude-3-opus-20240229' | 'claude-3-5-sonnet-20240620' | 'claude-3-5-sonnet-20241022' | 'claude-3-5-sonnet@20240620' | 'claude-3-5-sonnet-v2@20241022' | 'claude-3-7-sonnet-20250219' | 'claude-3-7-sonnet-thinking-20250219' | 'claude-3-7-sonnet' | 'claude-3-7-sonnet-thinking@20250219'
     | 'deepseek-coder' | 'deepseek-chat';
 
-export type AiProvider = 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai' | 'anthropic_vertexai' | 'openapi_vertexai';
+export type AiProvider = 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai' | 'anthropic_vertexai' | 'openapi_vertexai' | 'cerebras';
 
 // モデル名とコストの対応表
 export const COST_TABLE: { [key: string]: { prompt: number, completion: number } } = {
@@ -67,7 +67,8 @@ export const COST_TABLE: { [key: string]: { prompt: number, completion: number }
     'msl-md  ': { prompt: 0.00270000, completion: 0.008100, },
     'msl-lg  ': { prompt: 0.00870000, completion: 0.024000, },
     'dps-code': { prompt: 0.00000000, completion: 0.000000, },
-    'dps-chat': { prompt: 0.00000000, completion: 0.000000, },
+    'dps-chat': { prompt: 0.00027000, completion: 0.001100, },
+    'dps-reas': { prompt: 0.00055000, completion: 0.002190, },
     'gem-15fl': { prompt: 0.00001875, completion: 0.000075, },
     'gem-15pr': { prompt: 0.00031250, completion: 0.001250, },
     'gem-15f1': { prompt: 0.00001875, completion: 0.000075, },
@@ -80,8 +81,14 @@ export const COST_TABLE: { [key: string]: { prompt: number, completion: number }
     'gem-20f1': { prompt: 0.00003750, completion: 0.000150, },
     'gem-20px': { prompt: 0.00031250, completion: 0.001250, },
     'gem-20lp': { prompt: 0.00001875, completion: 0.000075, },
-    'gem-ex12': { prompt: 0.000125, completion: 0.000125, },
-    'vla31-40': { prompt: 0.000100, completion: 0.000100, },
+    'gem-ex12': { prompt: 0.00012500, completion: 0.000125, },
+    'vla31-40': { prompt: 0.00010000, completion: 0.000100, },
+    'g-l70-sd': { prompt: 0.00000000, completion: 0.000000, },
+    'g-l70-vs': { prompt: 0.00000000, completion: 0.000000, },
+    'g-r1-l70': { prompt: 0.00000000, completion: 0.000000, },
+    'g-r1-q32': { prompt: 0.00000000, completion: 0.000000, },
+    'c-l31l8 ': { prompt: 0.00000000, completion: 0.000000, },
+    'c-l33l70': { prompt: 0.00000000, completion: 0.000000, },
 };
 
 export const SHORT_NAME: { [key: string]: string } = {
@@ -168,6 +175,7 @@ export const SHORT_NAME: { [key: string]: string } = {
     'mistral-embed': 'msl-em  ',
     'deepseek-coder': 'dps-code',
     'deepseek-chat': 'dps-chat',
+    'deepseek-reasoner': 'dps-reas',
     'gemini-1.5-flash-001': 'gem-15f1',
     'gemini-1.5-pro-001': 'gem-15p1',
     'gemini-1.5-flash-002': 'gem-15f2',
@@ -195,7 +203,16 @@ export const SHORT_NAME: { [key: string]: string } = {
     'claude-3-7-sonnet@20250219': 'cla-37sn',
     'claude-3-7-sonnet-thinking@20250219': 'cla-37sn',
     'claude-3-7-sonnet': 'cla-37sn',
+    // groq
+    'llama-3.3-70b-specdec': 'g-l70-sd',
+    'llama-3.3-70b-versatile': 'g-l70-vs',
+    'deepseek-r1-distill-llama-70b': 'g-r1-l70',
+    'deepseek-r1-distill-qwen-32b': 'g-r1-q32',
+    // cerebras
+    'llama-3.3-8b': 'c-l33l8 ',
+    'llama-3.3-70b': 'c-l33l70',
 };
+
 // レートリミット情報
 export const currentRatelimit: { [key: string]: Ratelimit } = {
     // openai
@@ -214,6 +231,13 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
     // groq
     'g-mxl-87': { maxTokens: 4096, limitRequests: 10, limitTokens: 100000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
     'g-lm2-70': { maxTokens: 4096, limitRequests: 10, limitTokens: 100000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+    'g-l70-sd': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+    'g-l70-vs': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+    'g-r1-l70': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+    'g-r1-q32': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+    // cerebras
+    'c-l31l8 ': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+    'c-l33l70': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     // mistral
     'msl-7b  ': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     'msl-87b ': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
@@ -221,9 +245,7 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
     'msl-md  ': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     'msl-lg  ': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
 
-    // vertex llama
-    'vla31-40': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
-
+    // anthropic
     'cla-1.2 ': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     'cla-2   ': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     'cla-2.1 ': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
@@ -233,9 +255,13 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
     'cla-35s2': { maxTokens: 8192, limitRequests: 5, limitTokens: 100000, remainingRequests: 50, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
     'cla-37sn': { maxTokens: 64000, limitRequests: 5, limitTokens: 200000, remainingRequests: 50, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
     'cla-3-op': { maxTokens: 4096, limitRequests: 5, limitTokens: 100000, remainingRequests: 50, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
-    'dps-code': { maxTokens: 4096, limitRequests: 5, limitTokens: 50000, remainingRequests: 10, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
-    'dps-chat': { maxTokens: 4096, limitRequests: 5, limitTokens: 50000, remainingRequests: 10, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
 
+    // deepseek
+    'dps-code': { maxTokens: 4096, limitRequests: 5, limitTokens: 50000, remainingRequests: 10, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+    'dps-chat': { maxTokens: 8192, limitRequests: 30, limitTokens: 50000, remainingRequests: 10, remainingTokens: 64000, resetRequests: '1000ms', resetTokens: '60s', },
+    'dps-reas': { maxTokens: 8192, limitRequests: 30, limitTokens: 50000, remainingRequests: 10, remainingTokens: 64000, resetRequests: '1000ms', resetTokens: '60s', },
+
+    // gemini
     'gem-15fl': { maxTokens: 8192, limitRequests: 100, limitTokens: 1000000, remainingRequests: 10, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
     'gem-15pr': { maxTokens: 8192, limitRequests: 100, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
     'gem-15f1': { maxTokens: 8192, limitRequests: 100, limitTokens: 1000000, remainingRequests: 10, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
@@ -250,6 +276,9 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
     'gem-20f1': { maxTokens: 8192, limitRequests: 100, limitTokens: 1000000, remainingRequests: 10, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
     'gem-20px': { maxTokens: 8192, limitRequests: 100, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
     'gem-20lp': { maxTokens: 8192, limitRequests: 100, limitTokens: 1000000, remainingRequests: 10, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
+
+    // vertex llama
+    'vla31-40': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
 };
 
 export interface Ratelimit {

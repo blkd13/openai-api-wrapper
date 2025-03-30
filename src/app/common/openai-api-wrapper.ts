@@ -62,6 +62,10 @@ const mistral = new OpenAI({
     apiKey: process.env['MISTRAL_API_KEY'] || 'dummy',
     baseURL: 'https://api.mistral.ai/v1',
 });
+const cerebras = new OpenAI({
+    apiKey: process.env['CEREBRAS_API_KEY'] || 'dummy',
+    baseURL: 'https://api.cerebras.ai/v1',
+});
 
 const anthropic = new Anthropic({
     apiKey: process.env['ANTHROPIC_API_KEY'] || 'dummy',
@@ -69,9 +73,9 @@ const anthropic = new Anthropic({
     maxRetries: 3,
 });
 
-const deepSeek = new OpenAI({
+const deepseek = new OpenAI({
     apiKey: process.env['DEEPSEEK_API_KEY'] || 'dummy',
-    baseURL: 'https://api.deepseek.com/v1',
+    baseURL: 'https://api.deepseek.com',
 });
 
 const local = new OpenAI({
@@ -142,6 +146,12 @@ export function providerPrediction(model: string, provider?: AiProvider): AiProv
     } else if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3')) {
         return 'openai';
         return 'azure';
+    } else if (model.startsWith('deepseek-r1-distill-') || model.startsWith('llama-3.3-70b-')) {
+        return 'groq';
+    } else if (model.startsWith('llama-3.3-70b')) {
+        return 'cerebras';
+    } else if (model.startsWith('deepseek-')) {
+        return 'deepseek';
     } else {
         // 未知モデルはvertexのモデルガーデンと思われるのでそっちに向ける
         return 'vertexai';
@@ -992,13 +1002,10 @@ class RunBit {
                 // top_logprobs?: number | null;
                 // top_p?: number | null;
                 // user?: string;
-                const client =
-                    this.provider === 'groq' ? groq
-                        : this.provider === 'mistral' ? mistral
-                            : this.provider === 'deepseek' ? deepSeek
-                                : this.provider === 'local' ? local
-                                    : openai;
-
+                const clientMap: { [key: string]: OpenAI } = {
+                    groq, mistral, deepseek, cerebras, local, openai,
+                };
+                const client = clientMap[this.provider] || openai;
                 if (args.model.startsWith('o1') || args.model.startsWith('o3')) {
                     args.messages.forEach(message => {
                         if (message.role === 'system') {

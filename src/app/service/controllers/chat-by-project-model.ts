@@ -968,6 +968,15 @@ export const chatCompletionByProjectModel = [
                     // tool_choiceがnoneだったらツールを使わない
                     inDto.args.tools = [];
                 }
+
+                // システムプロンプトは文字列にしておく。
+                if (inDto.args.messages[0].role === 'system') {
+                    if (typeof inDto.args.messages[0].content === 'string') {
+                    } else if (Array.isArray(inDto.args.messages[0].content)) {
+                        inDto.args.messages[0].content = inDto.args.messages[0].content.filter(content => content.type === 'text').map(content => content.text).join('');
+                    } else { }
+                } else { }
+
                 // sockにためてたまったら更新する方式にしないとチャンクの追い越しとかが面倒になるので。。
                 async function saveStock() {
                     await ds.transaction(async transactionalEntityManager => {
