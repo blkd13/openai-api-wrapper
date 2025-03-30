@@ -18,12 +18,15 @@ import { ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType } from '
 import { Utils } from '../../common/utils.js';
 import { AxiosInstance } from 'axios';
 
-const { SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_FLOW_STATE_JWT_SECRET, OAUTH2_FLOW_STATE_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH, OAUTH2_STATE_JWT_SECRET, } = process.env as Record<string, string>;
-if (SMTP_USER && SMTP_PASSWORD && SMTP_ALIAS && FRONT_BASE_URL && SMTP_SERVER && SMTP_PORT && SMTP_DOMAIN && MAIL_DOMAIN_WHITELIST && MAIL_EXPIRES_IN && OAUTH2_FLOW_STATE_JWT_SECRET && OAUTH2_FLOW_STATE_EXPIRES_IN && OAUTH2_PATH_MAIL_MESSAGE && OAUTH2_PATH_MAIL_AUTH && OAUTH2_STATE_JWT_SECRET) {
-} else {
-    console.log(SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH);
-    throw Error('環境変数が足りない');
-}
+const { SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_FLOW_STATE_JWT_SECRET, OAUTH2_FLOW_STATE_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH, } = process.env as Record<string, string>;
+const requiredEnvVars = {
+    SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_FLOW_STATE_JWT_SECRET, OAUTH2_FLOW_STATE_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH,
+};
+const missingVars = Object.entries(requiredEnvVars).filter(([_, value]) => !value).map(([key]) => key);
+if (missingVars.length > 0) {
+    console.error(`環境変数が足りません: ${missingVars.join(', ')}`);
+    throw new Error('環境変数が不足しています');
+} else { }
 
 // httpsの証明書検証スキップ用のエージェント。社内だから検証しなくていい。
 // import https from 'https';
@@ -791,7 +794,7 @@ export const userLoginOAuth2Callback = [
                     //     // console.log(`ccccccccccccccccccccccccccccccccccccc:${provider}`);
 
                     //     // JWTの生成(トークン塗りつぶす前に)
-                    //     const jwtString = jwt.sign({ userId: user.id, provider, tokenExpiresAt: oAuthAccount.tokenExpiresAt, oAuth2TokenDto: token.data }, OAUTH2_STATE_JWT_SECRET, { expiresIn: `${token.data.expires_in}s` as ms.StringValue  });
+                    //     const jwtString = jwt.sign({ userId: user.id, provider, tokenExpiresAt: oAuthAccount.tokenExpiresAt, oAuth2TokenDto: token.data }, { expiresIn: `${token.data.expires_in}s` as ms.StringValue  });
 
                     //     // mattermost の認証トークンは保存しないようにする。
                     //     token.data.access_token = `dummy`;

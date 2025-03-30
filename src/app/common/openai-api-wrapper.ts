@@ -1,4 +1,4 @@
-import { ChatCompletion, ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolMessageParam, CompletionUsage } from 'openai/resources/index';
+import { ChatCompletion, ChatCompletionContentPartText, ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolMessageParam, CompletionUsage } from 'openai/resources/index';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { EMPTY, Observable, Subscriber, catchError, concat, concatMap, concatWith, endWith, filter, find, forkJoin, from, map, merge, of, startWith, switchMap, tap, toArray } from 'rxjs';
 import * as crypto from 'crypto';
@@ -1768,7 +1768,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
     } else { }
 
     const countObject = { image: 0, audio: 0, video: 0 };
-    return (VISION_MODELS.indexOf(args.model) !== -1 ? forkJoin(args.messages.map(message => {
+    return forkJoin(args.messages.map(message => {
         if (Array.isArray(message.content)) {
             // メディアモデルの場合のトークン計測とか
             return forkJoin(message.content.map(content => {  // TODO アップデートしたら型合わなくなった。。。
@@ -1795,6 +1795,8 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                         const label = (content.image_url as any)['label'] as string;
                         const trg = label?.toLowerCase().replace(/.*\./g, '');
                         const mimeType = content.image_url.url.substring(5, content.image_url.url.indexOf(';'));
+                        console.log(mimeType);
+                        console.log('geppp');
                         if ((content.image_url.url.startsWith('data:image/') || imageExtensions.includes(trg))
                             && !content.image_url.url.startsWith('data:image/svg')
                             && !content.image_url.url.startsWith('data:image/tiff')
@@ -1870,7 +1872,24 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
             /* それ以外は何もしない */
             return of(message);
         }
-    })).pipe(toArray(), map(messages => args)) : of(args)).pipe(map(args => {
+    })).pipe(toArray(), map(messages => {
+        if (VISION_MODELS.indexOf(args.model) !== -1) {
+        } else {
+            args.messages.forEach((message, index) => {
+                if (message.content && Array.isArray(message.content)) {
+                    message.content.forEach(content => {
+                        if (content.type === 'image_url') {
+                            const _content = content as any as ChatCompletionContentPartText;
+                            _content.type = 'text';
+                            _content.text = content.image_url.url;
+                            delete (content as any).image_url;
+                        } else { }
+                    });
+                } else { }
+            });
+        }
+        return args;
+    })).pipe(map(args => {
         // ゴミメッセージを削除する。
         args.messages = args.messages.filter(message => {
             if (message.content) {

@@ -5,7 +5,7 @@ import axios from 'axios';
 import { concat, concatMap, from, map, Observable, of, tap, toArray } from 'rxjs';
 import { ChatCompletionAssistantMessageParam, ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionContentPartText, ChatCompletionCreateParams, ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam, ChatCompletionMessageToolCall, ChatCompletionTool, ChatCompletionToolMessageParam, FileContent } from "openai/resources";
 
-import { MyToolInfo, MyToolType, OpenAIApiWrapper, aiApi, invalidMimeList, my_vertexai, normalizeMessage, plainExtensions, plainMime, providerPrediction, vertex_ai } from '../../common/openai-api-wrapper.js';
+import { MyToolType, aiApi, invalidMimeList, my_vertexai, normalizeMessage, providerPrediction, vertex_ai } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ds } from '../db.js';
@@ -970,12 +970,14 @@ export const chatCompletionByProjectModel = [
                 }
 
                 // システムプロンプトは文字列にしておく。
-                if (inDto.args.messages[0].role === 'system') {
-                    if (typeof inDto.args.messages[0].content === 'string') {
-                    } else if (Array.isArray(inDto.args.messages[0].content)) {
-                        inDto.args.messages[0].content = inDto.args.messages[0].content.filter(content => content.type === 'text').map(content => content.text).join('');
+                inDto.args.messages.forEach(message => {
+                    if (message.role === 'system' || message.role === 'assistant') {
+                        if (typeof message.content === 'string') {
+                        } else if (Array.isArray(message.content)) {
+                            message.content = message.content.filter(content => content.type === 'text').map(content => content.type === 'text' ? content.text : '').join('');
+                        } else { }
                     } else { }
-                } else { }
+                });
 
                 // sockにためてたまったら更新する方式にしないとチャンクの追い越しとかが面倒になるので。。
                 async function saveStock() {
