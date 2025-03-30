@@ -1795,8 +1795,6 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                         const label = (content.image_url as any)['label'] as string;
                         const trg = label?.toLowerCase().replace(/.*\./g, '');
                         const mimeType = content.image_url.url.substring(5, content.image_url.url.indexOf(';'));
-                        console.log(mimeType);
-                        console.log('geppp');
                         if ((content.image_url.url.startsWith('data:image/') || imageExtensions.includes(trg))
                             && !content.image_url.url.startsWith('data:image/svg')
                             && !content.image_url.url.startsWith('data:image/tiff')
