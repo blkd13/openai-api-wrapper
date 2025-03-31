@@ -140,7 +140,7 @@ export function commonFunctionDefinitions(
             },
         },
         {
-            info: { group: 'web', isActive: true, isInteractive: false, label: 'Webページを開く（複数可）。', },
+            info: { group: 'web', isActive: true, isInteractive: false, label: 'Webページを開く（複数可）', },
             definition: {
                 type: 'function', function: {
                     name: 'get_web_page_contents',

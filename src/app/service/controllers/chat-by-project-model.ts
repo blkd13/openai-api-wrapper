@@ -971,7 +971,7 @@ export const chatCompletionByProjectModel = [
 
                 // システムプロンプトは文字列にしておく。
                 inDto.args.messages.forEach(message => {
-                    if (message.role === 'system' || message.role === 'assistant') {
+                    if (message.role === 'system' || message.role === 'assistant' || message.role === 'tool') { 
                         if (typeof message.content === 'string') {
                         } else if (Array.isArray(message.content)) {
                             message.content = message.content.filter(content => content.type === 'text').map(content => content.type === 'text' ? content.text : '').join('');
