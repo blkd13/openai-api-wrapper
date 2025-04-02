@@ -3,6 +3,7 @@ import { TiktokenModel } from "tiktoken/tiktoken";
 export const VISION_MODELS = [
     'gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-vision-preview',
     'gemini-2.0-flash-exp', 'gemini-exp-1206', 'gemini-2.0-flash-thinking-exp-1219', 'gemini-2.0-flash-thinking-exp-01-21', 'gemini-2.0-flash-thinking-exp',
+    'gemini-2.5-pro-exp-03-25',
     'gemini-1.5-flash-001', 'gemini-1.5-pro-001', 'gemini-1.5-flash-002', 'gemini-1.5-pro-002', 'gemini-1.0-pro-vision-001', 'gemini-1.5-flash', 'gemini-1.5-pro',
     'gemini-flash-experimental', 'gemini-pro-experimental', 'gemini-1.0-pro-vision',
     'claude-3-haiku-20240307', 'claude-3-5-sonnet-20240229', 'claude-3-opus-20240229',
@@ -34,6 +35,7 @@ const azureDeployTpmMap: Record<string, number> = {
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
 export type GPTModels = TiktokenModel
     | 'gpt-4o-2024-05-13' | 'gpt-4o' | 'gpt-4o-mini-2024-07-18' | 'gpt-4o-mini' | 'o1-preview' | 'o1' | 'o1-pro' | 'o3-mini' | 'gemini-2.0-flash-001' | 'gemini-2.0-pro-exp-02-05' | 'gemini-2.0-flash-lite-preview-02-05'
+    | 'gemini-2.5-pro-exp-03-25'
     | 'llama2-70b-4096' | 'meta/llama3-405b-instruct-maas'
     | 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' | 'gemini-1.5-flash-002' | 'gemini-1.5-pro-002' | 'gemini-1.0-pro-001' | 'gemini-1.0-pro-vision-001'
     | 'gemini-1.5-flash' | 'gemini-1.5-pro' | 'gemini-1.0-pro' | 'gemini-1.0-pro-vision'
@@ -89,7 +91,8 @@ export const COST_TABLE: { [key: string]: { prompt: number, completion: number }
     'gem-10pv': { prompt: 0.00012500, completion: 0.000125, },
     'gem-20fx': { prompt: 0.00001875, completion: 0.000075, },
     'gem-20f1': { prompt: 0.00003750, completion: 0.000150, },
-    'gem-20px': { prompt: 0.00031250, completion: 0.001250, },
+    'gem-20px': { prompt: 0.00000000, completion: 0.000000, },
+    'gem-25px': { prompt: 0.00000000, completion: 0.000000, },
     'gem-20lp': { prompt: 0.00001875, completion: 0.000075, },
     'gem-ex12': { prompt: 0.00012500, completion: 0.000125, },
     'vla31-40': { prompt: 0.00010000, completion: 0.000100, },
@@ -202,6 +205,7 @@ export const SHORT_NAME: { [key: string]: string } = {
     'gemini-2.0-flash-thinking-exp-01-21': 'gem-20fx',
     'gemini-2.0-flash-001': 'gem-20f1',
     'gemini-2.0-pro-exp-02-05': 'gem-20px',
+    'gemini-2.5-pro-exp-03-25': 'gem-25px',
     'gemini-2.0-flash-lite-preview-02-05': 'gem-20lp',
     'gemini-exp-1206': 'gem-ex12',
     'gemini-1.0-pro': 'gem-10pr',
@@ -285,6 +289,7 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
 
     'gem-20f1': { maxTokens: 8192, limitRequests: 100, limitTokens: 1000000, remainingRequests: 10, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
     'gem-20px': { maxTokens: 8192, limitRequests: 100, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
+    'gem-25px': { maxTokens: 8192, limitRequests: 100, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
     'gem-20lp': { maxTokens: 8192, limitRequests: 100, limitTokens: 1000000, remainingRequests: 10, remainingTokens: 200000, resetRequests: '1000ms', resetTokens: '60s', },
 
     // vertex llama
