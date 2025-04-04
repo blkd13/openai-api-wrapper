@@ -5,7 +5,7 @@ import { ds } from '../db.js';
 import { OAuthUserRequest } from '../models/info.js';
 import { ProjectEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
 import { FileGroupType, ProjectVisibility } from '../models/values.js';
-import { readOAuth2Env } from '../controllers/auth.js';
+import { getExtApiClient } from '../controllers/auth.js';
 import { GitProjectCommitEntity } from '../entity/api-git.entity.js';
 import { FileGroupEntity } from '../entity/file-models.entity.js';
 import { copyFromFirst, gitFetchCommitId } from './git-core.js';
@@ -33,21 +33,21 @@ export const fetchCommit = [
             const refId = req.params[0] as string | undefined;
 
             // プロジェクトの存在確認
-            const project = await ds.getRepository(ProjectEntity).findOne({ where: { id: projectId } });
+            const project = await ds.getRepository(ProjectEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: projectId } });
             if (!project) {
                 return res.status(404).json({ error: '指定されたプロジェクトが見つかりません' });
             }
 
             // 権限チェック (Public / Login 以外はチームメンバーである必要がある)
             const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
-                where: { userId: req.info.user.id, teamId: project.teamId },
+                where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id, teamId: project.teamId },
             });
             if (project.visibility !== ProjectVisibility.Public && project.visibility !== ProjectVisibility.Login && !teamMember) {
                 return res.status(403).json({ error: 'このプロジェクトにファイルをアップロードする権限がありません' });
             }
 
             // OAuth2設定読み込み
-            const e = readOAuth2Env(provider);
+            const e = await getExtApiClient(req.info.user.tenantKey, provider);
             if (!e.uriBase) {
                 return res.status(400).json({ error: 'Provider not found' });
             }
@@ -90,20 +90,20 @@ export const fetchCommit = [
 
             // 既に同じ commitId をダウンロード済みかどうかチェック
             let gitProjectCommit = await ds.getRepository(GitProjectCommitEntity).findOne({
-                where: { provider, gitProjectId: repository.id, commitId },
+                where: { tenantKey: req.info.user.tenantKey, provider, gitProjectId: repository.id, commitId },
             });
 
             let fileGroup: FileGroupEntity | undefined = undefined;
 
             if (gitProjectCommit) {
                 // 既に同じコミットをダウンロード済みの場合
-                fileGroup = await copyFromFirst(gitProjectCommit.fileGroupId, project, req.info.user.id, req.info.ip);
+                fileGroup = await copyFromFirst(gitProjectCommit.fileGroupId, project, req.info.user.tenantKey, req.info.user.id, req.info.ip);
             } else {
                 // まだダウンロードしていない場合はアーカイブなどから取得してアップロードする
                 const descriptionObject = { provider, owner, repo, refType, refId, commitId };
                 const http_url_to_repo = repository.html_url;
                 const path_with_namespace = repository.full_name;
-                const object = await gitFetchCommitId(req.info.user.id, req.info.ip, projectId, FileGroupType.GITEA, repository.name, provider, descriptionObject, repository.id, e.uriBase, http_url_to_repo, path_with_namespace, encodeURIComponent(req.info.oAuth.providerEmail || ''), accessToken, commitId);
+                const object = await gitFetchCommitId(req.info.user.tenantKey, req.info.user.id, req.info.ip, projectId, FileGroupType.GITEA, repository.name, provider, descriptionObject, repository.id, e.uriBase, http_url_to_repo, path_with_namespace, encodeURIComponent(req.info.oAuth.providerEmail || ''), accessToken, commitId);
                 gitProjectCommit = object.gitProjectCommit;
                 fileGroup = object.fileGroup;
             }

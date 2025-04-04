@@ -996,6 +996,14 @@ export class Utils {
         }
         return errorObject;
     }
+
+    static requiredEnvVarsCheck(requiredEnvVars: { [key: string]: string }): void {
+        const missingVars = Object.entries(requiredEnvVars).filter(([_, value]) => !value).map(([key]) => key);
+        if (missingVars.length > 0) {
+            console.error(`環境変数が足りません: ${missingVars.join(', ')}`);
+            throw new Error('環境変数が不足しています');
+        } else { }
+    }
 }
 
 

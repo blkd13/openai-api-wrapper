@@ -8,6 +8,7 @@ const { BATCH_USER_ID } = process.env as { BATCH_USER_ID: string };
 
 
 import os from 'os';
+import { getExtApiClient } from '../../service/controllers/auth.js';
 
 function getLocalIP() {
     const interfaces = os.networkInterfaces();
@@ -60,9 +61,11 @@ export async function main() {
         // console.log(`Files: ${allItems.filter(item => item.type === 'file').length}`);
         // console.log(`Folders: ${allItems.filter(item => item.type === 'folder').length}`);
 
+        const e = await getExtApiClient('common', userId);
+
         // 全ファイルをダウンロード（再帰的にサブフォルダも処理）
         const result = await downloadAllFilesInFolder(
-            provider, targetFolderId, userId, ip,
+            e, targetFolderId, userId, ip,
             { recursive: true, batchSize: 50 }
         );
 

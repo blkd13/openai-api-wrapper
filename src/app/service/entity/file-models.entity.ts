@@ -28,6 +28,7 @@ export class FileGroupEntity extends MyBaseEntity {
 }
 
 @Entity()
+@Index(['tenantKey', 'fileGroupId'])
 export class FileEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
@@ -146,18 +147,18 @@ export class FileAccessEntity extends MyBaseEntity {
 
 // -- FileEntity のデータから FileGroupEntity を作成する
 // INSERT INTO file_group_entity (
-//   id, 
-//   created_by, 
-//   updated_by, 
-//   created_at, 
-//   updated_at, 
-//   created_ip, 
-//   updated_ip, 
-//   project_id, 
-//   type, 
-//   label, 
-//   description, 
-//   uploaded_by, 
+//   id,
+//   created_by,
+//   updated_by,
+//   created_at,
+//   updated_at,
+//   created_ip,
+//   updated_ip,
+//   project_id,
+//   type,
+//   label,
+//   description,
+//   uploaded_by,
 //   is_active
 // )
 // SELECT
@@ -170,8 +171,8 @@ export class FileAccessEntity extends MyBaseEntity {
 //   MIN(updated_ip) AS updated_ip,                             -- 最小の updated_at
 //   project_id,                                                -- file_entity.project_id
 //   'upload' AS type,                                          -- type を小文字の 'upload' に設定
-//   CASE 
-//       WHEN COUNT(DISTINCT SPLIT_PART(file_path, '/', 1)) > 1 
+//   CASE
+//       WHEN COUNT(DISTINCT SPLIT_PART(file_path, '/', 1)) > 1
 //           THEN ''                                        -- トップレベルが複数ある場合
 //       ELSE MAX(SPLIT_PART(file_path, '/', 1))                -- トップレベルが1つの場合、その名前
 //   END AS label,

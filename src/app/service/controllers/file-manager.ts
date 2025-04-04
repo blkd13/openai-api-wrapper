@@ -36,7 +36,7 @@ type FileBodyMapSet = {
     // pathMap: { [key: string]: string },
     hashList: string[];
 };
-export async function convertToMapSet(tm: EntityManager, contents: { filePath: string, base64Data: string }[], userId: string, ip: string): Promise<FileBodyMapSet> {
+export async function convertToMapSet(tm: EntityManager, contents: { filePath: string, base64Data: string }[], tenantKey: string, userId: string, ip: string): Promise<FileBodyMapSet> {
     // { filePath: string, base64Data: string }
     // ハッシュ値は編集前の状態で取得しておく。
     const mapSet = contents.reduce((_mapSet, content, currentIndex) => {
@@ -119,6 +119,7 @@ export async function convertToMapSet(tm: EntityManager, contents: { filePath: s
             fileBodyEntity.sha1 = sha1;
             fileBodyEntity.sha256 = sha256;
             fileBodyEntity.metaJson = meta || {};
+            fileBodyEntity.tenantKey = tenantKey;
             fileBodyEntity.createdBy = userId;
             fileBodyEntity.updatedBy = userId;
             fileBodyEntity.createdIp = ip;
@@ -380,7 +381,7 @@ export const isActiveFile = function (fileType: string, filePath: string, fileNa
 /**
  * [user認証] ファイルアップロード (ファイルまたはBase64)
  */
-export const handleFileUpload = async (filePath: string, fileBodyEntity: FileBodyEntity, projectId: string, userId: string, ip: string) => {
+export const handleFileUpload = async (filePath: string, fileBodyEntity: FileBodyEntity, projectId: string, tenantKey: string, userId: string, ip: string) => {
     const fileEntity = new FileEntity();
     fileEntity.fileName = path.basename(filePath);
     fileEntity.filePath = filePath;
@@ -388,6 +389,7 @@ export const handleFileUpload = async (filePath: string, fileBodyEntity: FileBod
     fileEntity.isActive = isActiveFile(fileBodyEntity.fileType, filePath, fileEntity.fileName);
     fileEntity.uploadedBy = userId;
     fileEntity.fileBodyId = fileBodyEntity.id;
+    fileEntity.tenantKey = tenantKey;
     fileEntity.createdBy = userId;
     fileEntity.updatedBy = userId;
     fileEntity.createdIp = ip;
@@ -410,10 +412,8 @@ export const uploadFiles = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { uploadType, projectId, contents } = req.body as { uploadType: 'Single' | 'Group', projectId: string, contents: { filePath: string, base64Data: string }[] };
-        const userId = req.info.user.id;
-        const ip = req.info.ip;
         try {
-            const savedFileGroups = await uploadFileFunction(userId, projectId, contents, uploadType, ip);
+            const savedFileGroups = await uploadFileFunction(req.info.user.id, projectId, contents, uploadType, req.info.user.tenantKey, req.info.ip);
             let successCount = 0;
             let failureCount = 0;
             // console.dir(savedFileGroups);
@@ -442,16 +442,16 @@ export const uploadFiles = [
     }
 ];
 
-export async function uploadFileFunction(userId: string, projectId: string, contents: { filePath: string, base64Data: string }[], uploadType: 'Single' | 'Group' | FileGroupType, ip: string, label: string = '', description: string = ''):
+export async function uploadFileFunction(userId: string, projectId: string, contents: { filePath: string, base64Data: string }[], uploadType: 'Single' | 'Group' | FileGroupType, tenantKey: string, ip: string, label: string = '', description: string = ''):
     Promise<FileGroupEntityForView[]> {
-    const project = await ds.getRepository(ProjectEntity).findOne({ where: { id: projectId } });
+    const project = await ds.getRepository(ProjectEntity).findOne({ where: { tenantKey, id: projectId } });
     if (!project) {
         // return { status: 404, message: '指定されたプロジェクトが見つかりません' };
         throw new Error(JSON.stringify({ status: 404, message: '指定されたプロジェクトが見つかりません' }));
     }
 
     const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
-        where: { userId: userId, teamId: project.teamId }
+        where: { tenantKey, userId, teamId: project.teamId }
     });
 
     if (project.visibility !== ProjectVisibility.Public && project.visibility !== ProjectVisibility.Login && !teamMember) {
@@ -461,7 +461,7 @@ export async function uploadFileFunction(userId: string, projectId: string, cont
     const fileIdBodyMas: { [fileEntityId: string]: FileBodyEntity } = {};
     const savedFileGroups: FileGroupEntityForView[] = [];
     await ds.transaction(async transactionalEntityManager => {
-        const fileBodyMapSet = await convertToMapSet(transactionalEntityManager, contents, userId, ip);
+        const fileBodyMapSet = await convertToMapSet(transactionalEntityManager, contents, tenantKey, userId, ip);
 
         // ルートディレクトリが同じかどうかでラベルを決定する
         if (label) {
@@ -491,6 +491,7 @@ export async function uploadFileFunction(userId: string, projectId: string, cont
             fileGroup.label = label;
             fileGroup.description = description;
             fileGroup.projectId = projectId;
+            fileGroup.tenantKey = tenantKey;
             fileGroup.createdBy = userId;
             fileGroup.updatedBy = userId;
             fileGroup.createdIp = ip;
@@ -510,6 +511,7 @@ export async function uploadFileFunction(userId: string, projectId: string, cont
                     fileGroup.label = content.filePath.split(/[\/\\]/g)[0];
                     fileGroup.description = description;
                     fileGroup.projectId = projectId;
+                    fileGroup.tenantKey = tenantKey;
                     fileGroup.createdBy = userId;
                     fileGroup.updatedBy = userId;
                     fileGroup.createdIp = ip;
@@ -523,7 +525,7 @@ export async function uploadFileFunction(userId: string, projectId: string, cont
                     throw new Error('エラー。起きえないけどthrowしておかないと型チェックエラーになるので');
                 }
 
-                const file = await handleFileUpload(content.filePath, fileBodyMapSet.hashMap[fileBodyMapSet.hashList[index]].fileBodyEntity, projectId, userId, ip);
+                const file = await handleFileUpload(content.filePath, fileBodyMapSet.hashMap[fileBodyMapSet.hashList[index]].fileBodyEntity, projectId, tenantKey, userId, ip);
                 file.fileEntity.fileGroupId = (savedFileGroupGroup || savedFileGroupSingle as FileGroupEntity).id; // 必ずどちらかはある。
                 const savedFile = await transactionalEntityManager.save(FileEntity, file.fileEntity);
 
@@ -540,6 +542,7 @@ export async function uploadFileFunction(userId: string, projectId: string, cont
                 fileAccess.canRead = true;
                 fileAccess.canWrite = true;
                 fileAccess.canDelete = true;
+                fileAccess.tenantKey = tenantKey;
                 fileAccess.createdBy = userId;
                 fileAccess.updatedBy = userId;
                 fileAccess.createdIp = ip;
@@ -593,16 +596,16 @@ export const downloadFile = [
         const format = req.query.format || 'binary';
 
         try {
-            const file = await ds.getRepository(FileEntity).findOneOrFail({ where: { id: fileId } });
+            const file = await ds.getRepository(FileEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, id: fileId } });
 
-            const fileBody = await ds.getRepository(FileBodyEntity).findOneOrFail({ where: { id: file.fileBodyId } });
+            const fileBody = await ds.getRepository(FileBodyEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, id: file.fileBodyId } });
 
             // アクセス権のチェック
-            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { userId: req.info.user.id } });
+            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id } });
             const userTeamIds = userTeams.map(tm => tm.teamId);
 
             const fileAccess = await ds.getRepository(FileAccessEntity).findOne({
-                where: { fileId: file.id, teamId: In(userTeamIds), canRead: true }
+                where: { tenantKey: req.info.user.tenantKey, fileId: file.id, teamId: In(userTeamIds), canRead: true }
             });
 
             if (!fileAccess) {
@@ -643,23 +646,23 @@ export const fileActivate = [
         const { isActive, ids } = req.body as { isActive: boolean, ids: string[] };
 
         try {
-            const file = await ds.getRepository(FileEntity).find({ where: { id: In(ids) } });
+            const file = await ds.getRepository(FileEntity).find({ where: { tenantKey: req.info.user.tenantKey, id: In(ids) } });
 
-            const fileGroups = await ds.getRepository(FileGroupEntity).find({ where: { id: In(file.map(f => f.fileGroupId)) } });
+            const fileGroups = await ds.getRepository(FileGroupEntity).find({ where: { tenantKey: req.info.user.tenantKey, id: In(file.map(f => f.fileGroupId)) } });
 
             // アクセス権のチェック
-            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { userId: req.info.user.id } });
+            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id } });
             const userTeamIds = userTeams.map(tm => tm.teamId);
 
             const fileAccess = await ds.getRepository(ProjectEntity).findOne({
-                where: { id: In(fileGroups.map(fileGroup => fileGroup.projectId)), teamId: In(userTeamIds) }
+                where: { tenantKey: req.info.user.tenantKey, id: In(fileGroups.map(fileGroup => fileGroup.projectId)), teamId: In(userTeamIds) }
             });
 
             if (!fileAccess) {
                 return res.status(403).json({ message: 'このファイルをダウンロードする権限がありません' });
             }
 
-            const updateResult = await ds.getRepository(FileEntity).update({ id: In(ids), isActive: !isActive }, { isActive });
+            const updateResult = await ds.getRepository(FileEntity).update({ tenantKey: req.info.user.tenantKey, id: In(ids), isActive: !isActive }, { isActive });
 
             res.status(200).json({ message: 'ファイルの状態を更新しました', updateResult });
         } catch (error) {
@@ -683,14 +686,14 @@ export const getFileGroup = [
         const req = _req as UserRequest;
         const fileGroupId = req.params.id;
         try {
-            const fileGroup = await ds.getRepository(FileGroupEntity).findOneOrFail({ where: { id: fileGroupId } });
+            const fileGroup = await ds.getRepository(FileGroupEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, id: fileGroupId } });
 
             // アクセス権のチェック
-            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { userId: req.info.user.id } });
+            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id } });
             const userTeamIds = userTeams.map(tm => tm.teamId);
 
             const fileAccess = await ds.getRepository(ProjectEntity).findOne({
-                where: { id: fileGroup.projectId, teamId: In(userTeamIds) }
+                where: { tenantKey: req.info.user.tenantKey, id: fileGroup.projectId, teamId: In(userTeamIds) }
             });
 
             if (!fileAccess) {
@@ -698,11 +701,11 @@ export const getFileGroup = [
             }
 
             // 子オブジェクトを埋め込むfileSize
-            const files = await ds.getRepository(FileEntity).find({ where: { fileGroupId }, order: { filePath: 'ASC' } });
+            const files = await ds.getRepository(FileEntity).find({ where: { tenantKey: req.info.user.tenantKey, fileGroupId }, order: { filePath: 'ASC' } });
 
             const fileIdBodyMas: { [fileEntityId: string]: FileBodyEntity } = {};
             const fileBodyIds = files.map(f => f.fileBodyId);
-            const fileBodies = await ds.getRepository(FileBodyEntity).find({ where: { id: In(fileBodyIds) } });
+            const fileBodies = await ds.getRepository(FileBodyEntity).find({ where: { tenantKey: req.info.user.tenantKey, id: In(fileBodyIds) } });
             fileBodies.forEach(body => fileIdBodyMas[body.id] = body);
 
             // fileBodyの情報も無理矢理埋め込んでおく
@@ -738,14 +741,14 @@ export const updateFileMetadata = [
         const { fileName, description } = req.body;
 
         try {
-            const file = await ds.getRepository(FileEntity).findOneOrFail({ where: { id: fileId } });
+            const file = await ds.getRepository(FileEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, id: fileId } });
 
             // アクセス権のチェック
-            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { userId: req.info.user.id } });
+            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id } });
             const userTeamIds = userTeams.map(tm => tm.teamId);
 
             const fileAccess = await ds.getRepository(FileAccessEntity).findOne({
-                where: { fileId: file.id, teamId: In(userTeamIds), canWrite: true }
+                where: { tenantKey: req.info.user.tenantKey, fileId: file.id, teamId: In(userTeamIds), canWrite: true }
             });
 
             if (!fileAccess) {
@@ -783,15 +786,15 @@ export const deleteFile = [
         const fileId = req.params.id;
 
         try {
-            const file = await ds.getRepository(FileEntity).findOneOrFail({ where: { id: fileId } });
-            const fileBody = await ds.getRepository(FileBodyEntity).findOneOrFail({ where: { id: file.fileBodyId } });
+            const file = await ds.getRepository(FileEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, id: fileId } });
+            const fileBody = await ds.getRepository(FileBodyEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, id: file.fileBodyId } });
 
             // アクセス権のチェック
-            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { userId: req.info.user.id } });
+            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id } });
             const userTeamIds = userTeams.map(tm => tm.teamId);
 
             const fileAccess = await ds.getRepository(FileAccessEntity).findOne({
-                where: { fileId: file.id, teamId: In(userTeamIds), canDelete: true }
+                where: { tenantKey: req.info.user.tenantKey, fileId: file.id, teamId: In(userTeamIds), canDelete: true }
             });
 
             if (!fileAccess) {
@@ -829,17 +832,17 @@ export const getFileList = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         try {
-            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { userId: req.info.user.id } });
+            const userTeams = await ds.getRepository(TeamMemberEntity).find({ where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id } });
             const userTeamIds = userTeams.map(tm => tm.teamId);
 
             const fileAccesses = await ds.getRepository(FileAccessEntity).find({
-                where: { teamId: In(userTeamIds), canRead: true }
+                where: { tenantKey: req.info.user.tenantKey, teamId: In(userTeamIds), canRead: true }
             });
 
             const fileIds = fileAccesses.map(fa => fa.fileId);
 
             const files = await ds.getRepository(FileEntity).find({
-                where: { id: In(fileIds) }
+                where: { tenantKey: req.info.user.tenantKey, id: In(fileIds) }
             });
 
             res.status(200).json(files);
@@ -866,11 +869,12 @@ export const updateFileAccess = [
         const { teamId, canRead, canWrite, canDelete } = req.body;
 
         try {
-            const file = await ds.getRepository(FileEntity).findOneOrFail({ where: { id: fileId } });
+            const file = await ds.getRepository(FileEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, id: fileId } });
 
             // リクエスト元ユーザーがファイルのプロジェクトのオーナーであるか確認
             const isProjectOwner = await ds.getRepository(TeamMemberEntity).findOne({
                 where: {
+                    tenantKey: req.info.user.tenantKey,
                     userId: req.info.user.id,
                     teamId: file.projectId,
                     role: TeamMemberRoleType.Owner
@@ -882,7 +886,7 @@ export const updateFileAccess = [
             }
 
             let fileAccess = await ds.getRepository(FileAccessEntity).findOne({
-                where: { fileId: fileId, teamId: teamId }
+                where: { tenantKey: req.info.user.tenantKey, fileId: fileId, teamId: teamId }
             });
 
             if (!fileAccess) {

@@ -17,8 +17,11 @@ import * as configureGlobalFetch from './configureGlobalFetch.js'; configureGlob
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { Content, FunctionCall, GenerateContentRequest, GenerateContentResponse, GenerateContentResult, HarmBlockThreshold, HarmCategory, Part, StreamGenerateContentResult, UsageMetadata, VertexAI } from '@google-cloud/vertexai';
+import { Content, FunctionCall, FunctionDeclarationsTool, GenerateContentRequest, GenerateContentResponse, GenerateContentResult, HarmBlockThreshold, HarmCategory, Part, StreamGenerateContentResult, UsageMetadata, VertexAI } from '@google-cloud/vertexai';
 import { generateContentStream } from '@google-cloud/vertexai/build/src/functions/generate_content.js';
+
+// import { EnhancedGenerateContentResponse, GoogleGenerativeAI } from '@google/generative-ai';
+import * as googleGenerativeAI from '@google/generative-ai';
 
 import { AzureOpenAI } from 'openai';
 
@@ -73,9 +76,19 @@ const anthropic = new Anthropic({
     maxRetries: 3,
 });
 
+const gemini = new googleGenerativeAI.GoogleGenerativeAI(process.env['GEMINI_API_KEY'] || 'dummy');
+
 const deepseek = new OpenAI({
     apiKey: process.env['DEEPSEEK_API_KEY'] || 'dummy',
     baseURL: 'https://api.deepseek.com',
+});
+
+const cohere = new OpenAI({
+    apiKey: process.env['COHERE_API_KEY'] || 'dummy',
+    baseURL: 'https://api.cohere.ai/compatibility/v1',
+    defaultHeaders: {
+        'Cohere-Version': '2022-12-06'  // 推奨バージョン
+    }
 });
 
 const local = new OpenAI({
@@ -137,6 +150,7 @@ export function providerPrediction(model: string, provider?: AiProvider): AiProv
     if (provider) {
         return provider as AiProvider;
     } else if (model.startsWith('gemini-')) {
+        return 'gemini';
         return 'vertexai';
     } else if (model.startsWith('meta/llama3-')) {
         return 'openapi_vertexai';
@@ -150,11 +164,13 @@ export function providerPrediction(model: string, provider?: AiProvider): AiProv
         return 'groq';
     } else if (model.startsWith('llama-3.3-70b')) {
         return 'cerebras';
+    } else if (model.startsWith('command-') || model.startsWith('c4ai-')) {
+        return 'cohere';
     } else if (model.startsWith('deepseek-')) {
         return 'deepseek';
     } else {
-        // 未知モデルはvertexのモデルガーデンと思われるのでそっちに向ける
-        return 'vertexai';
+        // 未知モデルはlocalに向ける。
+        return 'local';
     }
 }
 
@@ -184,6 +200,7 @@ export interface MyCompletionOptions {
     label?: string,
     toolCallCounter?: number,
     cachedContent?: CachedContent,
+    tenantKey?: string,
     userId?: string,
     ip?: string,
     authType?: string,
@@ -492,27 +509,6 @@ class RunBit {
                     args.temperature = 1;
                     delete args.stream;
                     delete args.stream_options;
-                    args.messages.forEach(message => {
-                        if (message.role === 'system') {
-                            message.role = 'user' as any;
-                            // o系は出力が苦手なので調整しておく。
-                            if (Array.isArray(message.content)) {
-                                message.content.push({
-                                    type: 'text',
-                                    text: Utils.trimLines(`
-                                    ## 標準的な出力フォーマット
-                                    
-                                    この後、特に指示がない限り以下のフォーマットで出力してください。
-
-                                    - markdown形式
-                                    - 数式を書く際はkatexが反応する形式で書いてください（例：$...$）。
-                                    - ファイル出力する際はブロックの先頭にファイル名をフルパスで埋め込んでください（例：\`\`\`typescript src/app/filename.ts\n...\n\`\`\` ）
-                                    `
-                                    ),
-                                });
-                            } else { }
-                        } else { }
-                    });
                     let tokenBuilder = '';
                     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options: _options }, Utils.genJsonSafer()), {}, (err) => { });
                     // console.log({ idempotencyKey: options.idempotencyKey, stream: options.stream });
@@ -864,6 +860,209 @@ class RunBit {
                     return await readStream();
 
                 });
+            } else if (this.provider === 'gemini') {
+                // console.log(generativeModel);
+                commonArgs.messages[0].content = commonArgs.messages[0].content || '';
+                // argsをGemini用に変換
+                const req: GenerateContentRequestExtended = mapForGeminiExtend(commonArgs, mapForGemini(commonArgs));
+                // 文字数をカウント
+                const countCharsObj = countChars(commonArgs);
+                let promptChars = countCharsObj.audio + countCharsObj.text + countCharsObj.image + countCharsObj.video;
+
+                // req は 不要な項目もまとめて保持しているので、実際のリクエスト用にスッキリさせる。
+                const args: GenerateContentRequest = { contents: req.contents, tools: req.tools || [], systemInstruction: req.systemInstruction };
+                // コンテキストキャッシュの有無で編集を変える
+                if (req.cached_content) {
+                    (args as any).cached_content = req.cached_content; // コンテキストキャッシュを足しておく
+                } else {
+                }
+                const reqGemini: googleGenerativeAI.GenerateContentRequest = {
+                    contents: req.contents,
+                    systemInstruction: req.systemInstruction,
+                    cachedContent: req.cachedContent as any,
+                    generationConfig: req.generationConfig as any,
+                    safetySettings: req.safetySettings,
+                    toolConfig: req.toolConfig as any,
+                    tools: req.tools as any,
+                };
+
+                fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ model: commonArgs.model, req: reqGemini }, Utils.genJsonSafer()), {}, (err) => { });
+
+                let isOver128 = false;
+                // export declare interface ModelParams extends BaseParams {
+                //     model: string;
+                //     tools?: Tool[];
+                //     toolConfig?: ToolConfig;
+                //     systemInstruction?: string | Part | Content;
+                //     cachedContent?: CachedContent;
+                // }
+                runPromise = gemini.getGenerativeModel({ model: commonArgs.model }).generateContentStream(reqGemini).then(async streamingResp => {
+                    // かつてはModelを使って投げていた。
+                    // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
+
+                    let tokenBuilder: string = '';
+
+                    const _that = this;
+
+                    tokenCount.prompt_tokens = promptChars;
+                    tokenCount.completion_tokens = 0;
+                    // ストリームからデータを読み取る非同期関数
+                    async function readStream() {
+                        let safetyRatings;
+                        let lastType: 'text' | 'function' | null = null;
+                        while (true) {
+                            const { value, done } = await streamingResp.stream.next();
+                            // [1] {
+                            // [1]   promptFeedback: { blockReason: 'PROHIBITED_CONTENT' },
+                            // [1]   usageMetadata: { promptTokenCount: 43643, totalTokenCount: 43643 }
+                            // [1] }
+                            if (done) {
+                                // ストリームが終了したらループを抜ける
+                                tokenCount.cost = tokenCount.calcCost() * (isOver128 ? 2 : 1);
+                                console.log(logObject.output('fine', '', JSON.stringify(usageMetadata)));
+                                observer.complete();
+
+                                _that.openApiWrapper.fire();
+
+                                // ファイルに書き出す
+                                const trg = commonArgs.response_format?.type === 'json_object' ? 'json' : 'md';
+                                fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
+                                break;
+                            }
+
+                            // 中身を取り出す
+                            const content = value;
+                            // console.dir(content, { depth: null });
+
+                            // ファイルに書き出す
+                            fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, (JSON.stringify(content) || '') + '\n', {}, () => { });
+
+                            // 中身がない場合はスキップ
+                            if (!content) { continue; }
+
+                            // 
+                            if (content.usageMetadata) {
+                                // 128k超えてるかどうか判定。
+                                if (content.usageMetadata.totalTokenCount) {
+                                    isOver128 = content.usageMetadata.totalTokenCount > 128000;
+                                } else { }
+                                Object.assign(usageMetadata, content.usageMetadata);
+                                if (commonArgs.model.startsWith('gemini-2.0-')) {
+                                    // gemini-2系からはトークンベースの課金になるので、トークン数を使う。
+                                    tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
+                                    tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
+                                } else {
+                                    // それ以外は文字数ベースの課金なのでトークン数は使わない。
+                                    // tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
+                                    // tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
+                                }
+
+                                // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
+                                fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ model: commonArgs.model, req: reqGemini, response: content }, Utils.genJsonSafer()), {}, (err) => { });
+                            } else { }
+
+                            if (content.promptFeedback && content.promptFeedback.blockReason) {
+                                // finishReasonが指定されている、かつSTOPではない場合はエラー終了させる。
+                                // ストリームが終了したらループを抜ける
+                                tokenCount.cost = tokenCount.calcCost() * (isOver128 ? 2 : 1);
+                                throw JSON.stringify({ promptFeedback: content.promptFeedback });
+                            } else { }
+
+                            // 中身がない場合はスキップ
+                            if (!content.candidates) { continue; }
+
+                            if (content.candidates[0] && content.candidates[0].safetyRatings) {
+                                safetyRatings = content.candidates[0] && content.candidates[0].safetyRatings;
+                            } else { }
+
+
+                            function responseRemap(content: googleGenerativeAI.EnhancedGenerateContentResponse): ChatCompletionChunk[] {
+                                const remaped: ChatCompletionChunk[] = [];
+                                if (content.candidates) {
+                                    content.candidates.forEach(candidate => {
+
+                                        // partsをイテレートする前に、現在のタイプをチェック
+                                        (candidate.content.parts || []).forEach((c, index) => {
+                                            const currentType = c.text ? 'text' : c.functionCall ? 'function' : null;
+
+                                            // 通常のチャンクを作成
+                                            const choice: ChatCompletionChunk.Choice = {
+                                                delta: {} as ChatCompletionChunk.Choice.Delta,
+                                                finish_reason: (candidate.finishReason?.toLocaleLowerCase() || null) as any,
+                                                index: candidate.index,
+                                                logprobs: null,
+                                            };
+
+                                            if (c.text) {
+                                                choice.delta = { content: c.text };
+                                            } else if (c.functionCall) {
+                                                const func: ChatCompletionChunk.Choice.Delta.ToolCall = {
+                                                    id: Utils.generateUUID(),
+                                                    index,
+                                                    type: 'function',
+                                                    'function': { name: c.functionCall.name }
+                                                };
+                                                if (c.functionCall.args && func.function) {
+                                                    func.function.arguments = JSON.stringify(c.functionCall.args);
+                                                }
+                                                choice.delta = { tool_calls: [func] };
+                                                choice.finish_reason = null; // ツールコールの場合、vertexaiはfunctionが配列で返ってくるので末尾のやつだけにfinisho_reasonを付けるようにすべきだが、面倒なので全部nullにしてしまう。どうせ最後にstopが来るはずなので。
+                                                // console.log('-------------------------------===FUNC===-------------------------------------------------======');
+                                                // console.dir(func);
+                                                // console.log('-------------------------------===XXX===-------------------------------------------------======');
+                                            }
+
+                                            if (candidate.groundingMetadata) {
+                                                (choice as any).groundingMetadata = candidate.groundingMetadata;
+                                            }
+
+                                            remaped.push({
+                                                id: (content as any).responseId,
+                                                choices: [choice],
+                                                created: 0,
+                                                model: (content as any).modelVersion || commonArgs.model,
+                                                object: 'chat.completion.chunk',
+                                                service_tier: null,
+                                                system_fingerprint: '',
+                                            });
+
+                                            lastType = currentType;
+                                        });
+                                    });
+                                }
+                                return remaped;
+                            }
+
+                            responseRemap(content).forEach(chunk => {
+                                // console.log(chunk.choices[0].finish_reason, chunk.choices[0].delta);
+                                observer.next(chunk);
+                            });
+
+                            if (content.candidates[0] && content.candidates[0].content && content.candidates[0].content.parts && content.candidates[0].content.parts[0]) {
+                                if (content.candidates[0].content.parts[0].text) {
+                                    const text = content.candidates[0].content.parts[0].text || '';
+                                    tokenBuilder += text;
+                                    tokenCount.tokenBuilder = tokenBuilder;
+                                    tokenCount.completion_tokens += text.replace(/\s/g, '').length; // 空白文字を除いた文字数
+                                } else {
+                                    // 何もしない
+                                }
+                            } else { }
+                            // [1]   candidates: [ { finishReason: 'OTHER', index: 0, content: [Object] } ],
+                            if (content.candidates[0] && content.candidates[0].finishReason && !['STOP', 'MAX_TOKENS'].includes(content.candidates[0].finishReason)) {
+                                // finishReasonが指定されている、かつSTOPではない場合はエラー終了させる。
+                                // ストリームが終了したらループを抜ける
+                                tokenCount.cost = tokenCount.calcCost() * (isOver128 ? 2 : 1);
+                                throw JSON.stringify({ safetyRatings, candidate: content.candidates[0] });
+                            } else { }
+                            // candidates: [ { finishReason: 'OTHER', index: 0, content: [Object] } ],
+                        }
+                        return;
+                    }
+                    // ストリームの読み取りを開始
+                    return await readStream();
+
+                });
             } else if (this.provider === 'openapi_vertexai') {
                 // vertexホストのllamaとか。
                 for (const key of ['safetySettings', 'cachedContent', 'gcpProjectId', 'isGoogleSearch']) delete (args as any)[key]; // Gemini用プロパティを消しておく
@@ -1003,26 +1202,33 @@ class RunBit {
                 // top_p?: number | null;
                 // user?: string;
                 const clientMap: { [key: string]: OpenAI } = {
-                    groq, mistral, deepseek, cerebras, local, openai,
+                    groq, mistral, deepseek, cerebras, cohere, local, openai,
                 };
                 const client = clientMap[this.provider] || openai;
-                if (args.model.startsWith('o1') || args.model.startsWith('o3')) {
+                if (this.provider === 'cohere') {
+                    // cohereはstream_optionsとtool_choiceを消しておく必要あり。
+                    delete args.stream_options;
+                    delete args.tool_choice;
+                } else { }
+                if (this.provider !== 'openai' && this.provider !== 'local') {
+                    // userプロンプト以外は文字列にしておく。
                     args.messages.forEach(message => {
-                        if (message.role === 'system') {
-                            // o系は出力が苦手なので調整しておく。
-                            message.content = Utils.trimLines(`
-                            ## 標準的な出力フォーマット
-                            
-                            この後、特に指示がない限り以下のフォーマットで出力してください。
-
-                            - markdown形式
-                            - 数式を書く際はkatexが反応する形式で書いてください（例：$...$）。
-                            - ファイル出力する際はブロックの先頭にファイル名をフルパスで埋め込んでください（例：\`\`\`typescript src/app/filename.ts\n...\n\`\`\` ）
-                            `
-                            );
+                        if (message.role === 'system' || message.role === 'assistant' || message.role === 'tool') {
+                            if (typeof message.content === 'string') {
+                            } else if (Array.isArray(message.content)) {
+                                message.content = message.content.filter(content => content.type === 'text').map(content => content.type === 'text' ? content.text : '').join('');
+                            } else { }
                         } else { }
                     });
-                }
+                } else { }
+
+                if (args.model.startsWith('o1') || args.model.startsWith('o3')) {
+                    // o1用にパラメータを調整
+                    delete (args as any)['max_completion_tokens'];
+                    delete args.max_tokens;
+                    delete args.temperature;
+                } else { }
+
                 // TODO無理矢理すぎる。。proxy設定のやり方を再考する。
                 options.httpAgent = client.httpAgent;
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
@@ -1339,6 +1545,7 @@ export class OpenAIApiWrapper {
                                         entity.cost = tokenCount.cost;
                                         entity.status = stepName as any;
                                         entity.message = String(error) || message; // 追加メッセージがあれば書く。
+                                        entity.tenantKey = options?.tenantKey || 'unknown'; // ここでは利用者不明
                                         entity.createdBy = options?.userId || 'batch'; // ここでは利用者不明
                                         entity.updatedBy = options?.userId || 'batch'; // ここでは利用者不明
                                         if (options?.ip) {
@@ -1375,6 +1582,11 @@ export class OpenAIApiWrapper {
                             // console.log(`tool_call ${tool_call.index} ${tool_call.id} ${tool_call.function?.name} ${tool_call.function?.arguments}`);
                             // indexが変わったら新しいtoolCallを作る。
                             if (tool_call.id && toolCall.id !== tool_call.id) {
+                                if (tool_call.id === tool_call?.function?.name) {
+                                    // toolCall.idが関数名が入ってきてしまっている場合はID振り直す。（cohereのバグ）
+                                    tool_call.id = Utils.generateUUID();
+                                } else { }
+
                                 toolCall = { index: tool_call.index, id: tool_call.id, function: { name: '', arguments: '' } };
                                 toolCallsAll.push(toolCall);
                                 toolCallsSub.push(toolCall);
@@ -1758,7 +1970,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
     }
 
     if (args.temperature && typeof args.temperature === 'string') {
-        args.temperature = Number(args.temperature) || 0.7;
+        args.temperature = Number(args.temperature) || 1.0;
     } else { }
     if (args.top_p && typeof args.top_p === 'string') {
         args.top_p = Number(args.top_p) || 1;

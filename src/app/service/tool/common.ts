@@ -7,7 +7,7 @@ import { AxiosInstance } from 'axios';
 import { MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
 import { UserRequest } from '../models/info.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
-import { OAuth2Env, readOAuth2Env } from '../controllers/auth.js';
+import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
@@ -346,8 +346,8 @@ export interface ElasticsearchResponse {
 }
 
 
-export async function getOAuthAccountForTool(req: UserRequest, provider: string): Promise<{ e: OAuth2Env, oAuthAccount: OAuthAccountEntity, axiosWithAuth: AxiosInstance }> {
-    const e = readOAuth2Env(provider);
+export async function getOAuthAccountForTool(req: UserRequest, provider: string): Promise<{ e: ExtApiClient, oAuthAccount: OAuthAccountEntity, axiosWithAuth: AxiosInstance }> {
+    const e = await getExtApiClient(req.info.user.tenantKey, provider);
     const user_id = req.info.user.id;
     if (!user_id) {
         throw new Error('User ID is required.');

@@ -12,13 +12,14 @@ import { Utils } from '../../common/utils.js';
 import { In } from 'typeorm';
 import cookieParser from 'cookie-parser';
 import cookie from 'cookie';
-import { OAuth2TokenDto, readOAuth2Env, tryRefresh, tryRefreshCore, verifyJwt } from '../controllers/auth.js';
+import { tryRefreshCore, verifyJwt } from '../controllers/auth.js';
 import { getAccessToken } from '../api/api-proxy.js';
 import { decrypt } from '../controllers/tool-call.js';
 // export const JWT_SECRET: string = process.env['JWT_SECRET'] || randomBytes(64).toString('hex').substring(0, 64);
 
 export const { ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_JWT_SECRET, REFRESH_TOKEN_EXPIRES_IN, API_TOKEN_JWT_SECRET, API_TOKEN_EXPIRES_IN, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN } = process.env as { ACCESS_TOKEN_JWT_SECRET: string, ACCESS_TOKEN_EXPIRES_IN: string, REFRESH_TOKEN_JWT_SECRET: string, REFRESH_TOKEN_EXPIRES_IN: string, API_TOKEN_JWT_SECRET: string, API_TOKEN_EXPIRES_IN: string, ONETIME_TOKEN_JWT_SECRET: string, ONETIME_TOKEN_EXPIRES_IN: string };
 export interface Token {
+    tenantKey: string;
     type: string;
 }
 
@@ -83,7 +84,7 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                     const userToken = await verifyJwt<UserToken>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user');
                     const userEntity = { id: userToken.id, role: userToken.role, name: userToken.name, email: userToken.email } as UserEntity;
 
-                    (req as UserRequest).info = { user: userEntity, ip: xRealIp, cookie: req.cookies };
+                    (req as UserRequest).info = { user: userToken, ip: xRealIp, cookie: req.cookies, };
                     return { isAuth: true, obj: userEntity };
                 } catch (err) {
                     // アクセストークン無し
@@ -101,7 +102,8 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                         sameSite: false, // CSRF保護のためのオプション
                     });
 
-                    (req as UserRequest).info = { user: userEntity, ip: xRealIp, cookie: req.cookies };
+                    const userToken = { id: userEntity.id, role: userEntity.role, name: userEntity.name, email: userEntity.email, tenantKey: userEntity.tenantKey } as UserToken;
+                    (req as UserRequest).info = { user: userToken, ip: xRealIp, cookie: req.cookies };
                     return { isAuth: true, obj: userEntity };
                 } catch (err) {
                     // リフレッシュトークン無し
@@ -112,7 +114,8 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                     // API用トークンの検証
                     const { userEntity, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'api', req.headers.authorization?.split(' ')[1] || '', roleType));
 
-                    (req as UserRequest).info = { user: userEntity, ip: xRealIp, cookie: req.cookies };
+                    const userToken = { id: userEntity.id, role: userEntity.role, name: userEntity.name, email: userEntity.email, tenantKey: userEntity.tenantKey } as UserToken;
+                    (req as UserRequest).info = { user: userToken, ip: xRealIp, cookie: req.cookies };
                     return { isAuth: true, obj: userEntity };
                 } catch (err) {
                     // API用トークン無し
@@ -154,7 +157,7 @@ export const authenticateOAuthUser = async (_req: Request, res: Response, next: 
     const provider = req.path.replaceAll(/^\//g, '').split('/')[1];
     try {
         // console.log(`provider=${provider}`);
-        const { accessToken, providerUserId, providerEmail, tokenExpiresAt, userInfo } = await getAccessToken(req.info.user.id, provider);
+        const { accessToken, providerUserId, providerEmail, tokenExpiresAt, userInfo } = await getAccessToken(req.info.user.tenantKey, req.info.user.id, provider);
         // console.log(`accessToken=${accessToken}`);
         // なんとなく使いそうな項目だけに絞っておく。
         req.info.oAuth = { accessToken, providerUserId, providerEmail, tokenExpiresAt, userInfo, provider } as OAuthAccountEntity;
@@ -319,13 +322,16 @@ export const authenticateUserTokenWsMiddleGenerator = (roleType?: UserRoleType) 
                                 // 認証OK。リクエストにユーザーIDを付与して次の処理へ
                                 // user.dataValuesはそのままだとゴミがたくさん付くので、項目ごとにUserModelにマッピングする。
                                 // TODO ここはもっとスマートに書けるはず。マッパーを用意するべきか？
-                                const userEntity = new UserEntity();
-                                userEntity.id = user.id;
-                                userEntity.name = user.name;
-                                userEntity.email = user.email;
-                                userEntity.role = user.role;
-                                (req as UserRequest).info = { user: userEntity, ip: req.headers['x-real-ip'] as string || '0.0.0.0', cookie: req.cookies };
-                                resolve(userEntity);
+                                const userToken = {
+                                    tenantKey: user.tenantKey,
+                                    type: 'user',
+                                    id: user.id,
+                                    name: user.name,
+                                    email: user.email,
+                                    role: user.role,
+                                } as UserToken;
+                                (req as UserRequest).info = { user: userToken, ip: req.headers['x-real-ip'] as string || '0.0.0.0', cookie: req.cookies };
+                                resolve(userToken);
                                 return;
                             }
                         });
@@ -358,10 +364,7 @@ export const authenticateInviteToken = (req: Request, res: Response, next: NextF
         const inviteToken = _token as InviteToken;
         if (err) return res.sendStatus(403);
         if (inviteToken.type === 'invite') {
-            const invite = new InviteEntity();
-            invite.id = inviteToken.id;
-            invite.email = inviteToken.email;
-            (req as InviteRequest).info = { invite: invite, ip: req.headers['x-real-ip'] as string || '0.0.0.0' };
+            (req as InviteRequest).info = { invite: inviteToken, ip: req.headers['x-real-ip'] as string || '0.0.0.0' };
             next();
         } else {
             return res.sendStatus(403);

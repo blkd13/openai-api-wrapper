@@ -1,4 +1,4 @@
-import { Column, CreateDateColumn, Entity, Generated, Index, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Generated, In, Index, PrimaryGeneratedColumn } from 'typeorm';
 import { MyBaseEntity } from './base.js';
 export enum UserStatus {
     // アクティブ系
@@ -42,10 +42,10 @@ export class UserEntity extends MyBaseEntity {
     @Column()
     email!: string;
 
-    @Column({ default: UserRoleType.User })
+    @Column({ type: 'enum', enum: UserRoleType, default: UserRoleType.User })
     role!: UserRoleType;
 
-    @Column({ default: UserStatus.Active })
+    @Column({ type: 'enum', enum: UserStatus, default: UserStatus.Active })
     status!: UserStatus;
 
     @Column({ nullable: true })
@@ -221,7 +221,7 @@ export enum OAuthAccountStatus {
 }
 
 @Entity()
-@Index(['userId', 'provider', 'providerUserId'], { unique: true })
+@Index(['tenantKey', 'userId', 'provider', 'providerUserId'], { unique: true })
 export class OAuthAccountEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
@@ -259,3 +259,92 @@ export class OAuthAccountEntity extends MyBaseEntity {
     @Column({ type: 'enum', enum: OAuthAccountStatus, default: OAuthAccountStatus.ACTIVE })
     status!: OAuthAccountStatus;
 }
+
+export interface OAuth2Config {
+    uriBaseAuth?: string;
+    clientId: string;
+    clientSecret: string;
+    pathAuthorize: string;
+    pathAccessToken: string;
+    pathTop: string;
+    scope: string;
+    postType: 'json' | 'params';
+    redirectUri: string;
+    requireMailAuth: boolean;
+}
+
+@Entity()
+@Index(['tenantKey', 'type', 'uriBase'], { unique: true }) // テナントごとに一意
+@Index(['tenantKey', 'type', 'provider'], { unique: true }) // テナントごとに一意
+export class ApiProviderEntity extends MyBaseEntity {
+
+    @Column()
+    type!: string; // 'gitlab' | 'gitea' | etc
+
+    @Column()
+    provider!: string; // 'gitlab-local' | etc
+
+    @Column()
+    label!: string; // 'GitLab' | 'Gitea' | etc
+
+    @Column()
+    uriBase!: string;
+
+    @Column()
+    pathUserInfo!: string;
+
+    @Column({ nullable: true, type: 'jsonb' })
+    oAuth2Config?: OAuth2Config;
+
+    @Column({ nullable: true })
+    description?: string;
+
+    @Column({ default: false })
+    isDeleted!: boolean;
+}
+
+@Entity()
+export class ApiProviderTemplateEntity extends MyBaseEntity {
+
+    @Index({ unique: true })
+    @Column()
+    type!: string; // 'gitlab' | 'gitea' | etc
+
+    @Column()
+    pathUserInfo!: string;
+
+    @Column({ nullable: true })
+    uriBaseAuth?: string;
+    @Column({ nullable: true })
+    pathAuthorize?: string;
+    @Column({ nullable: true })
+    pathAccessToken?: string;
+    @Column({ nullable: true })
+    pathTop?: string;
+    @Column({ nullable: true })
+    scope?: string;
+    @Column({ nullable: true })
+    postType?: 'json' | 'params';
+    @Column({ nullable: true })
+    redirectUri?: string;
+
+    @Column({ nullable: true })
+    description?: string;
+
+    @Column({ default: false })
+    isDeleted!: boolean;
+}
+
+@Entity()
+export class TenantEntity extends MyBaseEntity {
+    @Column()
+    name!: string;
+
+    @Column({ nullable: true })
+    description?: string;
+
+    @Column({ default: true })
+    isActive!: boolean;
+}
+
+

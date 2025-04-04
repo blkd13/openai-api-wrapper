@@ -22,7 +22,7 @@ export async function jiraFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: {}): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 // ユーザー情報を取得
                 const result = (await axiosWithAuth.get(`${e.uriBase}${e.pathUserInfo}`)).data;
 

@@ -1,8 +1,13 @@
-import { Entity, Column, PrimaryColumn, Index, PrimaryGeneratedColumn } from 'typeorm';
+import { Entity, Column, PrimaryColumn, Index, PrimaryGeneratedColumn, In } from 'typeorm';
 import { MyBaseEntity } from './base.js';
 
 @Entity() // テーブル名を指定
+// @Index(['tenantKey', 'id'], { unique: true }) // インデックスを追加
+@Index(['tenantKey', 'username'], { unique: true }) // インデックスを追加
 export class MmUserEntity {
+    @PrimaryColumn()
+    tenantKey!: string; // テナントキーを追加
+
     @Column()
     seq!: number;
 
@@ -19,7 +24,6 @@ export class MmUserEntity {
     delete_at?: Date;
 
     @Column()
-    @Index({ unique: true })
     username!: string;
 
     @Column({ nullable: true })
@@ -145,7 +149,11 @@ export class MmUserPreEntity extends MmUserEntity { }
 // }
 
 @Entity()
+@Index(['tenantKey', 'id'], { unique: true }) // インデックスを追加
 export class MmPostEntity {
+    @PrimaryColumn()
+    tenantKey!: string; // テナントキーを追加
+
     @PrimaryColumn()
     id!: string;
 
@@ -276,6 +284,7 @@ export enum MmTimelineStatus {
 }
 
 @Entity()
+@Index(['tenantKey', 'userId']) // インデックスを追加
 export class MmTimelineEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
@@ -295,6 +304,7 @@ export class MmTimelineEntity extends MyBaseEntity {
 }
 
 @Entity()
+@Index(['tenantKey', 'timelineId']) // インデックスを追加
 export class MmTimelineChannelEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;

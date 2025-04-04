@@ -11,7 +11,7 @@ import { In } from 'typeorm/index.js';
 import { ProjectEntity } from '../entity/project-models.entity.js';
 import { uploadFileFunction } from '../controllers/file-manager.js';
 import { FileGroupType } from '../models/values.js';
-import { readOAuth2Env } from '../controllers/auth.js';
+import { getExtApiClient } from '../controllers/auth.js';
 import { getProxyUrl } from '../../common/http-client.js';
 
 const { GIT_REPOSITORIES } = process.env as { GIT_REPOSITORIES: string };
@@ -115,7 +115,7 @@ async function processFilesInArchive(repoDir: string, ref: string): Promise<File
     return files;
 }
 
-export async function gitCat(userId: string, ip: string, provider: string, gitlabProjectId: number, repoUrlWithoutAuth: string, repoUrlWithAuth: string, path_with_namespace: string, ref: string): Promise<FileContent[]> {
+export async function gitCat(tenantKey: string, userId: string, ip: string, provider: string, gitlabProjectId: number, repoUrlWithoutAuth: string, repoUrlWithAuth: string, path_with_namespace: string, ref: string): Promise<FileContent[]> {
     const repoDire = `${GIT_REPOSITORIES}/${provider}/${path_with_namespace}`;
     console.log(`repoDire: ${repoDire}`);
     // gitリポジトリ操作前にDBで状態管理を行う
@@ -132,6 +132,7 @@ export async function gitCat(userId: string, ip: string, provider: string, gitla
             gitProject.provider = provider;
             gitProject.gitProjectId = gitlabProjectId;
             gitProject.status = GitProjectStatus.Cloning;
+            gitProject.tenantKey = tenantKey;
             gitProject.createdBy = userId;
             gitProject.updatedBy = userId;
             gitProject.createdIp = ip;
@@ -168,7 +169,7 @@ export async function gitCat(userId: string, ip: string, provider: string, gitla
         return await processFilesInArchive(repoDire, ref);
     } else if ([GitProjectStatus.Cloning, GitProjectStatus.Fetching].includes(gitProject.status)) {
 
-        const e = readOAuth2Env(provider);
+        const e = await getExtApiClient(tenantKey, provider);
         const proxy = await getProxyUrl(e.uriBase) || '';
         const git = simpleGit().env('http', proxy).env('https', proxy).env('sslVerify', 'false');
         try {
@@ -205,23 +206,24 @@ export async function gitCat(userId: string, ip: string, provider: string, gitla
     }
 }
 
-export async function copyFromFirst(firstFileGroupId: string, project: ProjectEntity, userId: string, ip: string): Promise<FileGroupEntity> {
+export async function copyFromFirst(firstFileGroupId: string, project: ProjectEntity, tenantKey: string, userId: string, ip: string): Promise<FileGroupEntity> {
     // すでにダウンロード済みの場合、最初の1個として登録されたものを再利用する
     return await ds.transaction(async tm => {
         const firstFileGroup = await tm.getRepository(FileGroupEntity).findOneOrFail({
-            where: { id: firstFileGroupId },
+            where: { tenantKey, id: firstFileGroupId },
         });
         // 再作成するためにいくつかのプロパティを削除
         ['id', 'createdAt', 'updatedAt',].forEach(key => delete (firstFileGroup as any)[key]);
         firstFileGroup.projectId = project.id;
         firstFileGroup.isActive = true; // 全部有効にする
+        firstFileGroup.tenantKey = tenantKey;
         firstFileGroup.createdBy = userId;
         firstFileGroup.updatedBy = userId;
         firstFileGroup.createdIp = ip;
         firstFileGroup.updatedIp = ip;
         const fileGroup = await tm.getRepository(FileGroupEntity).save(firstFileGroup);
         const files = await tm.getRepository(FileEntity).find({
-            where: { fileGroupId: firstFileGroupId },
+            where: { tenantKey, fileGroupId: firstFileGroupId },
         });
         const newFileGroupId = fileGroup.id;
         const savedfiles = await Promise.all(files.map(file => {
@@ -229,6 +231,7 @@ export async function copyFromFirst(firstFileGroupId: string, project: ProjectEn
             ['id', 'createdAt', 'updatedAt',].forEach(key => delete (file as any)[key]);
             file.projectId = project.id;
             file.isActive = true; // 全部有効にする
+            file.tenantKey = tenantKey;
             file.createdBy = userId;
             file.updatedBy = userId;
             file.createdIp = ip;
@@ -239,7 +242,7 @@ export async function copyFromFirst(firstFileGroupId: string, project: ProjectEn
         }));
 
         const fileAccesses = await tm.getRepository(FileAccessEntity).find({
-            where: { fileId: In(files.map(savedFile => savedFile.id)) },
+            where: { tenantKey, fileId: In(files.map(savedFile => savedFile.id)) },
         });
         // fileAccessはコピーじゃなくて全部権限OKで作っておく。
         await Promise.all(savedfiles.map(_file => {
@@ -249,6 +252,7 @@ export async function copyFromFirst(firstFileGroupId: string, project: ProjectEn
             fileAccess.canRead = true;
             fileAccess.canWrite = true;
             fileAccess.canDelete = true;
+            fileAccess.tenantKey = tenantKey;
             fileAccess.createdBy = userId;
             fileAccess.updatedBy = userId;
             fileAccess.createdIp = ip;
@@ -262,6 +266,7 @@ export async function copyFromFirst(firstFileGroupId: string, project: ProjectEn
 }
 
 export async function gitFetchCommitId(
+    tenantKey: string,
     userId: string,
     ip: string,
     projectId: string,
@@ -279,7 +284,7 @@ export async function gitFetchCommitId(
 ): Promise<{ fileGroup: FileGroupEntity, gitProjectCommit: GitProjectCommitEntity }> {
     console.log(`http_url_to_repo=${http_url_to_repo}`);
     const { repoUrlWithoutAuth, repoUrlWithAuth } = replaceDomain(http_url_to_repo, uriBase, username, accessToken);
-    const files = await gitCat(userId, ip, provider, Number(gitProjectId), repoUrlWithoutAuth, repoUrlWithAuth, path_with_namespace, commitId);
+    const files = await gitCat(tenantKey, userId, ip, provider, Number(gitProjectId), repoUrlWithoutAuth, repoUrlWithAuth, path_with_namespace, commitId);
     const contents = files.map(file => ({
         filePath: file.name,
         base64Data: `data:application/octet-stream;base64,${Buffer.from(file.content).toString('base64')}`,

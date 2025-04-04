@@ -3,17 +3,14 @@ import { body, param, query } from "express-validator";
 import multer from 'multer';
 import crypto from 'crypto';
 import path from 'path';
-import { detect } from 'jschardet';
 import { promises as fs } from 'fs';
-import mime from 'mime-types';
 
 import { validationErrorHandler } from "../middleware/validation.js";
 import { OAuthUserRequest } from "../models/info.js";
 import { ds } from '../db.js';
-import { readOAuth2Env } from '../controllers/auth.js';
+import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { BoxApiCollection, BoxApiCollectionItem, BoxApiCollectionList, BoxApiFolder, BoxApiItemEntry, BoxApiPathEntry, BoxCollectionEntity, BoxFileBodyEntity, BoxFileEntity, BoxItemEntity, BoxItemType } from '../entity/api-box.entity.js';
 import { myDetectFile } from '../controllers/file-manager.js';
-import { FileBodyEntity } from '../entity/file-models.entity.js';
 import { Utils } from '../../common/utils.js';
 import { getAxios } from '../../common/http-client.js';
 
@@ -43,7 +40,7 @@ export const boxApiItem = [
             if (fromcache) {
                 // fromcache=trueの場合はキャッシュを返す
                 try {
-                    let itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ userId: req.info.user.id, itemId, offset, limit });
+                    let itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id, itemId, offset, limit });
                     // キャッシュがあればそれを先に返しておく。APIの結果が返ってきたらそれでキャッシュを上書きしておく。
                     res.json(itemEntity.data);
                 } catch (e) {
@@ -51,7 +48,7 @@ export const boxApiItem = [
                 }
             } else {
                 // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
-                const e = readOAuth2Env(provider);
+                const e = await getExtApiClient(req.info.user.tenantKey, provider);
                 if (e.uriBase) {
                 } else {
                     return res.status(400).json({ error: 'Provider not found' });
@@ -66,7 +63,7 @@ export const boxApiItem = [
                 console.log(`Retrieved ${folder.item_collection.entries.length} items. Total count: ${folder.item_collection.total_count}`);
                 if (folder.item_collection.entries.length > 0) {
                     const savedFolder = await ds.transaction(async (tm) => {
-                        let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ userId: req.info.user.id, type, itemId, offset, limit });
+                        let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id, type, itemId, offset, limit });
                         if (itemEntity) {
                         } else {
                             itemEntity = new BoxItemEntity();
@@ -233,7 +230,7 @@ export const upsertBoxApiCollection = [
         const { collectionId } = req.body as { collectionId: string };
         try {
             // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
-            const e = readOAuth2Env(provider);
+            const e = await getExtApiClient(req.info.user.tenantKey, provider);
             if (e.uriBase) {
             } else {
                 return res.status(400).json({ error: 'Provider not found' });
@@ -248,7 +245,7 @@ export const upsertBoxApiCollection = [
             const collectionItem = responseItem.data;
 
             const savedCollection = await ds.transaction(async (tm) => {
-                let collectionEntity = await tm.getRepository(BoxCollectionEntity).findOneBy({ userId: req.info.user.id, collectionId });
+                let collectionEntity = await tm.getRepository(BoxCollectionEntity).findOneBy({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id, collectionId });
                 if (collectionEntity) {
                 } else {
                     collectionEntity = new BoxCollectionEntity();
@@ -287,7 +284,7 @@ export const boxApiCollection = [
         // console.log(`provider: ${provider}, collectionId: ${collectionId} fromcache: ${fromcache}`);
         try {
             // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
-            const e = readOAuth2Env(provider);
+            const e = await getExtApiClient(req.info.user.tenantKey, provider);
             if (e.uriBase) {
             } else {
                 return res.status(400).json({ error: 'Provider not found' });
@@ -298,7 +295,7 @@ export const boxApiCollection = [
             const collection = response.data;
 
             // 登録済みのコレクションを取得
-            const collectionEntityList = await ds.getRepository(BoxCollectionEntity).findBy({ userId: req.info.user.id });
+            const collectionEntityList = await ds.getRepository(BoxCollectionEntity).findBy({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id });
             collectionEntityList.forEach(c => {
                 collection.entries.push({
                     type: c.type,
@@ -342,7 +339,7 @@ export const boxUpload = [
         // console.log(`provider: ${provider}, name: ${name} parent.id: ${parent.id} size=${size}`);
 
         // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
-        const e = readOAuth2Env(provider);
+        const e = await getExtApiClient(req.info.user.tenantKey, provider);
         if (e.uriBase) {
         } else {
             return res.status(400).json({ error: 'Provider not found' });
@@ -430,14 +427,14 @@ export const boxDownload = [
         const req = _req as OAuthUserRequest;
         const { provider, fileId } = req.params as { provider: string, fileId: string };
         const format = req.query.format || 'binary';
-        const e = readOAuth2Env(provider);
+        const e = await getExtApiClient(req.info.user.tenantKey, provider);
         if (e.uriBase) {
         } else {
             return res.status(400).json({ error: 'Provider not found' });
         }
 
         try {
-            const boxFileMetaInfo = await boxDownloadCoreOnline(provider, fileId, req.info.user.id, req.info.ip);
+            const boxFileMetaInfo = await boxDownloadCoreOnline(e, fileId, req.info.user.id, req.info.ip);
             if (boxFileMetaInfo.status === 'skip') {
                 throw new Error('極秘情報が含まれているのでダウンロードできません');
             } else { }
@@ -482,7 +479,10 @@ export const boxBatchDownload = [
         const { provider, fileId } = req.params as { provider: string, fileId: string };
         const userId = req.info.user.id;
         const ip = req.info.ip;
-        await boxDownloadCore(provider, fileId, userId, ip)
+
+        // APIを呼び出してデータを取得
+        const e = await getExtApiClient(req.info.user.tenantKey, provider);
+        await boxDownloadCore(e, fileId, userId, ip)
             .then(resBody => {
                 res.json(resBody);
             })
@@ -505,7 +505,7 @@ export const boxBatchDownload = [
  * @returns Box APIからのレスポンスデータ
  */
 export async function boxApiItemCore(
-    provider: string, type: 'folder' | 'collection', itemId: string, userId: string, ip: string,
+    e: ExtApiClient, type: 'folder' | 'collection', itemId: string, userId: string, ip: string,
     options: { fromCache?: boolean; offset?: number; limit?: number; fields?: string[]; } = {}
 ): Promise<BoxItemEntity> {
     const { fromCache = true, offset = 0, limit = 100, fields = [] } = options;
@@ -514,7 +514,7 @@ export async function boxApiItemCore(
         // キャッシュからデータを取得するオプションが指定されている場合
         if (fromCache) {
             try {
-                const itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ userId: userId, itemId });
+                const itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ tenantKey: e.tenantKey, userId, itemId });
                 console.log(`Get from cache: ${itemId} ${itemEntity.data.name}`);
                 return itemEntity;
             } catch (e) {
@@ -523,11 +523,6 @@ export async function boxApiItemCore(
             }
         } else { }
 
-        // APIを呼び出してデータを取得
-        const e = readOAuth2Env(provider);
-        if (!e.uriBase) {
-            throw new Error('Provider not found');
-        }
 
         // 型に応じてエンドポイントURLを構築
         const types = type === 'folder' ? 'folders' : 'collections';
@@ -553,15 +548,18 @@ export async function boxApiItemCore(
 
         // データをキャッシュに保存
         const itemEntity = await ds.transaction(async (tm) => {
-            let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ userId, type, itemId });
+            let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ tenantKey: e.tenantKey, userId, type, itemId });
             if (!itemEntity) {
                 itemEntity = new BoxItemEntity();
                 itemEntity.userId = userId;
                 itemEntity.itemId = itemId;
                 itemEntity.type = type;
+                itemEntity.tenantKey = e.tenantKey;
                 itemEntity.createdBy = userId;
                 itemEntity.createdIp = ip;
             }
+            itemEntity.offset = offset;
+            itemEntity.limit = limit;
 
             itemEntity.data = folderData;
             itemEntity.updatedBy = userId;
@@ -587,7 +585,7 @@ export async function boxApiItemCore(
  * @returns ダウンロードしたファイルの結果
  */
 export async function downloadAllFilesInFolder(
-    provider: string, folderId: string, userId: string, ip: string,
+    e: ExtApiClient, folderId: string, userId: string, ip: string,
     options: { recursive?: boolean; batchSize?: number; } = {}
 ): Promise<{ downloadedFiles: any[]; failedFiles: any[]; processedFolders: string[]; }> {
     const { recursive = true, batchSize = 100 } = options;
@@ -605,7 +603,7 @@ export async function downloadAllFilesInFolder(
 
         // フォルダの内容を取得（ページング付き）
         const itemEntity = await boxApiItemCore(
-            provider, 'folder', folderId, userId, ip,
+            e, 'folder', folderId, userId, ip,
             { offset, limit: batchSize }
         );
         const folderContent = itemEntity.data;
@@ -625,7 +623,7 @@ export async function downloadAllFilesInFolder(
             if (item.type === 'file') {
                 // ファイルをダウンロード
                 // console.log(`Downloading file: ${item.name} (${item.id})`);
-                const result = await boxDownloadCore(provider, item.id, userId, ip);
+                const result = await boxDownloadCore(e, item.id, userId, ip);
                 downloadedFiles.push({ id: item.id, name: item.name, result });
             } else if (item.type === 'folder' && recursive) {
                 // // なんとなく1秒待つ
@@ -634,7 +632,7 @@ export async function downloadAllFilesInFolder(
                 // console.log(`Processing subfolder: ${item.name} (${item.id})`);
 
                 const subFolderResult = await downloadAllFilesInFolder(
-                    provider, item.id, userId, ip,
+                    e, item.id, userId, ip,
                     { recursive, batchSize }
                 );
 
@@ -662,7 +660,7 @@ export async function downloadAllFilesInFolder(
     // 処理の最後に、このフォルダのchildrenCacheCompletedAtを更新
     await ds.transaction(async (tm) => {
         const itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({
-            userId, type: BoxItemType.FOLDER, itemId: folderId
+            tenantKey: e.tenantKey, userId, type: BoxItemType.FOLDER, itemId: folderId
         });
 
         if (itemEntity) {
@@ -677,9 +675,7 @@ export async function downloadAllFilesInFolder(
 }
 
 
-export async function boxDownloadCoreOnline(provider: string, fileId: string, userId: string, ip: string): Promise<{ fileBodyId: string, innerPath: string, fileName: string, sha1Digest: string, sha256Digest: string, fileSize: number, fileType: string, status: string }> {
-    const e = readOAuth2Env(provider);
-
+export async function boxDownloadCoreOnline(e: ExtApiClient, fileId: string, userId: string, ip: string): Promise<{ fileBodyId: string, innerPath: string, fileName: string, sha1Digest: string, sha256Digest: string, fileSize: number, fileType: string, status: string }> {
     if (!e.uriBase) {
         // return res.status(400).json({ error: 'Provider not found' });
         throw new Error('Provider not found');
@@ -714,7 +710,7 @@ export async function boxDownloadCoreOnline(provider: string, fileId: string, us
 
         // 2. fileId + versionIdの組み合わせでデータベースをチェック
         const existingBoxFile = await ds.getRepository(BoxFileEntity).findOne({
-            where: { fileId: boxFileId, versionId: versionId }
+            where: { tenantKey: e.tenantKey, fileId: boxFileId, versionId: versionId }
         });
 
         if (metaData.entries && metaData.entries.length > 0) {
@@ -880,8 +876,7 @@ export async function boxDownloadCoreOnline(provider: string, fileId: string, us
 }
 
 
-export async function boxDownloadCore(provider: string, fileId: string, userId: string, ip: string): Promise<{ fileBodyId: string, innerPath: string, fileName: string, sha1Digest: string, sha256Digest: string, fileSize: number, fileType: string, status: string }> {
-    const e = readOAuth2Env(provider);
+export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: string, ip: string): Promise<{ fileBodyId: string, innerPath: string, fileName: string, sha1Digest: string, sha256Digest: string, fileSize: number, fileType: string, status: string }> {
 
     if (!e.uriBase) {
         // return res.status(400).json({ error: 'Provider not found' });
@@ -890,7 +885,7 @@ export async function boxDownloadCore(provider: string, fileId: string, userId: 
 
     // 2. fileId + versionIdの組み合わせでデータベースをチェック
     const existingBoxFileVersionless = await ds.getRepository(BoxFileEntity).findOne({
-        where: { fileId: fileId }
+        where: { tenantKey: e.tenantKey, fileId: fileId }
     });
 
     if (existingBoxFileVersionless) {
@@ -1000,7 +995,7 @@ export async function boxDownloadCore(provider: string, fileId: string, userId: 
 
         // 2. fileId + versionIdの組み合わせでデータベースをチェック
         const existingBoxFile = await ds.getRepository(BoxFileEntity).findOne({
-            where: { fileId: boxFileId, versionId: versionId }
+            where: { tenantKey: e.tenantKey, fileId: boxFileId, versionId: versionId }
         });
 
         if (existingBoxFile) {

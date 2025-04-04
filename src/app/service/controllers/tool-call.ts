@@ -11,8 +11,8 @@ import { ProjectVisibility } from "../models/values.js";
 import { EntityNotFoundError } from "typeorm/index.js";
 
 import crypto from 'crypto';
-import { OAuthAccountEntity, OAuthAccountStatus } from "../entity/auth.entity.js";
-import { readOAuth2Env } from "./auth.js";
+import { OAuthAccountEntity, OAuthAccountStatus, TenantEntity } from "../entity/auth.entity.js";
+import { getExtApiClient } from "./auth.js";
 import { Utils } from "../../common/utils.js";
 import { getAxios } from "../../common/http-client.js";
 
@@ -96,16 +96,17 @@ export const getToolCallGroup = [
         try {
             // ツールコールグループの取得
             const toolCallGroup = await ds.getRepository(ToolCallGroupEntity).findOneOrFail({
-                where: { id }
+                where: { tenantKey: req.info.user.tenantKey, id }
             });
 
             // プロジェクトの取得
             const project = await ds.getRepository(ProjectEntity).findOneOrFail({
-                where: { id: toolCallGroup.projectId }
+                where: { tenantKey: req.info.user.tenantKey, id: toolCallGroup.projectId }
             });
 
             const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
                 where: {
+                    tenantKey: req.info.user.tenantKey,
                     teamId: project.teamId,
                     userId: req.info.user.id,
                 }
@@ -117,7 +118,7 @@ export const getToolCallGroup = [
 
             // ツールコールの取得
             const toolCallList = await ds.getRepository(ToolCallPartEntity).find({
-                where: { toolCallGroupId: id, status: ToolCallPartStatus.Normal },
+                where: { tenantKey: req.info.user.tenantKey, toolCallGroupId: id, status: ToolCallPartStatus.Normal },
                 order: { seq: 'ASC' },
             });
 
@@ -145,7 +146,7 @@ export const getToolCallGroupByToolCallId = [
         try {
             // ツールコールグループの取得
             const toolCallPart = await ds.getRepository(ToolCallPartEntity).find({
-                where: { toolCallId: id, status: ToolCallPartStatus.Normal },
+                where: { tenantKey: req.info.user.tenantKey, toolCallId: id, status: ToolCallPartStatus.Normal },
                 order: { seq: 'ASC' },
             });
 
@@ -156,16 +157,17 @@ export const getToolCallGroupByToolCallId = [
 
             // ツールコールグループの取得
             const toolCallGroup = await ds.getRepository(ToolCallGroupEntity).findOneOrFail({
-                where: { id: toolCallGroupIdSet[0] }
+                where: { tenantKey: req.info.user.tenantKey, id: toolCallGroupIdSet[0] }
             });
 
             // プロジェクトの取得
             const project = await ds.getRepository(ProjectEntity).findOneOrFail({
-                where: { id: toolCallGroup.projectId }
+                where: { tenantKey: req.info.user.tenantKey, id: toolCallGroup.projectId }
             });
 
             const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
                 where: {
+                    tenantKey: req.info.user.tenantKey,
                     teamId: project.teamId,
                     userId: req.info.user.id,
                 }
@@ -177,7 +179,7 @@ export const getToolCallGroupByToolCallId = [
 
             // ツールコールの取得
             const toolCallList = await ds.getRepository(ToolCallPartEntity).find({
-                where: { toolCallId: id, status: ToolCallPartStatus.Normal },
+                where: { tenantKey: req.info.user.tenantKey, toolCallId: id, status: ToolCallPartStatus.Normal },
                 order: { seq: 'ASC' },
             });
 
@@ -201,8 +203,8 @@ export const getApiKeys = [
         const req = _req as UserRequest;
         try {
             const apiKeys = await ds.getRepository(OAuthAccountEntity).find({
-                select: ['id', 'provider', 'providerUserId', 'providerEmail', 'tokenExpiresAt', 'createdAt', 'updatedAt'],
-                where: { userId: req.info.user.id },
+                select: ['tenantKey', 'id', 'provider', 'providerUserId', 'providerEmail', 'tokenExpiresAt', 'createdAt', 'updatedAt'],
+                where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id },
                 order: { createdAt: 'DESC' }
             });
             res.json(apiKeys);
@@ -225,17 +227,18 @@ export const registApiKey = [
         try {
             await ds.transaction(async (manager) => {
                 const apiKeys = await manager.getRepository(OAuthAccountEntity).find({
-                    where: { provider, userId: req.info.user.id }
+                    where: { tenantKey: req.info.user.tenantKey, provider, userId: req.info.user.id }
                 });
                 const apiKey = new OAuthAccountEntity();
                 if (apiKeys.length === 1) {
                     apiKey.id = apiKeys[0].id;
                 } else {
+                    apiKey.tenantKey = req.info.user.tenantKey;
                     apiKey.createdBy = req.info.user.id;
                     apiKey.createdIp = req.info.ip;
                 }
 
-                const e = readOAuth2Env(provider);
+                const e = await getExtApiClient(req.info.user.tenantKey, provider);
                 const url = `${e.uriBase}${e.pathUserInfo}`;
                 console.log(url);
                 const axios = await getAxios(url);
@@ -293,7 +296,7 @@ export const deleteApiKey = [
         try {
             await ds.transaction(async (manager) => {
                 const apiKey = await manager.getRepository(OAuthAccountEntity).findOneOrFail({
-                    where: { id, provider, userId: req.info.user.id }
+                    where: { tenantKey: req.info.user.tenantKey, id, provider, userId: req.info.user.id }
                 });
                 apiKey.status = OAuthAccountStatus.DISCONNECTED;
                 await manager.getRepository(OAuthAccountEntity).save(apiKey);

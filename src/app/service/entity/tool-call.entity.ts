@@ -35,6 +35,8 @@ export class ToolCallGroupEntity extends MyBaseEntity {
 }
 
 @Entity()
+@Index(['tenantKey', 'toolCallGroupId']) // インデックス
+@Index(['tenantKey', 'toolCallId']) // インデックス
 export class ToolCallPartEntity extends MyBaseEntity {
     @Column({ type: 'integer' })
     @Generated('increment')

@@ -41,7 +41,7 @@ import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCr
 import { UserRoleType } from './entity/auth.entity.js';
 import { getOAuthApiProxy } from './api/api-proxy.js';
 import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
-import { deleteUserSetting, getUserSetting, upsertUserSetting } from './controllers/user.js';
+import { createApiProvider, createTenant, deleteApiProvider, deleteOAuth2Config, deleteTenant, deleteUserSetting, getApiProviderById, getApiProviderByProvider, getApiProviderByTypeAndUri, getApiProviders, getMyTenant, getTenantById, getTenants, getTenantStats, getUserSetting, toggleTenantActive, updateApiProvider, updateOAuth2Config, updateTenant, upsertOAuthProvider, upsertUserSetting } from './controllers/user.js';
 import * as gitlab from './api/api-gitlab.js';
 import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
@@ -54,26 +54,32 @@ export const authNoneRouter = Router();
 export const authUserRouter = Router();
 export const authOAuthRouter = Router();
 export const authAdminRouter = Router();
+export const authMaintainerRouter = Router();
 export const authInviteRouter = Router();
 
 // 認証種別ごとのミドルウェアを設定
 authUserRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.User, true));
 authAdminRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.Admin, true));
+authMaintainerRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.Maintainer, true));
 
 authInviteRouter.use(authenticateInviteToken);
 
 // 個別コントローラーの設定
 authNoneRouter.post('/login', userLogin);
+authNoneRouter.post('/:tenantKey/login', userLogin);
 authNoneRouter.get('/logout', logout);
-authNoneRouter.post('/guest', guestLogin);
 authNoneRouter.post('/onetime', onetimeLogin);
+authNoneRouter.post('/:tenantKey/onetime', onetimeLogin);
 authNoneRouter.post('/request-for-password-reset', requestForPasswordReset);
+authNoneRouter.post('/:tenantKey/request-for-password-reset', requestForPasswordReset);
+// authNoneRouter.post('/guest', guestLogin);
 authInviteRouter.post('/password-reset', passwordReset);
 authInviteRouter.post('/oauth-emailauth', oAuthEmailAuth);
 
 // OAuth2
-authNoneRouter.get('/oauth/:provider/login', userLoginOAuth2);
+authNoneRouter.get('/oauth/:tenantKey/:provider/login', userLoginOAuth2);
 authNoneRouter.get('/oauth/:provider/callback', userLoginOAuth2Callback); // 認証があっても無くても動くようにしておく
+authNoneRouter.get('/oauth/callback', userLoginOAuth2Callback); // 認証があっても無くても動くようにしておく
 
 // ユーザー認証系
 authUserRouter.get('/user', getUser);
@@ -229,3 +235,23 @@ authOAuthRouter.post(`/box/:provider/2.0/collections`, upsertBoxApiCollection);
 authOAuthRouter.post(`/box/:provider/2.0/files/content`, boxUpload);
 authOAuthRouter.get(`/box/:provider/2.0/files/:fileId/content`, boxDownload);
 authOAuthRouter.post(`/box/:provider/2.0/files/:fileId/content`, boxUpload);
+
+authAdminRouter.post(`/ext-api-provider/:type`, upsertOAuthProvider); // 
+authUserRouter.get('/ext-api-providers', getApiProviders);
+authUserRouter.get('/ext-api-provider/id/:id', getApiProviderById);
+authUserRouter.get('/ext-api-provider/provider/:provider', getApiProviderByProvider);
+// authUserRouter.get('/ext-api-provider/type/:type/uri/:uriBase', getApiProviderByTypeAndUri);
+authAdminRouter.post('/ext-api-provider', createApiProvider);
+authAdminRouter.put('/ext-api-provider/:id', updateApiProvider);
+authAdminRouter.delete('/ext-api-provider/:id', deleteApiProvider);
+authAdminRouter.patch('/ext-api-provider/:id/oauth2', updateOAuth2Config);
+authAdminRouter.delete('/ext-api-provider/:id/oauth2', deleteOAuth2Config);
+
+authUserRouter.get('/tenant/my', getMyTenant);
+authUserRouter.get('/tenant/:id', getTenantById);
+authMaintainerRouter.get('/tenants', getTenants);
+authMaintainerRouter.get('/tenant/stats', getTenantStats);
+authMaintainerRouter.post('/tenant/', createTenant);
+authMaintainerRouter.put('/tenant/:id', updateTenant);
+authMaintainerRouter.patch('/tenant/:id/active', toggleTenantActive);
+authMaintainerRouter.delete('/tenant/:id', deleteTenant);

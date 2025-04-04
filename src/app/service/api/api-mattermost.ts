@@ -6,7 +6,7 @@ import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { MmFileEntity, MmPostEntity, MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity } from '../entity/api-mattermost.entity.js';
 import { ds } from '../db.js';
-import { readOAuth2Env } from '../controllers/auth.js';
+import { getExtApiClient } from '../controllers/auth.js';
 import { Utils } from '../../common/utils.js';
 import { MattermostChannel, MattermostEmoji, MattermostPost, MattermostUser, Post } from '../../agent/api-mattermost/api.js';
 import { Axios } from 'axios';
@@ -34,6 +34,7 @@ export const getMmUsers = [
 
         const userRepository = ds.getRepository(MmUserEntity);
         const whereConditions = [];
+        whereConditions.push({ tenantKey: req.info.user.tenantKey });
 
         if (ids.length > 0) {
             whereConditions.push({ id: In(ids) });
@@ -65,13 +66,13 @@ export const getTimelines = [
         const userId = req.info.user.id;
         try {
             const timelines = await ds.getRepository(MmTimelineEntity).find({
-                where: { userId, status: MmTimelineStatus.Normal },
+                where: { tenantKey: req.info.user.tenantKey, userId, status: MmTimelineStatus.Normal },
                 order: { createdAt: 'DESC' },
             });
             // channelsを埋めておく
             timelines.forEach(tl => (tl as any).channels = []);
             const timelineChannel = await ds.getRepository(MmTimelineChannelEntity).find({
-                where: { timelineId: In(timelines.map(timeline => timeline.id)) }
+                where: { tenantKey: req.info.user.tenantKey, timelineId: In(timelines.map(timeline => timeline.id)) }
             })
             const tlMas = timelines.reduce((mas, curr) => {
                 mas[curr.id] = curr;
@@ -124,7 +125,7 @@ export const updateTimeline = [
         const { title, description, channelIds } = req.body as { title: string, description?: string, channelIds: string[] };
         try {
             const savedTl = await ds.transaction(async em => {
-                const timeline = await em.getRepository(MmTimelineEntity).findOne({ where: { id, userId: req.info.user.id } });
+                const timeline = await em.getRepository(MmTimelineEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id, userId: req.info.user.id } });
                 if (!timeline) {
                     return res.status(404).json({ error: 'Timeline not found' });
                 }
@@ -139,7 +140,7 @@ export const updateTimeline = [
                 // 以下は追加された部分です
                 if (channelIds) {
                     const existingChannels = await em.getRepository(MmTimelineChannelEntity).find({
-                        where: { timelineId: id }
+                        where: { tenantKey: req.info.user.tenantKey, timelineId: id }
                     });
 
                     const existingChannelIds = existingChannels.map(ch => ch.channelId);
@@ -197,7 +198,7 @@ export const updateTimelineChannel = [
             const savedChannel = await ds.transaction(async em => {
 
                 const timeline = await em.getRepository(MmTimelineEntity).findOne({
-                    where: { id: timelineId, userId: req.info.user.id, status: MmTimelineStatus.Normal }
+                    where: { tenantKey: req.info.user.tenantKey, id: timelineId, userId: req.info.user.id, status: MmTimelineStatus.Normal }
                 });
                 if (!timeline) {
                     res.status(404).json({ error: 'Timeline not found' });
@@ -205,7 +206,7 @@ export const updateTimelineChannel = [
                 }
 
                 const existingChannel = await em.getRepository(MmTimelineChannelEntity).findOne({
-                    where: { timelineId, id: timelineChannelId }
+                    where: { tenantKey: req.info.user.tenantKey, timelineId, id: timelineChannelId }
                 });
                 if (!existingChannel) {
                     res.status(404).json({ error: 'TimelineChannel not found' });
@@ -243,7 +244,7 @@ export const deleteTimeline = [
         const { id } = req.params;
         const timelineRepository = ds.getRepository(MmTimelineEntity);
         try {
-            const timeline = await timelineRepository.findOne({ where: { id } });
+            const timeline = await timelineRepository.findOne({ where: { tenantKey: req.info.user.tenantKey, id } });
             if (!timeline) {
                 return res.status(404).json({ error: 'Timeline not found' });
             }
@@ -275,7 +276,7 @@ export const mattermostToAi = [
         let { title } = req.body as { title: string };
         // console.log(req.body);
         const provider = 'mattermost';
-        const e = readOAuth2Env(provider);
+        const e = await getExtApiClient(req.info.user.tenantKey, provider);
         const axios = await getAxios(e.uriBase);
 
         const initialArgs = {
@@ -291,13 +292,13 @@ export const mattermostToAi = [
 
         try {
             // チェック
-            const project = await ds.getRepository(ProjectEntity).findOne({ where: { id: projectId } });
+            const project = await ds.getRepository(ProjectEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: projectId } });
             if (!project) {
                 return res.status(404).json({ message: '指定されたプロジェクトが見つかりません' });
             }
 
             const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
-                where: { userId: req.info.user.id, teamId: project.teamId }
+                where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id, teamId: project.teamId }
             });
 
             if (project.visibility !== ProjectVisibility.Public && project.visibility !== ProjectVisibility.Login && !teamMember) {
@@ -310,16 +311,16 @@ export const mattermostToAi = [
             let urlList: string[];
             if (idType === 'timeline') {
                 const timeline = await ds.getRepository(MmTimelineEntity).findOneOrFail({
-                    where: { id, userId: req.info.user.id, status: MmTimelineStatus.Normal }
+                    where: { tenantKey: req.info.user.tenantKey, id, userId: req.info.user.id, status: MmTimelineStatus.Normal }
                 });
                 title = timeline.title;
                 const timelineChannelList = await ds.getRepository(MmTimelineChannelEntity).find({
-                    where: { timelineId: id }
+                    where: { tenantKey: req.info.user.tenantKey, timelineId: id }
                 });
                 urlList = timelineChannelList.map(timelineChannel => `${e.uriBase}/api/v4/channels/${timelineChannel.channelId}/posts`);
             } else if (idType === 'timelineChannel') {
                 const timelineChannel = await ds.getRepository(MmTimelineChannelEntity).findOneOrFail({
-                    where: { id }
+                    where: { tenantKey: req.info.user.tenantKey, id }
                 });
                 urlList = [`${e.uriBase}/api/v4/channels/${timelineChannel.channelId}/posts`];
             } else if (idType === 'channel') {
@@ -493,6 +494,7 @@ export const mattermostToAi = [
 
                 const userRepository = ds.getRepository(MmUserEntity);
                 const whereConditions = [];
+                whereConditions.push({ tenantKey: req.info.user.tenantKey });
 
                 if (ids.length > 0) {
                     whereConditions.push({ id: In(ids) });
@@ -674,7 +676,7 @@ export const mattermostToAi = [
                 const contentsImageUrlList = contents
                     .filter(content => content.type === 'file')
                     .map((content, index) => ({ filePath: content.text, base64Data: (content as FileContentPart).dataUrl, content, postId: (content as any).postId, index } as FileTypeTemp));
-                const fileBodyMapSet = await convertToMapSet(tm, contentsImageUrlList, req.info.user.id, req.info.ip);
+                const fileBodyMapSet = await convertToMapSet(tm, contentsImageUrlList, req.info.user.tenantKey, req.info.user.id, req.info.ip);
 
 
                 // -----------------------------------------------
@@ -731,7 +733,7 @@ export const mattermostToAi = [
                     fileGroup.updatedIp = req.info.ip;
                     const savedFileGroup = await tm.save(FileGroupEntity, fileGroup);
                     return await Promise.all(contentsImageUrlList.map(async (content, index) => {
-                        const file = await handleFileUpload(content.filePath, fileBodyMapSet.hashMap[fileBodyMapSet.hashList[content.index]].fileBodyEntity, projectId, req.info.user.id, req.info.ip);
+                        const file = await handleFileUpload(content.filePath, fileBodyMapSet.hashMap[fileBodyMapSet.hashList[content.index]].fileBodyEntity, projectId, req.info.user.tenantKey, req.info.user.id, req.info.ip);
                         file.fileEntity.fileGroupId = savedFileGroup.id;
                         const savedFile = await tm.save(FileEntity, file.fileEntity);
 

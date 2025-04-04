@@ -4,26 +4,26 @@ import { ds } from "../db.js";
 import { OAuthAccountEntity, OAuthAccountStatus } from "../entity/auth.entity.js";
 import { validationErrorHandler } from "../middleware/validation.js";
 import { OAuthUserRequest, UserRequest } from "../models/info.js";
-import { OAuth2TokenDto, readOAuth2Env, verifyJwt } from '../controllers/auth.js';
+import { getExtApiClient, OAuth2TokenDto } from '../controllers/auth.js';
 import { header, param, query } from 'express-validator';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { NextFunction } from 'http-proxy-middleware/dist/types.js';
 import { decrypt, encrypt } from '../controllers/tool-call.js';
 import { getAxios, getProxyUrl } from '../../common/http-client.js';
 
-export async function getAccessToken(userId: string, provider: string): Promise<OAuthAccountEntity> {
-    const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
-        where: { userId, status: OAuthAccountStatus.ACTIVE, provider },
+export async function getAccessToken(tenantKey: string, userId: string, provider: string): Promise<OAuthAccountEntity> {
+    const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneByOrFail({
+        tenantKey, userId, status: OAuthAccountStatus.ACTIVE, provider,
     });
-    const e = readOAuth2Env(provider);
+    const e = await getExtApiClient(oAuthAccount.tenantKey, provider);
     // console.log(oAuthAccount.tokenExpiresAt, new Date());
     if (oAuthAccount.tokenExpiresAt && oAuthAccount.tokenExpiresAt < new Date()) {
-        if (oAuthAccount.refreshToken) {
+        if (oAuthAccount.refreshToken && e.oAuth2Config) {
             console.error('リフレッシュトークンを使って新しいアクセストークンを取得します。',);
             // トークンリフレッシュ
-            const postData = { client_id: e.clientId, client_secret: e.clientSecret, grant_type: 'refresh_token', refresh_token: decrypt(oAuthAccount.refreshToken) };
+            const postData = { client_id: e.oAuth2Config.clientId, client_secret: e.oAuth2Config.clientSecret, grant_type: 'refresh_token', refresh_token: decrypt(oAuthAccount.refreshToken) };
             let params = null, body = null;
-            if (e.postType === 'params') {
+            if (e.oAuth2Config.postType === 'params') {
                 params = postData;
             } else {
                 body = postData;
@@ -33,9 +33,9 @@ export async function getAccessToken(userId: string, provider: string): Promise<
             const axios = await getAxios(e.uriBase);
             // アクセストークンを取得するためのリクエスト
             if (params) {
-                token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, {}, { params });
+                token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.oAuth2Config.pathAccessToken}`, {}, { params });
             } else {
-                token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, body);
+                token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.oAuth2Config.pathAccessToken}`, body);
             }
 
             // console.log(token.data);
@@ -66,7 +66,7 @@ export const getOAuthApiProxy = [
         const req = _req as OAuthUserRequest;
         // console.log(req.params);
         const { provider } = req.params as { provider: string };
-        const e = readOAuth2Env(provider);
+        const e = await getExtApiClient(req.info.user.tenantKey, provider);
         // console.log(e);
         let url = '';
         try {

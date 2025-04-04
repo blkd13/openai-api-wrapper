@@ -7,7 +7,7 @@ import nodemailer from 'nodemailer';
 import { Request, Response } from 'express';
 
 import { InviteRequest, UserRequest } from '../models/info.js';
-import { UserEntity, InviteEntity, LoginHistoryEntity, UserRoleType, DepartmentMemberEntity, DepartmentRoleType, DepartmentEntity, UserStatus, SessionEntity, OAuthAccountEntity, OAuthAccountStatus } from '../entity/auth.entity.js';
+import { UserEntity, InviteEntity, LoginHistoryEntity, UserRoleType, DepartmentMemberEntity, DepartmentRoleType, DepartmentEntity, UserStatus, SessionEntity, OAuthAccountEntity, OAuthAccountStatus, TenantEntity, ApiProviderEntity, OAuth2Config } from '../entity/auth.entity.js';
 import { InviteToken, ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_EXPIRES_IN, REFRESH_TOKEN_JWT_SECRET, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN, RefreshToken, UserToken, API_TOKEN_EXPIRES_IN, API_TOKEN_JWT_SECRET } from '../middleware/authenticate.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { EntityManager, In, MoreThan, Not } from 'typeorm';
@@ -19,14 +19,9 @@ import { Utils } from '../../common/utils.js';
 import { AxiosInstance } from 'axios';
 
 const { SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_FLOW_STATE_JWT_SECRET, OAUTH2_FLOW_STATE_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH, } = process.env as Record<string, string>;
-const requiredEnvVars = {
+Utils.requiredEnvVarsCheck({
     SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_FLOW_STATE_JWT_SECRET, OAUTH2_FLOW_STATE_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH,
-};
-const missingVars = Object.entries(requiredEnvVars).filter(([_, value]) => !value).map(([key]) => key);
-if (missingVars.length > 0) {
-    console.error(`環境変数が足りません: ${missingVars.join(', ')}`);
-    throw new Error('環境変数が不足しています');
-} else { }
+});
 
 // httpsの証明書検証スキップ用のエージェント。社内だから検証しなくていい。
 // import https from 'https';
@@ -61,12 +56,21 @@ export type OAuth2TokenDto = { access_token: string, token_type: string, expires
  * @returns 
  */
 export const userLogin = [
+    param('tenantKey').trim().notEmpty(),
     body('email').trim().notEmpty(),  // .withMessage('メールアドレスを入力してください。'),
     body('password').trim().notEmpty(),  // .withMessage('パスワードを入力してください。'),
     validationErrorHandler,
-    (req: Request, res: Response) => {
-        return ds.transaction((manager) =>
-            manager.getRepository(UserEntity).findOne({ where: { email: req.body.email } }).then((user: UserEntity | null) => {
+    async (req: Request, res: Response) => {
+        const { tenantKey } = req.params as { tenantKey: string };
+        let tenant: TenantEntity;
+        try {
+            tenant = await ds.getRepository(TenantEntity).findOneOrFail({ where: { tenantKey, isActive: true } });
+        } catch (e) {
+            res.status(401).json({ message: '認証に失敗しました。' });
+            return;
+        }
+        return ds.transaction(manager =>
+            manager.getRepository(UserEntity).findOne({ where: { tenantKey, email: req.body.email } }).then((user: UserEntity | null) => {
                 if (user == null || !bcrypt.compareSync(req.body.password, user.passwordHash || '')) {
                     res.status(401).json({ message: '認証に失敗しました。' });
                     return;
@@ -92,6 +96,7 @@ async function authAfter(user: UserEntity, manager: EntityManager, provider: str
     loginHistory.ipAddress = xRealIp
     loginHistory.deviceInfo = JSON.stringify(deviceInfo);
     loginHistory.authGeneration = user.authGeneration;
+    loginHistory.tenantKey = user.tenantKey;
     loginHistory.createdBy = user.id;
     loginHistory.updatedBy = user.id;
     loginHistory.createdIp = xRealIp
@@ -109,6 +114,7 @@ async function authAfter(user: UserEntity, manager: EntityManager, provider: str
     const expirationTime = Utils.parseTimeStringToMilliseconds(REFRESH_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
     session.expiresAt = new Date(Date.now() + expirationTime);
     session.lastActiveAt = new Date();
+    session.tenantKey = user.tenantKey;
     session.createdBy = user.id;
     session.updatedBy = user.id;
     session.createdIp = xRealIp;
@@ -116,7 +122,7 @@ async function authAfter(user: UserEntity, manager: EntityManager, provider: str
     const savedSession = await manager.getRepository(SessionEntity).save(session);
 
     // JWTの生成
-    const userToken: UserToken = { type: 'user', id: user.id, role: user.role, name: user.name, authGeneration: user.authGeneration || 0, email: user.email };
+    const userToken: UserToken = { type: 'user', id: user.id, role: user.role, name: user.name, authGeneration: user.authGeneration || 0, email: user.email, tenantKey: user.tenantKey };
     const accessToken = jwt.sign(userToken, ACCESS_TOKEN_JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN as ms.StringValue });
     // クッキーをセット
     res.cookie('access_token', accessToken, {
@@ -125,7 +131,7 @@ async function authAfter(user: UserEntity, manager: EntityManager, provider: str
         secure: true, // HTTPSでのみ送信されるようにする
         sameSite: true, // CSRF保護のためのオプション
     });
-    const refreshTokenBody: RefreshToken = { type: 'refresh', sessionId: savedSession.id, userId: user.id, role: user.role, name: user.name, lastActiveAt: session.lastActiveAt, authGeneration: user.authGeneration || 0, email: user.email };
+    const refreshTokenBody: RefreshToken = { type: 'refresh', sessionId: savedSession.id, userId: user.id, role: user.role, name: user.name, lastActiveAt: session.lastActiveAt, authGeneration: user.authGeneration || 0, email: user.email, tenantKey: user.tenantKey };
     const refreshToken = jwt.sign(refreshTokenBody, REFRESH_TOKEN_JWT_SECRET, { expiresIn: REFRESH_TOKEN_EXPIRES_IN as ms.StringValue });
     res.cookie('refresh_token', refreshToken, {
         maxAge: expirationTime, // 14日間。クッキーの有効期限をミリ秒で指定
@@ -136,77 +142,6 @@ async function authAfter(user: UserEntity, manager: EntityManager, provider: str
     // res.redirect(e.pathTop);
     return { accessToken, refreshToken: savedSession.id }
 }
-
-// /**
-//  * [user認証] AccessToken再発行
-//  */
-// export const genAccessToken = [
-//     validationErrorHandler,
-//     async (_req: Request, res: Response) => {
-//         const req: UserRequest = _req as UserRequest;
-//         const user = req.info.user;
-//         let deviceInfo = {};
-//         if (req.useragent) {
-//             deviceInfo = Utils.jsonOrder(req.useragent, ['browser', 'version', 'os', 'platform', 'isDesktop', 'isMobile', 'isTablet']);
-//         } else { }
-
-//         // TODO authenticateと同じ実装になってるのでservieとして切り出した方が良い。
-
-//         const xRealIp = req.headers['x-real-ip'] as string || req.ip || '';
-
-//         // console.log(`token refresh ${req.cookies.refresh_token.substring(0, 10)}...`);
-//         jwt.verify(req.cookies.refresh_token, REFRESH_TOKEN_JWT_SECRET, (err: any, _token: any) => {
-//             const refreshToken = _token as RefreshToken;
-//             if (err || refreshToken.type !== 'refresh') {
-//                 res.sendStatus(401);
-//                 return;
-//             }
-
-//             ds.transaction(async (manager) => {
-
-//                 const session = await manager.getRepository(SessionEntity).findOneOrFail({ where: { id: refreshToken.sessionId, userId: refreshToken.userId } });
-
-//                 const where = {
-//                     id: refreshToken.userId,                     // JWTのユーザーIDと一致すること
-//                     authGeneration: refreshToken.authGeneration, // JWTの認証世代と一致すること
-//                     status: UserStatus.Active, // activeユーザーじゃないと使えない
-//                 } as Record<string, any>;
-
-//                 // ユーザーの存在確認 ※こんなことやってるからjwtにした意味はなくなってしまうが即時停止をやりたいのでやむなく。
-//                 const user = await manager.getRepository(UserEntity).findOneOrFail({ where });
-
-//                 // 認証OK。リクエストにユーザーIDを付与して次の処理へ
-//                 // user.dataValuesはそのままだとゴミがたくさん付くので、項目ごとにUserModelにマッピングする。
-//                 // TODO ここはもっとスマートに書けるはず。マッパーを用意するべきか？
-//                 const userEntity = new UserEntity();
-//                 userEntity.id = user.id;
-//                 userEntity.name = user.name;
-//                 userEntity.email = user.email;
-//                 userEntity.role = user.role;
-//                 // (req as UserRequest).info = { user: userEntity, ip: xRealIp };
-
-//                 // 最終更新日だけ更新して更新
-//                 session.lastActiveAt = new Date();
-//                 session.updatedBy = user.id;
-//                 session.updatedIp = xRealIp;
-//                 const savedSession = await manager.getRepository(SessionEntity).save(session);
-
-//                 // JWTの生成
-//                 const userToken: UserToken = { type: 'user', id: user.id, authGeneration: user.authGeneration || 0, email: user.email };
-//                 const accessToken = jwt.sign(userToken, ACCESS_TOKEN_JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN as ms.StringValue  });
-
-//                 // クッキーをセット
-//                 res.cookie('access_token', accessToken, {
-//                     maxAge: Utils.parseTimeStringToMilliseconds(ACCESS_TOKEN_EXPIRES_IN), // クッキーの有効期限をミリ秒で指定
-//                     httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
-//                     secure: true, // HTTPSでのみ送信されるようにする
-//                     sameSite: true, // CSRF保護のためのオプション
-//                 });
-//                 res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } });
-//             });
-//         });
-//     }
-// ];
 
 /**
  * [user認証] APIトークン発行
@@ -231,6 +166,7 @@ export const genApiToken = [
             loginHistory.ipAddress = xRealIp;
             loginHistory.deviceInfo = JSON.stringify(deviceInfo);
             loginHistory.authGeneration = user.authGeneration;
+            loginHistory.tenantKey = req.info.user.tenantKey;
             loginHistory.createdBy = user.id;
             loginHistory.updatedBy = user.id;
             loginHistory.createdIp = xRealIp;
@@ -248,6 +184,7 @@ export const genApiToken = [
             const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
             session.expiresAt = new Date(Date.now() + expirationTime);
             session.lastActiveAt = new Date();
+            session.tenantKey = req.info.user.tenantKey;
             session.createdBy = user.id;
             session.updatedBy = user.id;
             session.createdIp = xRealIp;
@@ -256,11 +193,11 @@ export const genApiToken = [
 
             // TODO でもよく考えたらAPIはAuthGenerationは無視したい。revoke管理は別途作り込む。
             // DBのユーザーEntityを持ってきてauthGeneartionを持ってくる
-            const userFromDb = await manager.getRepository(UserEntity).findOneOrFail({ where: { id: req.info.user.id } });
+            const userFromDb = await manager.getRepository(UserEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, id: req.info.user.id } });
 
             // JWTの生成
             const apiTokenBody: RefreshToken = {
-                type: 'api', sessionId: savedSession.id, userId: user.id, role: user.role, name: user.name, lastActiveAt: session.lastActiveAt, authGeneration: userFromDb.authGeneration || 0, email: user.email
+                type: 'api', sessionId: savedSession.id, userId: user.id, role: user.role, name: user.name, lastActiveAt: session.lastActiveAt, authGeneration: userFromDb.authGeneration || 0, email: user.email, tenantKey: user.tenantKey
             };
             const apiToken = jwt.sign(apiTokenBody, API_TOKEN_JWT_SECRET, { expiresIn: API_TOKEN_EXPIRES_IN as ms.StringValue });
 
@@ -276,6 +213,7 @@ export const genApiToken = [
             apiTokenEntity.tokenBody = '{}';
             apiTokenEntity.userInfo = '{}';
             apiTokenEntity.status = OAuthAccountStatus.ACTIVE;
+            apiTokenEntity.tenantKey = user.tenantKey;
             apiTokenEntity.createdBy = user.id;
             apiTokenEntity.updatedBy = user.id;
             apiTokenEntity.createdIp = xRealIp;
@@ -287,28 +225,25 @@ export const genApiToken = [
     }
 ];
 
-export type OAuth2Env = { uriBaseAuth: string, uriBase: string, pathAuthorize: string, pathAccessToken: string, pathUserInfo: string, clientId: string, scope: string, redirectUri: string, requireMailAuth: string, axiosWithAuth: Promise<((userId: string) => Promise<AxiosInstance>)>, postType: string, clientSecret: string, pathTop: string, };
-export function readOAuth2Env(provider: string): OAuth2Env {
-    const uProvider = provider.toUpperCase().replaceAll('-', '_');
-
-    const e = {
-        uriBaseAuth: process.env[`OAUTH2_${uProvider}_URI_BASE_AUTHORIZE`] as string,
-        uriBase: process.env[`OAUTH2_${uProvider}_URI_BASE`] as string,
-        pathAuthorize: process.env[`OAUTH2_${uProvider}_PATH_AUTHORIZE`] as string,
-        pathAccessToken: process.env[`OAUTH2_${uProvider}_PATH_ACCESS_TOKEN`] as string,
-        pathUserInfo: process.env[`OAUTH2_${uProvider}_PATH_USER_INFO`] as string,
-        clientId: process.env[`OAUTH2_${uProvider}_CLIENT_ID`] as string,
-        scope: process.env[`OAUTH2_${uProvider}_SCOPE`] as string,
-        redirectUri: process.env[`OAUTH2_${uProvider}_REDIRECT_URI`] as string,
-        requireMailAuth: process.env[`OAUTH2_${uProvider}_REQUIRE_MAIL_AUTH`] as string, // 追加のメール認証が必要かどうか（独自認証のproviderをそのまま使うと危ないので）
-        // useProxy: (process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true') as boolean, // proxyを使うかどうか
-        // axios: (process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true') ? axiosWithProxy : axiosWithoutProxy,
-        axiosWithAuth: getOAuthClient(provider),
-        postType: process.env[`OAUTH2_${uProvider}_POST_TYPE`] as string, // POSTの中身をparamsでやるかbodyに書くか。
-        clientSecret: process.env[`OAUTH2_${uProvider}_CLIENT_SECRET`] as string,
-        pathTop: process.env[`OAUTH2_${uProvider}_PATH_TOP`] as string,
-    };
-    return e;
+export type ExtApiClient = ApiProviderEntity & { axiosWithAuth: Promise<((userId: string) => Promise<AxiosInstance>)>, };
+const eMas: Record<string, ExtApiClient> = {};
+export async function getExtApiClient(tenantKey: string, provider: string): Promise<ExtApiClient> {
+    const eKey = `${tenantKey}:${provider}`;
+    if (eMas[eKey]) {
+        return Promise.resolve(eMas[eKey]);
+    } else {
+        const tenant = await ds.getRepository(TenantEntity).findOneByOrFail({ tenantKey, isActive: true });
+        const apiProvider = await ds.getRepository(ApiProviderEntity).findOneByOrFail({
+            tenantKey, provider, isDeleted: false,
+        });
+        const apiClient = {
+            ...apiProvider,
+            axiosWithAuth: getOAuthClient(tenantKey, provider, apiProvider.uriBase),
+        } as ExtApiClient;
+        eMas[eKey] = apiClient;
+        // console.log(`getExtApiClient ${provider} ${JSON.stringify(e)}`);
+        return apiClient;
+    }
 }
 
 /**
@@ -316,11 +251,10 @@ export function readOAuth2Env(provider: string): OAuth2Env {
  * @param provider 
  * @returns 
  */
-export async function getOAuthClient(provider: string): Promise<((userId: string) => Promise<AxiosInstance>)> {
-    const uProvider = provider.toUpperCase().replaceAll('-', '_');
+export async function getOAuthClient(tenantKey: string, provider: string, uriBase: string): Promise<((userId: string) => Promise<AxiosInstance>)> {
     return (async (userId: string) => {
 
-        const oAuthAccount = await getAccessToken(userId, provider);
+        const oAuthAccount = await getAccessToken(tenantKey, userId, provider);
 
         console.log(`getOAuthClient ${provider} ${oAuthAccount.accessToken}`);
         const headers = {
@@ -328,28 +262,7 @@ export async function getOAuthClient(provider: string): Promise<((userId: string
             'Content-Type': 'application/json',
         };
 
-        // axiosInstanceをconstにしたかったので無理して三項演算子
-        // const flag = process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true';
-        // console.log(`flag=${flag}`)
-
-        // const axiosInstance: AxiosInstance = process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true'
-        //     // proxyありの場合はHttpsProxyAgentを噛ませる
-        //     ? (agent => axios.create({ headers, httpAgent: agent, httpsAgent: agent, proxy: false, }))(new HttpsProxyAgent(`${AXIOS_EXTERNAL_PROXY_PROTOCOL}://${AXIOS_EXTERNAL_PROXY_HOST}:${AXIOS_EXTERNAL_PROXY_PORT}`))
-        //     // proxy無しの場合はそのまま
-        //     : axios.create({ headers, httpAgent: false, httpsAgent: false, proxy: false });
-        const axiosInstance: AxiosInstance = await getAxios(process.env[`OAUTH2_${uProvider}_URI_BASE`] as string, headers);
-
-        // let axiosInstance: AxiosInstance;
-        // if ((process.env[`OAUTH2_${uProvider}_USE_PROXY`] === 'true')) {
-        //     const agent = new HttpsProxyAgent(`${AXIOS_EXTERNAL_PROXY_PROTOCOL}://${AXIOS_EXTERNAL_PROXY_HOST}:${AXIOS_EXTERNAL_PROXY_PORT}`);
-        //     const axiosWithProxy = axios.create({ httpAgent: agent, httpsAgent: agent, proxy: false, });
-        //     (agent => axios.create({ httpAgent: agent, httpsAgent: agent, proxy: false, }))(new HttpsProxyAgent(`${AXIOS_EXTERNAL_PROXY_PROTOCOL}://${AXIOS_EXTERNAL_PROXY_HOST}:${AXIOS_EXTERNAL_PROXY_PORT}`));
-        //     axiosInstance = axiosWithProxy;
-        // } else {
-        //     // プロキシ無しaxios
-        //     const axiosWithoutProxy = axios.create({ httpAgent: false, proxy: false, headers });
-        //     axiosInstance = axiosWithoutProxy;
-        // }
+        const axiosInstance: AxiosInstance = await getAxios(uriBase, headers);
 
         // リクエスト失敗時のインターセプター
         axiosInstance.interceptors.response.use(
@@ -363,7 +276,7 @@ export async function getOAuthClient(provider: string): Promise<((userId: string
 
                     try {
                         // リフレッシュトークンを使って新しいアクセストークンを取得
-                        const newTokens = await getAccessToken(oAuthAccount.userId, oAuthAccount.provider);
+                        const newTokens = await getAccessToken(oAuthAccount.tenantKey, oAuthAccount.userId, oAuthAccount.provider);
 
                         // トークンを更新
                         oAuthAccount.accessToken = newTokens.accessToken;
@@ -393,25 +306,30 @@ export async function getOAuthClient(provider: string): Promise<((userId: string
 }
 
 export const userLoginOAuth2 = [
+    param('tenantKey').trim().notEmpty(),
     param('provider').trim().notEmpty(),
     validationErrorHandler,
     async (req: Request, res: Response) => {
         // OAuth2認可エンドポイントにリダイレクト
-        const { provider } = req.params as { provider: string };
+        const { tenantKey, provider } = req.params as { tenantKey: string, provider: string };
         // console.log(`OAuth2 login request: ${provider} ${JSON.stringify(req.query)}`);
-        const e = readOAuth2Env(provider);
+        const e = await getExtApiClient(tenantKey, provider);
+        if (!e || !e.oAuth2Config) {
+            res.status(400).json({ error: 'Provider not found' });
+            return;
+        }
         // パスによってリダイレクトURIを振り分ける
-        const redirectUri = `${e.redirectUri}`;
+        const redirectUri = `${e.oAuth2Config.redirectUri}`;
 
         const stateSeed = Utils.generateUUID();
         // stateにリダイレクト先URL等の任意情報を埋め込む用の JWT の生成
-        const statePack: OAuth2State = { type: 'oauth-state', stateSeed, provider, redirectUri, query: req.query };
+        const statePack: OAuth2State = { tenantKey, type: 'oauth-state', stateSeed, provider, redirectUri, query: req.query };
         const state = jwt.sign(statePack, OAUTH2_FLOW_STATE_JWT_SECRET as string, { expiresIn: OAUTH2_FLOW_STATE_EXPIRES_IN as ms.StringValue });
         // console.log(e);
-        const authURL = `${e.uriBaseAuth || e.uriBase}${e.pathAuthorize}?client_id=${e.clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${e.scope}&state=${state}`;
+        const authURL = `${e.oAuth2Config.uriBaseAuth || e.uriBase}${e.oAuth2Config.pathAuthorize}?client_id=${e.oAuth2Config.clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${e.oAuth2Config.scope}&state=${state}`;
 
         // ログイン済みの場合、ログイン済みの情報とOAuth2の認証を紐づけるためのJWTの生成
-        const pack: OAuth2FlowState = { type: 'oauth-flow', state, provider, redirectUri, accessToken: req.cookies?.access_token, refreshToken: req.cookies?.refresh_token };
+        const pack: OAuth2FlowState = { tenantKey, type: 'oauth-flow', state, provider, redirectUri, accessToken: req.cookies?.access_token, refreshToken: req.cookies?.refresh_token };
         const oauth2FlowState = jwt.sign(pack, OAUTH2_FLOW_STATE_JWT_SECRET as string, { expiresIn: OAUTH2_FLOW_STATE_EXPIRES_IN as ms.StringValue });
         // ID紐づけ用のCookieをセット
         res.cookie(`oauth_onetime_${provider}`, oauth2FlowState, {
@@ -426,6 +344,7 @@ export const userLoginOAuth2 = [
 
 // stateとしてOAuth2のサーバーに渡るので秘密情報は入れない。
 type OAuth2State = {
+    tenantKey: string,
     type: 'oauth-state',
     stateSeed: string,
     provider: string,
@@ -435,6 +354,7 @@ type OAuth2State = {
 
 // Cookieとして保持するので秘密情報入ってもまぁ良しとする。
 type OAuth2FlowState = {
+    tenantKey: string,
     type: 'oauth-flow',
     provider: string,
     redirectUri: string,
@@ -538,7 +458,7 @@ async function handleOAuthCallback(tm: EntityManager, req: Request, res: Respons
         }
     }
     // userIdの有無で認証済みかどうかを判定
-    return userId ? await ds.getRepository(UserEntity).findOneOrFail({ where: { id: userId } }) : null;
+    return userId ? await ds.getRepository(UserEntity).findOneOrFail({ where: { tenantKey: oAuth2FlowState.tenantKey, id: userId } }) : null;
 }
 
 /**
@@ -559,6 +479,7 @@ export async function tryRefreshCore(tm: EntityManager, xRealIp: string, tokenTy
     const session = await tm.findOneOrFail(SessionEntity, { where: { id: decoded.sessionId, userId: decoded.userId } });
 
     const where = {
+        tenantKey: decoded.tenantKey,
         id: decoded.userId,                     // JWTのユーザーIDと一致すること
         authGeneration: decoded.authGeneration, // JWTの認証世代と一致すること
         status: UserStatus.Active, // activeユーザーじゃないと使えない
@@ -587,7 +508,7 @@ export async function tryRefreshCore(tm: EntityManager, xRealIp: string, tokenTy
     const savedSession = await tm.save(SessionEntity, session);
 
     // JWTの生成
-    const userToken: UserToken = { type: 'user', id: user.id, role: user.role, name: user.name, authGeneration: user.authGeneration || 0, email: user.email };
+    const userToken: UserToken = { type: 'user', id: user.id, role: user.role, name: user.name, authGeneration: user.authGeneration || 0, email: user.email, tenantKey: user.tenantKey };
     const accessToken = jwt.sign(userToken, ACCESS_TOKEN_JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN as ms.StringValue });
     return { userEntity, accessToken };
 }
@@ -618,29 +539,41 @@ export async function tryRefresh(tm: EntityManager, req: Request, res: Response,
  * @returns 
  */
 export const userLoginOAuth2Callback = [
-    param('provider').isString().trim().notEmpty(),
     query('code').isString().trim().notEmpty(),  // .withMessage('メールアドレスを入力してください。'),
     query('state').isString().trim().notEmpty(),  // .withMessage('メールアドレスを入力してください。'),
     validationErrorHandler,
     async (req: Request, res: Response) => {
-        // const req: UserRequest = _req as UserRequest;
         // console.log('OAuth2 callback');
-        // console.dir(setup);
 
-        const { provider } = req.params as { provider: string };
-        const e = readOAuth2Env(provider);
         const { code, state } = req.query as { code: string, state: string };
+
+        let decoded: OAuth2State;
+        try {
+            decoded = await verifyJwt<OAuth2State>(state, OAUTH2_FLOW_STATE_JWT_SECRET);
+        } catch (err) {
+            throw new Error(`OAuth2 flow state verification failed. ${err}`);
+        }
+        const oAuth2FlowState = decoded as OAuth2State;
+
+        const e = await getExtApiClient(oAuth2FlowState.tenantKey, oAuth2FlowState.provider);
+        const tenantKey = oAuth2FlowState.tenantKey;
+        const provider = oAuth2FlowState.provider;
+
         const ipAddress = req.headers['x-real-ip'] as string || req.ip || '';
         try {
             // awaitをつけておかないと、例外が発生してもcatchされない。
             await ds.transaction(async (manager) => {
+                if (!e || !e.oAuth2Config) {
+                    res.status(400).json({ error: 'Provider not found' });
+                    return;
+                } else { }
 
                 // oAuth2FlowState の検証
                 const authenticatedUser = await handleOAuthCallback(manager, req, res, ipAddress);
 
-                const postData = { client_id: e.clientId, client_secret: e.clientSecret, grant_type: 'authorization_code', code: code, redirect_uri: `${e.redirectUri}` };
+                const postData = { client_id: e.oAuth2Config.clientId, client_secret: e.oAuth2Config.clientSecret, grant_type: 'authorization_code', code: code, redirect_uri: `${e.oAuth2Config.redirectUri}` };
                 let params = null, body = null;
-                if (e.postType === 'params') {
+                if (e.oAuth2Config.postType === 'params') {
                     params = postData;
                 } else {
                     body = postData;
@@ -651,12 +584,12 @@ export const userLoginOAuth2Callback = [
                 const axios = await getAxios(e.uriBase);
                 let token = null;
                 if (params) {
-                    token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, {}, { params });
+                    token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.oAuth2Config.pathAccessToken}`, {}, { params });
                 } else {
                     // console.dir(body, { depth: null });
                     // console.log(`--------------------852--`);
                     // console.log(`curl -X POST -H 'Content-Type: application/json' -d '${JSON.stringify(body)}' ${e.uriBase}${e.pathAccessToken}`);
-                    token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, body, { headers: { 'Content-Type': 'application/json' }, });
+                    token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.oAuth2Config.pathAccessToken}`, body, { headers: { 'Content-Type': 'application/json' }, });
                     // proxy: false, httpsAgent: agent 
                     // console.log(`--------------------840--`);
                     // console.log(`--------------------853--`);
@@ -685,10 +618,10 @@ export const userLoginOAuth2Callback = [
                 // console.log(JSON.stringify(userInfo.data));
 
                 // ここはちょっとキモイ。。けど複数を纏めているから仕方ない。。
-                if (provider === 'box') {
+                if (e.type === 'box') {
                     // boxはcu認証なのでcuを外してemailに入れる。
                     userInfo.data.email = userInfo.data.login?.replace('@cu.', '@') || '';
-                } else if (e.requireMailAuth) {
+                } else if (e.oAuth2Config.requireMailAuth) {
                     // 独自のメール認証をしているプロバイダーはメアドも仮の可能性がある
                     userInfo.data.email = userInfo.data.email.replaceAll(/@localhost$/g, `@${MAIL_DOMAIN_WHITELIST.split(',')[0]}`) || '';
                 } else { }
@@ -709,9 +642,9 @@ export const userLoginOAuth2Callback = [
                     // emailが一致するユーザーじゃないと紐づけさせない。
                     throw new Error(JSON.stringify({
                         error: "Invalid email",
-                        message: `ログイン中のユーザーと異なるemailを持つアカウントとは紐づけできません。${provider}をログアウトしてから再度試してください。`,
+                        message: `ログイン中のユーザーと異なるemailを持つアカウントとは紐づけできません。${e.provider}をログアウトしてから再度試してください。`,
                         details: {
-                            provider: provider,
+                            provider: e.provider,
                             authenticatedUserEmail: authenticatedUser.email,
                             targetEmail: userInfo.data.email
                         }
@@ -721,7 +654,7 @@ export const userLoginOAuth2Callback = [
                 }
                 // console.log(oAuthUserInfo.email);
                 // emailを事実上の鍵として紐づけに行く。
-                let user = await manager.getRepository(UserEntity).findOne({ where: { email: oAuthUserInfo.email } });
+                let user = await manager.getRepository(UserEntity).findOne({ where: { tenantKey, email: oAuthUserInfo.email } });
                 // console.log('LINK::');
                 // console.log(user);
                 if (user) {
@@ -732,6 +665,7 @@ export const userLoginOAuth2Callback = [
                     user.name = oAuthUserInfo.username || oAuthUserInfo.email.split('@')[0];
                     // jwtの検証で取得した情報をそのまま登録する
                     user.email = oAuthUserInfo.email;
+                    user.tenantKey = tenantKey;
                     user.createdBy = ipAddress; // 作成者はIP
                     user.updatedBy = ipAddress; // 更新者はIP
                     user.createdIp = ipAddress;
@@ -742,7 +676,7 @@ export const userLoginOAuth2Callback = [
                     await createUserInitial(ipAddress, user, manager); // ユーザー初期作成に伴う色々作成
                 }
                 // oAuthの一意キー
-                const oAuthKey = { provider, userId: user.id, providerUserId: oAuthUserInfo.id };
+                const oAuthKey = { tenantKey, provider, userId: user.id, providerUserId: oAuthUserInfo.id };
                 let oAuthAccount = await manager.getRepository(OAuthAccountEntity).findOne({ where: oAuthKey });
                 if (oAuthAccount) {
                     // 既存の場合
@@ -756,6 +690,7 @@ export const userLoginOAuth2Callback = [
                     oAuthAccount.providerUserId = oAuthKey.providerUserId;
                     oAuthAccount.providerEmail = oAuthUserInfo.email;
                     oAuthAccount.userInfo = JSON.stringify(userInfo.data);
+                    oAuthAccount.tenantKey = tenantKey;
                     oAuthAccount.createdBy = user.id;
                     oAuthAccount.createdIp = ipAddress;
                 }
@@ -769,16 +704,16 @@ export const userLoginOAuth2Callback = [
                 oAuthAccount.updatedBy = user.id;
                 oAuthAccount.updatedIp = ipAddress;
 
-                if (e.requireMailAuth === 'false') {
+                if (e.oAuth2Config.requireMailAuth === false) {
                     // 追加メール認証不要
                     // 保存
                     if (provider === 'mattermost') {
-                        // mattermost の認証トークンは保存しないようにする。
-                        token.data.access_token = `dummy`;
-                        token.data.refresh_token = `dummy`;
-                        oAuthAccount.accessToken = token.data.access_token;
-                        oAuthAccount.refreshToken = token.data.refresh_token;
-                        oAuthAccount.tokenBody = JSON.stringify(token.data);
+                        // // mattermost の認証トークンは保存しないようにする。
+                        // token.data.access_token = `dummy`;
+                        // token.data.refresh_token = `dummy`;
+                        // oAuthAccount.accessToken = token.data.access_token;
+                        // oAuthAccount.refreshToken = token.data.refresh_token;
+                        // oAuthAccount.tokenBody = JSON.stringify(token.data);
                         // cookie に MMAUTHTOKEN としてセットしておけばトークン使わずに行ける。
                         res.cookie('MMAUTHTOKEN', accessToken, {
                             maxAge: Utils.parseTimeStringToMilliseconds(`1y`), // ミリ秒単位で指定
@@ -788,30 +723,6 @@ export const userLoginOAuth2Callback = [
                         });
                     } else {
                     }
-                    // if (['mattermost', 'box', 'gitlab-devops'].includes(provider)) {
-                    //     // console.log(`DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD:${provider}`);
-                    //     // console.dir(token.data);
-                    //     // console.log(`ccccccccccccccccccccccccccccccccccccc:${provider}`);
-
-                    //     // JWTの生成(トークン塗りつぶす前に)
-                    //     const jwtString = jwt.sign({ userId: user.id, provider, tokenExpiresAt: oAuthAccount.tokenExpiresAt, oAuth2TokenDto: token.data }, { expiresIn: `${token.data.expires_in}s` as ms.StringValue  });
-
-                    //     // mattermost の認証トークンは保存しないようにする。
-                    //     token.data.access_token = `dummy`;
-                    //     token.data.refresh_token = `dummy`;
-                    //     oAuthAccount.accessToken = token.data.access_token;
-                    //     oAuthAccount.refreshToken = token.data.refresh_token;
-                    //     oAuthAccount.tokenBody = JSON.stringify(token.data);
-
-                    //     // cookie に oauth_${provider} としてセットしておけばトークン使わずに行ける。
-                    //     res.cookie(`oauth_${provider}`, jwtString, {
-                    //         maxAge: token.data.expires_in * 1000, // ミリ秒単位で指定
-                    //         httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
-                    //         secure: true, // HTTPSでのみ送信されるようにする
-                    //         sameSite: true, // CSRF保護のためのオプション
-                    //     });
-                    // } else { }
-
                     const savedOAuthAccount = await manager.getRepository(OAuthAccountEntity).save(oAuthAccount);
                     // トークン発行
                     await authAfter(user, manager, provider, oAuthKey, req, res);
@@ -819,8 +730,8 @@ export const userLoginOAuth2Callback = [
                     // res.redirect(`${e.pathTop}${redirectType}`);
                     try {
                         const decoded = await verifyJwt<OAuth2State>(state, OAUTH2_FLOW_STATE_JWT_SECRET);
-                        console.log(`OAuth2 login success: ${provider} ${oAuthUserInfo.email} ${decoded.query.fromUrl || e.pathTop}`);
-                        res.redirect(`${decoded.query.fromUrl || e.pathTop}`);
+                        console.log(`OAuth2 login success: ${provider} ${oAuthUserInfo.email} ${decoded.query.fromUrl || e.oAuth2Config.pathTop}`);
+                        res.redirect(`${decoded.query.fromUrl || e.oAuth2Config.pathTop}`);
                         // // HTMLをクライアントに送信
                         // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title><meta http-equiv="refresh" content="0; URL=${decoded.query.fromUrl || e.pathTop}"></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
                         return;
@@ -847,8 +758,9 @@ export const userLoginOAuth2Callback = [
                     inviteEntity.onetimeToken = onetimeToken;
                     inviteEntity.type = 'oauth2MailAuth';
                     inviteEntity.status = 'unused';
-                    inviteEntity.data = JSON.stringify({ name: '', email: oAuthUserInfo.email, pincode, oAuthAccountId: savedOAuthAccount.id, userId: user.id });
+                    inviteEntity.data = JSON.stringify({ name: '', email: oAuthUserInfo.email, pincode, oAuthAccountId: savedOAuthAccount.id, tenantKey: user.tenantKey, userId: user.id });
                     inviteEntity.limit = Date.now() + Utils.parseTimeStringToMilliseconds(MAIL_EXPIRES_IN);
+                    inviteEntity.tenantKey = tenantKey;
                     inviteEntity.createdBy = ipAddress;
                     inviteEntity.updatedBy = ipAddress;
                     inviteEntity.createdIp = ipAddress;
@@ -890,11 +802,11 @@ export const oAuthEmailAuth = [
             if (postedPincode) {
                 await ds.transaction(async (manager) => {
                     // 追加メール認証不要
-                    const invite = await manager.getRepository(InviteEntity).findOneOrFail({ where: { id: req.info.invite.id } });
+                    const invite = await manager.getRepository(InviteEntity).findOneOrFail({ where: { tenantKey: req.info.invite.tenantKey, id: req.info.invite.id } });
                     const { email, pincode, oAuthAccountId, userId } = JSON.parse(invite.data);
                     if (postedPincode === pincode) {
                         // TODO inviteを閉じるのはこのタイミングが適切なのかは微妙。開いた瞬間閉じる方が良いかも？
-                        await manager.getRepository(InviteEntity).findOne({ where: { id: req.info.invite.id } }).then((invite: InviteEntity | null) => {
+                        await manager.getRepository(InviteEntity).findOne({ where: { tenantKey: req.info.invite.tenantKey, id: req.info.invite.id } }).then((invite: InviteEntity | null) => {
                             if (invite) {
                                 invite.updatedBy = req.info.invite.id;
                                 invite.updatedIp = req.info.ip;
@@ -906,13 +818,13 @@ export const oAuthEmailAuth = [
                             return invite;
                         });
 
-                        const oAuthAccount = await manager.getRepository(OAuthAccountEntity).findOneOrFail({ where: { id: oAuthAccountId } });
+                        const oAuthAccount = await manager.getRepository(OAuthAccountEntity).findOneOrFail({ where: { tenantKey: req.info.invite.tenantKey, id: oAuthAccountId } });
                         // activate
                         oAuthAccount.status = OAuthAccountStatus.ACTIVE;
                         oAuthAccount.updatedBy = req.info.invite.id; // inviteのIDを入れる
                         oAuthAccount.updatedIp = req.info.ip;
                         await manager.getRepository(OAuthAccountEntity).save(oAuthAccount);
-                        const user = await manager.getRepository(UserEntity).findOneOrFail({ where: { id: userId } });
+                        const user = await manager.getRepository(UserEntity).findOneOrFail({ where: { tenantKey: req.info.invite.tenantKey, id: userId } });
                         // トークン発行
                         const oAuthKey = { provider: oAuthAccount.provider, userId, providerUserId: oAuthAccount.providerUserId };
                         await authAfter(user, manager, oAuthAccount.provider, oAuthKey, req, res);
@@ -1014,7 +926,7 @@ export const logout = [
                     return;
                 }
                 ds.transaction(async manager => {
-                    const currSession = await manager.getRepository(SessionEntity).findOneOrFail({ where: { id: refreshToken.sessionId } });
+                    const currSession = await manager.getRepository(SessionEntity).findOneOrFail({ where: { tenantKey: refreshToken.tenantKey, id: refreshToken.sessionId } });
                     currSession.expiresAt = new Date(); // 即時expire
                     currSession.updatedBy = refreshToken.userId;
                     currSession.updatedIp = req.headers['x-real-ip'] as string || '0.0.0.0';
@@ -1034,12 +946,15 @@ export const logout = [
  * @returns 
  */
 export const onetimeLogin = [
+    param('tenantKey').trim().notEmpty(),
     body('type').trim().notEmpty(),  // .withMessage('ワンタイムトークンのタイプを入力してください。'),
     body('token').trim().notEmpty(),  // .withMessage('ワンタイムトークンを入力してください。'),
     validationErrorHandler,
     (req: Request, res: Response) => {
+        const { tenantKey } = req.params as { tenantKey: string };
         ds.getRepository(InviteEntity).findOne({
             where: {
+                tenantKey,
                 onetimeToken: req.body.token as string,
                 status: 'unused',
                 type: req.body.type,
@@ -1051,6 +966,7 @@ export const onetimeLogin = [
                 return;
             } else {
                 const inviteToken: InviteToken = {
+                    tenantKey,
                     type: 'invite',
                     id: onetimeModel.id,
                     email: onetimeModel.email,
@@ -1070,9 +986,11 @@ export const onetimeLogin = [
  * @returns 
  */
 export const requestForPasswordReset = [
+    param('tenantKey').trim().notEmpty(),
     body('email').trim().notEmpty().isEmail(),  // .withMessage('メールアドレスを入力してください。'),
     validationErrorHandler,
     async (req: Request, res: Response) => {
+        const { tenantKey } = req.params as { tenantKey: string };
 
         // emailを事実上の鍵として紐づけに行くので、メアドが変なやつじゃないかはちゃんとチェックする。
         if (MAIL_DOMAIN_WHITELIST.split(',').find(domain => req.body.email.endsWith(`@${domain}`))) {
@@ -1092,6 +1010,7 @@ export const requestForPasswordReset = [
         inviteEntity.status = 'unused';
         inviteEntity.data = JSON.stringify({ name: req.body.name, email: req.body.email });
         inviteEntity.limit = Date.now() + Utils.parseTimeStringToMilliseconds(MAIL_EXPIRES_IN);
+        inviteEntity.tenantKey = tenantKey;
         inviteEntity.createdBy = req.headers['x-real-ip'] as string || '0.0.0.0';
         inviteEntity.updatedBy = req.headers['x-real-ip'] as string || '0.0.0.0';
         inviteEntity.createdIp = req.headers['x-real-ip'] as string || '0.0.0.0';
@@ -1134,7 +1053,7 @@ export const passwordReset = [
         let isCreate = false;
         ds.transaction((manager) => {
             // パスワード設定（emailが事実上の鍵）
-            return manager.getRepository(UserEntity).findOne({ where: { email: req.info.invite.email } }).then((user: UserEntity | null) => {
+            return manager.getRepository(UserEntity).findOne({ where: { tenantKey: req.info.invite.tenantKey, email: req.info.invite.email } }).then((user: UserEntity | null) => {
                 if (user) {
                     // 既存ユーザーの場合はパスワードを更新する
                     // パスワードのハッシュ化
@@ -1154,6 +1073,7 @@ export const passwordReset = [
                     // パスワードのハッシュ化
                     user.passwordHash = bcrypt.hashSync(req.body.password, 10);
                     user.authGeneration = 1;
+                    user.tenantKey = req.info.invite.tenantKey; // tenantKeyはinviteから取得する
                     user.createdBy = req.info.invite.id; // 作成者はinvite
                     user.createdIp = req.info.ip;
                 }
@@ -1169,7 +1089,7 @@ export const passwordReset = [
                     return user;
                 }
             }).then((user) => {
-                return manager.getRepository(InviteEntity).findOne({ where: { id: req.info.invite.id } }).then((invite: InviteEntity | null) => {
+                return manager.getRepository(InviteEntity).findOne({ where: { tenantKey: req.info.invite.tenantKey, id: req.info.invite.id } }).then((invite: InviteEntity | null) => {
                     if (invite) {
                         invite.status = 'used';
                         invite.updatedIp = req.info.ip;
@@ -1208,7 +1128,7 @@ export const updateUser = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(UserEntity).findOne({ where: { id: req.info.user.id } }).then((user: UserEntity | null) => {
+        ds.getRepository(UserEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: req.info.user.id } }).then((user: UserEntity | null) => {
             if (user == null) {
                 res.status(400).json({ message: 'ユーザーが見つかりませんでした。' });
                 return;
@@ -1244,7 +1164,7 @@ export const changePassword = [
         }
 
         // パスワード設定（emailが鍵のような役割）
-        ds.getRepository(UserEntity).findOne({ where: { id: req.info.user.id } }).then((user: UserEntity | null) => {
+        ds.getRepository(UserEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: req.info.user.id } }).then((user: UserEntity | null) => {
             if (user == null) {
                 res.status(400).json({ message: 'ユーザーが見つかりませんでした。' });
                 return;
@@ -1271,7 +1191,7 @@ export const deleteUser = [
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         // ユーザー情報の削除
-        ds.getRepository(UserEntity).findOne({ where: { id: req.info.user.id } }).then((user: UserEntity | null) => {
+        ds.getRepository(UserEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: req.info.user.id } }).then((user: UserEntity | null) => {
             if (user == null) {
                 res.status(400).json({ message: 'ユーザーが見つかりませんでした。' });
                 return;
@@ -1375,6 +1295,7 @@ export const getDepartmentList = [
         const req = _req as UserRequest;
         const myList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
+                tenantKey: req.info.user.tenantKey,
                 // 自分が所属している部の一覧を取る。
                 // userId: req.info.user.id,
                 name: req.info.user.name,
@@ -1382,7 +1303,7 @@ export const getDepartmentList = [
         });
         const departmentIdList = myList.map((member: DepartmentMemberEntity) => member.departmentId);
         const departmentList = await ds.getRepository(DepartmentEntity).find({
-            where: { id: In(departmentIdList), },
+            where: { tenantKey: req.info.user.tenantKey, id: In(departmentIdList), },
         });
         res.json({ departmentList });
     }
@@ -1397,6 +1318,7 @@ export const getDepartment = [
         const req = _req as UserRequest;
         const myList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
+                tenantKey: req.info.user.tenantKey,
                 // 自分が管理者となっている部の一覧を取る。
                 // userId: req.info.user.id,
                 name: req.info.user.name,
@@ -1405,17 +1327,21 @@ export const getDepartment = [
         });
         const departmentIdList = myList.map((member: DepartmentMemberEntity) => member.departmentId);
         const departmentList = await ds.getRepository(DepartmentEntity).find({
-            where: { id: In(departmentIdList), },
+            where: { tenantKey: req.info.user.tenantKey, id: In(departmentIdList), },
         });
         const memberList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
+                tenantKey: req.info.user.tenantKey,
                 // 自分が管理者となっている部の一覧を取る。
                 departmentId: In(departmentIdList),
                 departmentRole: DepartmentRoleType.Member, // Memberだけにする。（Adminの人はAdminとMemberの両方の行があるので大丈夫。Deputy（主務じゃない人）は混乱するので除外。）
             },
         });
         const memberUserList = await ds.getRepository(UserEntity).find({
-            where: { name: In(memberList.map((member: DepartmentMemberEntity) => member.name)) }
+            where: {
+                tenantKey: req.info.user.tenantKey,
+                name: In(memberList.map((member: DepartmentMemberEntity) => member.name))
+            }
         });
         const memberMap = memberList.reduce((map, member) => { map[member.name] = member; return map; }, {} as { [key: string]: DepartmentMemberEntity });
 
@@ -1525,19 +1451,21 @@ export const getDepartmentMemberLog = [
         const { userId } = req.params as { userId: string };
         const myList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
+                tenantKey: req.info.user.tenantKey,
                 // 自分が管理者となっている部の一覧を取る。
                 // userId: req.info.user.id,
                 name: req.info.user.name,
                 departmentRole: DepartmentRoleType.Admin,
             },
         });
-        const targetUser = await ds.getRepository(UserEntity).findOneOrFail({ where: { id: userId } });
+        const targetUser = await ds.getRepository(UserEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, id: userId } });
         const departmentIdList = myList.map((member: DepartmentMemberEntity) => member.departmentId);
         const departmentList = await ds.getRepository(DepartmentEntity).find({
-            where: { id: In(departmentIdList), },
+            where: { tenantKey: req.info.user.tenantKey, id: In(departmentIdList), },
         });
         const memberList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
+                tenantKey: req.info.user.tenantKey,
                 // 自分が管理者となっている部の一覧を取る。
                 departmentId: In(departmentList.map(department => department.id)),
                 departmentRole: DepartmentRoleType.Member, // Memberだけにする。（Adminの人はAdminとMemberの両方の行があるので大丈夫。Deputy（主務じゃない人）は混乱するので除外。）
@@ -1591,6 +1519,7 @@ export const patchDepartmentMember = [
         const { role, status } = req.body;
         const myList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
+                tenantKey: req.info.user.tenantKey,
                 // 自分が管理者となっている部の一覧を取る。
                 // userId: req.info.user.id,
                 name: req.info.user.name,
@@ -1600,6 +1529,7 @@ export const patchDepartmentMember = [
         const departmentIdList = myList.map((member: DepartmentMemberEntity) => member.departmentId);
         const memberList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
+                tenantKey: req.info.user.tenantKey,
                 // 対称部員が含まれるか
                 departmentId: In(departmentIdList),
                 name: req.info.user.name,
@@ -1612,7 +1542,7 @@ export const patchDepartmentMember = [
         const userIdAry = [...userIdSet];
         if (userIdAry.length === 1) {
             // 一人だけなら
-            const user = await ds.getRepository(UserEntity).findOne({ where: { id: userIdAry[0] } });
+            const user = await ds.getRepository(UserEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: userIdAry[0] } });
             if (user) {
                 // ステータス更新
                 user.status = status || user.status;
@@ -1642,11 +1572,14 @@ export const patchDepartmentMember = [
 export const getUserList = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const tenant = await ds.getRepository(TenantEntity).findOneByOrFail({ tenantKey: req.info.user.tenantKey });
         const userList = await ds.query(`
             SELECT u.id, name, u.email, u.role, u.status, m.label
             FROM user_entity u
             LEFT OUTER JOIN (SELECT DISTINCT name, label FROM department_member_entity) m
             USING (name)
+            WHERE u.tenant_key = '${tenant.tenantKey}'
           `);
         res.json({ userList });
     }
@@ -1663,6 +1596,7 @@ function createUserInitial(ip: string, user: UserEntity, manager: EntityManager)
     team.description = '個人用';
 
     // チーム作成
+    team.tenantKey = user.tenantKey;
     team.createdBy = user.id;
     team.updatedBy = user.id;
     team.createdIp = ip;
@@ -1674,6 +1608,7 @@ function createUserInitial(ip: string, user: UserEntity, manager: EntityManager)
         teamMember.teamId = savedTeam.id;
         teamMember.userId = user.id;
         teamMember.role = TeamMemberRoleType.Owner;
+        teamMember.tenantKey = user.tenantKey;
         teamMember.createdBy = user.id;
         teamMember.updatedBy = user.id;
         teamMember.createdIp = ip;
@@ -1687,6 +1622,7 @@ function createUserInitial(ip: string, user: UserEntity, manager: EntityManager)
         projectDef.visibility = ProjectVisibility.Default;
         projectDef.description = '個人用チャットプロジェクト';
         projectDef.label = '個人用チャット';
+        projectDef.tenantKey = user.tenantKey;
         projectDef.createdBy = user.id;
         projectDef.updatedBy = user.id;
         projectDef.createdIp = ip;
@@ -1700,6 +1636,7 @@ function createUserInitial(ip: string, user: UserEntity, manager: EntityManager)
         projectArch.visibility = ProjectVisibility.Team;
         projectArch.description = '古いスレッドはアーカイブに移しましょう。';
         projectArch.label = '個人用アーカイブ';
+        projectArch.tenantKey = user.tenantKey;
         projectArch.createdBy = user.id;
         projectArch.updatedBy = user.id;
         projectArch.createdIp = ip;
@@ -1723,9 +1660,9 @@ export const getOAuthAccountList = [
         const req = _req as UserRequest;
         try {
             const oauthAccounts = await ds.getRepository(OAuthAccountEntity).find({
-                where: { userId: req.info.user.id, status: OAuthAccountStatus.ACTIVE },
+                where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id, status: OAuthAccountStatus.ACTIVE },
                 // accessTokenとかrefreshTokenは流出すると危険なので必ず絞る。
-                select: ['id', 'userInfo', 'provider', 'label', 'providerUserId', 'providerEmail', 'createdAt', 'updatedAt']
+                select: ['tenantKey', 'id', 'userInfo', 'provider', 'label', 'providerUserId', 'providerEmail', 'createdAt', 'updatedAt']
             });
             // console.log(oauthAccounts);
             res.json({ oauthAccounts });
@@ -1748,9 +1685,9 @@ export const getOAuthAccount = [
         try {
             // const accessToken = await getAccessToken(req.info.user.id, provider);
             const oauthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
-                where: { userId: req.info.user.id, provider, status: OAuthAccountStatus.ACTIVE },
+                where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id, provider, status: OAuthAccountStatus.ACTIVE },
                 // accessTokenとかrefreshTokenは流出すると危険なので必ず絞る。
-                select: ['id', 'userInfo', 'provider', 'label', 'providerUserId', 'providerEmail', 'createdAt', 'updatedAt']
+                select: ['tenantKey', 'id', 'userInfo', 'provider', 'label', 'providerUserId', 'providerEmail', 'createdAt', 'updatedAt']
             });
             // console.log(oauthAccounts);
             res.json({ oauthAccount });

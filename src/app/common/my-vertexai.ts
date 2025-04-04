@@ -384,6 +384,12 @@ export function convertToolDef(tool: ChatCompletionTool): FunctionDeclaration {
         if (newSchema.items) {
             newSchema.items = convertSchema(newSchema.items);
         }
+
+        if (Object.hasOwnProperty.call(newSchema, 'default')) { // defaultがfalseとかだとプロパティがあってもfalse判定されるので、プロパティが指定されているかどうかをちゃんとチェックする。
+            // defaultがある場合は、descriptionに追加して消す。
+            newSchema.description = `${newSchema.description}\n\ndefault: ${newSchema.default}`;
+            delete newSchema.default;
+        } else { }
         return newSchema;
     }
 

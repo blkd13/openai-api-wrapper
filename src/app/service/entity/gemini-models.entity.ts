@@ -2,6 +2,7 @@ import { Column, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
 import { MyBaseEntity } from "./base.js";
 
 @Entity()
+@Index(['tenantKey', 'name'])
 export class VertexCachedContentEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;

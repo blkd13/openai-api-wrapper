@@ -121,7 +121,7 @@ export async function mattermostFunctionDefinitions(
             },
             handler: async (args: { term: string, team_id?: string, not_in_team_id?: string, in_channel_id?: string, not_in_channel_id?: string, in_group_id?: string, group_constrained?: boolean, allow_inactive?: boolean, without_team?: boolean, limit?: number, allow_full_names?: boolean, allow_emails?: boolean, }):
                 Promise<{ name: string, id: string, text: string }[]> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const keys = ['term', 'team_id', 'not_in_team_id', 'in_channel_id', 'not_in_channel_id', 'in_group_id', 'group_constrained', 'allow_inactive', 'without_team', 'limit', 'allow_full_names', 'allow_emails'];
 
                 // APIリクエストのbodyを作成

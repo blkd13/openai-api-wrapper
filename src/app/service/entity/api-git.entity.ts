@@ -17,7 +17,9 @@ export enum GitProjectStatus {
 }
 
 @Entity() // テーブル名を指定
-@Unique(['provider', 'gitProjectId', 'commitId']) // ここで複合ユニーク制約を設定
+@Unique(['tenantKey', 'provider', 'gitProjectId', 'commitId']) // ここで複合ユニーク制約を設定
+@Index(['tenantKey', 'provider']) // インデックスを追加
+@Index(['tenantKey', 'fileGroupId']) // インデックスを追加
 export class GitProjectCommitEntity extends MyBaseEntity {
 
     @Column() @Index()
@@ -37,7 +39,8 @@ export class GitProjectCommitEntity extends MyBaseEntity {
 }
 
 @Entity() // テーブル名を指定
-@Unique(['provider', 'gitProjectId']) // ここで複合ユニーク制約を設定
+@Unique(['tenantKey', 'provider', 'gitProjectId']) // ここで複合ユニーク制約を設定
+@Index(['tenantKey', 'provider']) // インデックスを追加
 export class GitProjectEntity extends MyBaseEntity {
 
     @Column() @Index()

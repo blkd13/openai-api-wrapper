@@ -34,6 +34,7 @@ export class BoxItemEntity extends MyBaseEntity {
 
 @Entity() // テーブル名を指定
 @Unique(["userId", "collectionId"]) // ここで複合ユニーク制約を設定
+@Index(['tenantKey', 'userId']) // インデックスを追加
 export class BoxCollectionEntity extends MyBaseEntity {
 
     @Column() @Index()
@@ -57,10 +58,11 @@ export class BoxCollectionEntity extends MyBaseEntity {
 
 
 @Entity() // テーブル名を指定
-@Unique(["fileId", "versionId"]) // ここで複合ユニーク制約を設定
+@Unique(['tenantKey', 'fileId', 'versionId']) // ここで複合ユニーク制約を設定
+@Index(['tenantKey', 'fileId']) // インデックスを追加
 export class BoxFileEntity extends MyBaseEntity {
 
-    @Column() @Index()
+    @Column()
     fileId!: string;
 
     @Column()
