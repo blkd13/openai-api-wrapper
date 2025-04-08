@@ -1087,7 +1087,7 @@ export const chatCompletionByProjectModel = [
                         }
                     });
                 };
-                return new Promise<{
+                return await new Promise<{
                     messageSet: {
                         messageGroup: MessageGroupEntity,
                         message: MessageEntity,

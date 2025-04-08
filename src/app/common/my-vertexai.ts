@@ -101,25 +101,27 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
     if (args.messages.length == 0) return req;
     args.messages[0].content = args.messages[0].content || '';
     // argsをGemini用に変換
-    const roleMapper = {
+    const roleMapper: { [key: string]: 'system' | 'model' | 'user' | 'function' } = {
         system: 'system',
         assistant: 'model',
         user: 'user',
         function: 'user',
+        tool: 'function',
     };
     // console.log(`mapForGemini: ${args.messages.length}++++++++++++++++++++++++++++++++++++++++++++++++++++++++++`);
     args.messages.forEach(message => {
+        const role = roleMapper[message.role] || message.role;
         // 画像ファイルなどが入ってきたとき用の整理
         if (typeof message.content === 'string') {
             if (message.role === 'system') {
                 // systemはsystemInstructionに入れる
-                req.systemInstruction = { role: message.role, parts: [{ text: message.content }] };
+                req.systemInstruction = { role, parts: [{ text: message.content }] };
             } else {
-                req.contents.push({ role: message.role, parts: [{ text: message.content }] });
+                req.contents.push({ role, parts: [{ text: message.content }] });
             }
         } else if (Array.isArray(message.content)) {
             const remappedContent = {
-                role: message.role,
+                role,
                 parts:
                     message.content.map(content => {
                         if (content.type === 'image_url') {

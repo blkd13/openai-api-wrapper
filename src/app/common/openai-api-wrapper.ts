@@ -385,10 +385,7 @@ class RunBit {
                                                 choice.delta.tool_calls = [toolCall];
                                             } else if (obj.delta.type === 'thinking_delta') {
                                                 // // 何もしない
-                                                // choice.delta.content = obj.delta.thinking;
-                                                // (choice as any).thinking = 'thinking';
-                                                // // tokenBuilder += obj.delta.thinking;
-                                                // // tokenCount.tokenBuilder = tokenBuilder;
+                                                // (choice as any).thinking = obj.delta.thinking;
                                             } else {
                                                 // 何もしない
                                                 return [];
