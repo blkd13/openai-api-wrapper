@@ -68,7 +68,7 @@ server.on('upgrade', (req, res, header) => {
             '/api/user/oauth/api/proxy/mattermost': '',
         };
         // console.log(`call next`);
-        const accessToken = await getAccessToken((req as any).info.user.id, 'mattermost');
+        const accessToken = await getAccessToken('common', (req as any).info.user.id, 'mattermost');
         // console.log(`accessToken ${accessToken}`);
         createProxyMiddleware({
             target: OAUTH2_MATTERMOST_URI_BASE,

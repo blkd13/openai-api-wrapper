@@ -990,7 +990,7 @@ export const chatCompletionByProjectModel = [
                         }
                     });
                     const oAuthUserInfo = savedToolCallGroup.map(oAuthAccount => ({ provider: oAuthAccount.provider, userInfo: oAuthAccount.userInfo }));
-                    const oAuthUserInfoString = `## My OAuthAccount\n\n${JSON.stringify(oAuthUserInfo)}`;
+                    const oAuthUserInfoString = `\n\n## My OAuthAccount\n\n${JSON.stringify(oAuthUserInfo)}`;
                     if (inDto.args.messages[0].role === 'system') {
                         if (typeof inDto.args.messages[0].content === 'string') {
                             inDto.args.messages[0].content += oAuthUserInfoString;
@@ -1023,6 +1023,10 @@ export const chatCompletionByProjectModel = [
                         const toolTransanctionList = [...stock.toolTransaction];
                         stock.toolTransaction.length = 0; // 使い終わったらクリア
                         // ここまででstockはこのブロックの変数として吸出し済みなのでもう使わない。
+
+                        // console.dir(stock, { depth: null });
+                        // console.dir(transanctionList, { depth: null });
+                        // console.log(toolTransanctionList, { depth: null });
 
                         // 先頭のtoolCallInfoを取得してtoolCallGroupを登録する
                         const infoList = toolTransanctionList.filter(toolTransaction => toolTransaction.type === ToolCallPartType.INFO);
@@ -1114,7 +1118,7 @@ export const chatCompletionByProjectModel = [
 
                                     // 通常の中身
                                     if (choice.delta.content && !['info', 'command', 'tool'].includes(choice.delta.role || '')) {
-                                        // console.log(`content=${choice.delta.content}`);
+                                        // console.log(`content=${JSON.stringify(choice)}`);
                                         const content = stock.transaction.at(-1);
                                         if (content && content.type === ContentPartType.TEXT) {
                                             // 末尾がtextだったら積み上げ
@@ -1215,6 +1219,7 @@ export const chatCompletionByProjectModel = [
                             // これをstockを溜めるめるループの中でやろうとするとawaitの追い越しでぶっ壊れるのでこの位置でやる。実はこの位置でも追い越しは発生するような気がしてならないが、とりあえずこれでいく。
                             if (chunk.choices.find(choice => choice.finish_reason)) {
                                 // console.log('--------========================contents========================--------');
+                                // console.dir(stock.transaction, { depth: null });
                                 // for (const toolTransaction of stock.toolTransaction) {
                                 //     console.log(`toolCallGroupId=${toolTransaction.toolCall.type}`);
                                 // }
@@ -1264,6 +1269,7 @@ export const chatCompletionByProjectModel = [
                     //     console.log(`toolCallGroupId=${toolTransaction.toolCall.type}`);
                     // }
                     // console.log('tool.length', stock.toolTransaction.length);
+                    // console.dir(res, { depth: null });
 
                     // if (!!chunk.choices[0].finish_reason) {
                     // } else { }

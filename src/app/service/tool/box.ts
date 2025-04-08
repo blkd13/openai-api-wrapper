@@ -56,7 +56,8 @@ export async function boxFunctionDefinitions(
                 }
             },
             handler: async (args: { file_id: string, userPrompt?: string, }): Promise<any> => {
-                const boxFile = await boxDownloadCore(provider, args.file_id, req.info.user.id, req.info.ip);
+                const { e } = await getOAuthAccountForTool(req, provider);
+                const boxFile = await boxDownloadCore(e, args.file_id, req.info.user.id, req.info.ip);
                 const boxFileBody = await ds.getRepository(BoxFileBodyEntity).findOneOrFail({
                     where: { sha256: boxFile.sha256Digest },
                 });
@@ -361,7 +362,7 @@ export async function boxFunctionDefinitions(
                 offset?: number,
                 trash_content?: string
             }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 // クエリパラメータの構築
                 const params = new URLSearchParams();
                 params.append('query', args.query);
@@ -422,8 +423,8 @@ export async function boxFunctionDefinitions(
                     parameters: { type: 'object', properties: {}, }
                 }
             },
-            handler: async (args: { target: string }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+            handler: async (args: {}): Promise<any> => {
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let url;
                 url = `${e.uriBase}${e.pathUserInfo}`;
                 const result = (await axiosWithAuth.get(url)).data;
