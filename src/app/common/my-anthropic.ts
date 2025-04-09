@@ -280,10 +280,8 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
         // thinkingはtemperature=1じゃないとダメっぽい。
         res.temperature = 1;
         // TODO thinkingの時はトークンの計算がこれじゃダメっぽい。
-        (res as any as { thinking: ThinkingConfigParam }).thinking = {
-            type: 'enabled',
-            budget_tokens: 51200,
-        } as ThinkingConfigParam;
+        res.thinking = { type: 'enabled', budget_tokens: 51200 };
+        // (res as any).betas = 'output-128k-2025-02-19';
     } else { }
     // body: MessageStreamParams, options?: Core.RequestOptions
     return res;

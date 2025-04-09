@@ -34,7 +34,6 @@ import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
 import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus } from '../entity/auth.entity.js';
 import { Utils, EnhancedRequestLimiter } from '../../common/utils.js';
 import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
-import { getExtApiClient } from './auth.js';
 import { functionDefinitions } from '../tool/_index.js';
 import { ToolCallPart, ToolCallPartBody, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallGroupEntity, ToolCallPartInfo, ToolCallPartInfoBody, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
 import { appendToolCallPart } from './tool-call.js';
@@ -567,6 +566,17 @@ async function buildArgs(
                             // 実行前の状態
                         }
                     }
+                } else if (content.type === `meta`) {
+                    try {
+                        const meta = JSON.parse(content.text || '{}') as { thinking: string, signature: string };
+                        if (meta.thinking && inDto.args.model.includes('-sonnet-thinking')) {
+                            message.content.push({ type: 'thinking' as 'text', thinking: meta.thinking || '', signature: meta.signature || '' } as any);
+                        } else {
+                            console.log(`\n\nskip content=${JSON.stringify(content)}`);
+                        }
+                    } catch (error) {
+                        console.log(`\n\nskip meta parse error ${content.text}`);
+                    }
                 } else {
                     console.log(`\n\nskip content=${JSON.stringify(content)}`);
                 }
@@ -609,6 +619,7 @@ async function buildArgs(
 
         index++;
     }
+    // console.dir(messageArgsSetList, { depth: null });
     return { messageArgsSetList };
 }
 
@@ -1100,7 +1111,7 @@ export const chatCompletionByProjectModel = [
                 }>((resolve, reject) => {
                     ( // toolCallCommandがある場合はツール実行指示なのでtoolCallObservableStreamを使う
                         (toolCallPartCommandList && toolCallPartCommandList.length > 0)
-                            ? aiApi.toolCallObservableStream(inDto.args, { label, functions }, provider, '', providerAndToolCallCallListAry[index].toolCallCallList, toolCallPartCommandList)
+                            ? aiApi.toolCallObservableStream(inDto.args, { label, functions }, provider, providerAndToolCallCallListAry[index].toolCallCallList, toolCallPartCommandList)
                             : aiApi.chatCompletionObservableStream(inDto.args, { label, functions }, provider)
                     ).pipe(
                         // DB更新があるので async/await をする必要があるのでfromでObservable化してconcatMapで纏めて待つ
@@ -1202,6 +1213,30 @@ export const chatCompletionByProjectModel = [
                                 } else {
                                     // deltaが無くてもfinish_reasonがあったりするので注意
                                 }
+
+                                // thinking
+                                const thinking = (choice as any).thinking;
+                                if (thinking) {
+                                    // console.log(`thinking=${JSON.stringify(thinking)}`);
+                                    const before = stock.transaction.at(-1);
+                                    if (before && before.type === ContentPartType.META && before.text) {
+                                        const thinkObject = JSON.parse(before.text) as { thinking: string };
+                                        before.text = `${JSON.stringify({ thinking: thinkObject.thinking + thinking })}`;
+                                    } else {
+                                        stock.transaction.push({ type: ContentPartType.META, text: JSON.stringify({ thinking }), body: { thinking } });
+                                    }
+                                } else { }
+                                const signature = (choice as any).signature;
+                                if (signature) {
+                                    // console.log(`thinking=${JSON.stringify(thinking)}`);
+                                    const before = stock.transaction.at(-1);
+                                    if (before && before.type === ContentPartType.META && before.text) {
+                                        const thinkObject = JSON.parse(before.text) as { thinking: string };
+                                        before.text = `${JSON.stringify({ thinking: thinkObject.thinking, signature })}`;
+                                    } else {
+                                        console.log(`ERROR:SKIP:signature=${JSON.stringify(signature)}`);
+                                    }
+                                } else { }
 
                                 // Google検索
                                 const groundingMetadata = (choice as any).groundingMetadata;

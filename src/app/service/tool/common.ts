@@ -233,12 +233,13 @@ export function commonFunctionDefinitions(
             },
         },
         {
-            info: { group: 'command', isActive: true, isInteractive: true, label: 'Pythonコード実行（依存ライブラリ可）' },
+            // TODO ファイル出力とかもできるようにしたい。主に画像だけど。リンクをどっか経由で返しておけばいいカナ的な。
+            info: { group: 'command', isActive: true, isInteractive: true, label: 'Pythonコード実行' },
             definition: {
                 type: 'function',
                 function: {
                     name: 'run_python_code',
-                    description: 'Pythonコードを実行し、必要であればライブラリもインストールしてから実行する。出力はprintで出力されたものをテキストとして取得する。テキストでしか出力できないので、視覚的な出力が必要な場合はsvgやhtml等で出力すること。',
+                    description: 'Pythonコードを実行し、必要であればライブラリもインストールしてから実行する。',
                     parameters: {
                         type: 'object',
                         properties: {

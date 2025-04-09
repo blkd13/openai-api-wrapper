@@ -1,4 +1,4 @@
-import { Chat, ChatCompletion, ChatCompletionContentPartText, ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolMessageParam, CompletionUsage } from 'openai/resources/index';
+import { Chat, ChatCompletion, ChatCompletionContentPartText, ChatCompletionMessageToolCall, ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolMessageParam, CompletionUsage } from 'openai/resources/index';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { EMPTY, Observable, Subscriber, catchError, concat, concatMap, concatWith, endWith, filter, find, forkJoin, from, map, merge, of, startWith, switchMap, tap, toArray } from 'rxjs';
 import * as crypto from 'crypto';
@@ -219,7 +219,7 @@ class RunBit {
     ) { }
 
     async executeCall(): Promise<void> {
-        const commonArgs = this.args;
+        const commonArgs = JSON.parse(JSON.stringify(this.args)) as ChatCompletionCreateParamsBase;
         const args = commonArgs;
         const options = this.options;
         const idempotencyKey = this.options.idempotencyKey as string;
@@ -256,8 +256,9 @@ class RunBit {
                         // リクエストをファイルに書き出す
                         fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
                         const client = this.provider === 'anthropic' ? anthropic : anthropicVertex;
-
-                        const response: ReadableStream = client.messages.stream(args as MessageStreamParams).toReadableStream();
+                        const response: ReadableStream = args.model.includes('-thinking')
+                            ? client.beta.messages.stream({ ...args, 'betas': 'output-128k-2025-02-19' } as MessageStreamParams).toReadableStream()
+                            : client.messages.stream(args as MessageStreamParams).toReadableStream();
                         // console.dir(response);
                         // console.log('res');
                         // ratelimitObj.limitRequests = 5; // 適当に5にしておく。
@@ -382,8 +383,9 @@ class RunBit {
                                                 };
                                                 choice.delta.tool_calls = [toolCall];
                                             } else if (obj.delta.type === 'thinking_delta') {
-                                                // // 何もしない
-                                                // (choice as any).thinking = obj.delta.thinking;
+                                                (choice as any).thinking = obj.delta.thinking;
+                                            } else if (obj.delta.type === 'signature_delta') {
+                                                (choice as any).signature = obj.delta.signature;
                                             } else {
                                                 // 何もしない
                                                 return [];
@@ -1164,7 +1166,7 @@ class RunBit {
                 })
             } else if (this.provider === 'cohere') {
                 // 元のargsを破壊してしまうとろくなことにならないので、JSON.stringifyしてからparseしている。
-                const args = JSON.parse(JSON.stringify(commonArgs)) as V2ChatStreamRequest;
+                const args = commonArgs as V2ChatStreamRequest;
                 const _args = args as ChatCompletionCreateParamsBase;
                 // cohereはstream_optionsとtool_choiceを消しておく必要あり。
                 delete _args.stream_options;
@@ -1216,7 +1218,7 @@ class RunBit {
                         delete (message as any).tool_call_id;
                     } else { }
                 });
-                console.log('cohere--------------END');
+                // console.log('cohere--------------END');
 
                 // リクエストをファイルに書き出す
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
@@ -1757,6 +1759,7 @@ export class OpenAIApiWrapper {
         (args as any).cachedContent = (args as any).cachedContent || options?.cachedContent;
 
         let text = ''; // ちゃんとしたオブジェクトにした方がいいかもしれない。。。
+        const responseMessages: ChatCompletionMessageParam[] = [];
         const toolCallsAll: ChatCompletionChunk.Choice.Delta.ToolCall[] = [];
         let toolCall: ChatCompletionChunk.Choice.Delta.ToolCall = { index: -1, id: '', function: { name: '', arguments: '' } };
 
@@ -1870,9 +1873,49 @@ export class OpenAIApiWrapper {
                 // OpenAIのAPIのレスポンスをストリーム相当の形に変換されたものを更に変換して返す。
                 // toolCallの処理。これはtoolCallを実際呼び出す関数リストに溜めるための処理。(toolCall/toolCallsAllを作る)
                 // ※扱いやすいオブジェクト型に変換してしまって問題ないのでシンプル。
+                // なんか失敗してるなぁ。。もっとシンプルにしたい。。
                 const toolCallsSub: ChatCompletionChunk.Choice.Delta.ToolCall[] = [];
                 chunk.choices.forEach(choice => {
                     text += choice.delta?.content || '';
+                    const tail = responseMessages[responseMessages.length - 1];
+                    // console.log(`tail ${JSON.stringify(tail)}`);
+                    if (tail) {
+                        if (typeof tail.content === 'string') {
+                        } else if (Array.isArray(tail.content)) {
+                            if (tail.content.length > 0 &&
+                                (
+                                    (tail.content[tail.content.length - 1].type === 'text' && choice.delta.content) ||
+                                    (tail.content[tail.content.length - 1].type as any === 'thinking' && ((choice as any).thinking || (choice as any).signature))
+                                )
+                            ) {
+                                if (choice.delta.content) {
+                                    (tail.content[tail.content.length - 1] as any).text += choice.delta.content;
+                                } else if ((choice as any).thinking) {
+                                    (tail.content[tail.content.length - 1] as any).thinking += (choice as any).thinking;
+                                } else if ((choice as any).signature) {
+                                    (tail.content[tail.content.length - 1] as any).signature = (choice as any).signature;
+                                }
+                            } else {
+                                if (choice.delta.content) {
+                                    // console.log(`tail.content ${JSON.stringify(tail.content)}`);
+                                    tail.content.push({ type: 'text', text: choice.delta.content, });
+                                } else if ((choice as any).thinking) {
+                                    tail.content.push({ type: 'thinking', thinking: (choice as any).thinking, } as any);
+                                }
+                            }
+                        } else {
+                            console.log(`SKIP: tail.content ${JSON.stringify(tail.content)}`);
+                        }
+                    } else {
+                        const content = [] as ChatCompletionContentPartText[];
+                        responseMessages.push({ role: 'assistant', content, });
+                        if (choice.delta.content) {
+                            content.push({ type: 'text', text: choice.delta.content, });
+                        } else if ((choice as any).thinking) {
+                            content.push({ type: 'thinking', thinking: (choice as any).thinking, } as any);
+                        }
+                    }
+                    // 
                     if (options && options.functions && choice.delta && choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
                         choice.delta.tool_calls.forEach(tool_call => {
                             // console.log(`tool_call ${tool_call.index} ${tool_call.id} ${tool_call.function?.name} ${tool_call.function?.arguments}`);
@@ -1949,8 +1992,11 @@ export class OpenAIApiWrapper {
             }),
             concatWith(of(toolCallsAll).pipe(
                 switchMap(toolCallsAll => {
+                    // console.dir(responseMessages, { depth: null });
+                    // responseMessagesをargs.messagesに追加する。
+                    responseMessages.forEach((message, index) => args.messages.push(message));
                     // TODO 面倒だがofでObservable化して遅延評価にしないとtoolCallsAllが常に空として評価されてしまうので、あえてofでObservable化してswitchMapで中身を切り替えるやり方にした。もっとスマートなやり方がありそうだが思い付かなかったので。。。
-                    return (toolCallsAll.length && options) ? this.toolCallObservableStream(args, options, provider, text, toolCallsAll) : EMPTY;
+                    return (toolCallsAll.length && options) ? this.toolCallObservableStream(args, options, provider, toolCallsAll) : EMPTY;
                 }),
             )),
         );
@@ -1964,18 +2010,21 @@ export class OpenAIApiWrapper {
      * @param toolCalls 
      * @returns 
      */
-    toolCallObservableStream(args: ChatCompletionCreateParamsStreaming, options: MyCompletionOptions, provider: AiProvider, text: string, toolCalls: ChatCompletionChunk.Choice.Delta.ToolCall[], input?: any): Observable<ChatCompletionChunk> {
+    toolCallObservableStream(args: ChatCompletionCreateParamsStreaming, options: MyCompletionOptions, provider: AiProvider, toolCalls: ChatCompletionChunk.Choice.Delta.ToolCall[], input?: any): Observable<ChatCompletionChunk> {
         const functions = options.functions as Record<string, MyToolType>;
+
+        const tool_calls: ChatCompletionMessageToolCall[] = toolCalls.map(toolCall => ({ id: toolCall.id || '', type: 'function', function: { name: toolCall.function?.name || '', arguments: toolCall.function?.arguments || '' } }));
+        if (args.messages[args.messages.length - 1].role === 'assistant') {
+            // 末尾がassistant（ということはツール呼び出しとテキストのレスポンスが混在しているタイプ）の場合は、レスポンスメッセージにtool_callsを追加する。
+            (args.messages[args.messages.length - 1] as any).tool_calls = tool_calls;
+        } else {
+            // 末尾がassistantじゃない場合は、新規メッセージとしてtool_callsを追加する。
+            args.messages.push({ role: 'assistant', content: [], tool_calls: tool_calls, });
+        }
+        // console.dir(args.messages, { depth: null });
         const toolCallArgs: ChatCompletionCreateParamsStreaming = {
             ...args,
-            messages: [ // messagesだけ入れ替える
-                ...args.messages,
-                {
-                    role: 'assistant',
-                    content: [],
-                    tool_calls: toolCalls.map(toolCall => ({ id: toolCall.id || '', type: 'function', function: { name: toolCall.function?.name || '', arguments: toolCall.function?.arguments || '' } })),
-                },
-            ],
+            messages: [...args.messages,], // messagesだけ入れ替える
         };
         // const toolCallArgs = args;
         // args.messages.push({
@@ -1985,15 +2034,15 @@ export class OpenAIApiWrapper {
         // },);
 
         // console.log('--toolCalls--------------------------------------------');
-        // console.dir(toolCalls, { depth: null });
+        // console.dir(toolCallArgs, { depth: null });
         // console.log('---------------------------------------------------------------');
-        if (text) {
-            // textが指定されていたらcontentに追加する。
-            const content = toolCallArgs.messages[toolCallArgs.messages.length - 1].content;
-            if (content && Array.isArray(content)) {
-                content.push({ type: 'text', text });
-            } else { }
-        } else { }
+        // if (text) {
+        //     // textが指定されていたらcontentに追加する。
+        //     const content = toolCallArgs.messages[toolCallArgs.messages.length - 1].content;
+        //     if (content && Array.isArray(content)) {
+        //         content.push({ type: 'text', text });
+        //     } else { }
+        // } else { }
         let requireUserInput = false;
         let cancellation = false;
         // console.log('BeforeALLCALL:toolCallsConcat::');
@@ -2379,6 +2428,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
             return of(message);
         }
     })).pipe(toArray(), map(messages => {
+        // console.dir(args.messages, { depth: null });
         if (VISION_MODELS.indexOf(args.model) !== -1) {
         } else {
             args.messages.forEach((message, index) => {
@@ -2396,6 +2446,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
         }
         return args;
     })).pipe(map(args => {
+        // console.dir(args.messages, { depth: null });
         // ゴミメッセージを削除する。
         args.messages = args.messages.filter(message => {
             if (message.content) {
@@ -2420,6 +2471,9 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                         } else if (content.type === 'tool_result' as any) {
                             // tool_resultは生かす。なんでanyなのか、、、
                             return true;
+                        } else if (content.type === 'thinking' as any) {
+                            // thinkingの場合は空白文字を削除してから長さが0より大きいかチェックする。
+                            return (content as any).thinking.trim().length > 0;
                         } else {
                             // それ以外は無視する。
                             return false;
@@ -2427,6 +2481,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                     }) as ChatCompletionContentPart[]; // TODO アップデートしたら型合わなくなったので as を入れる。
                     return message.content.length > 0; // 中身の要素が無ければfalseで返す
                 } else {
+                    console.log(`normalizeMessage skip ${message.content}`);
                     // それ以外はありえないので無視する。
                     return false;
                 }
@@ -2438,6 +2493,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                 return false;
             }
         });
+        // console.dir(args.messages, { depth: null });
 
         // 同一のロールが連続する場合は1つのメッセージとして纏める（こうしないとGeminiがエラーになるので。）
         args.messages = args.messages.reduce((prev, curr) => {
