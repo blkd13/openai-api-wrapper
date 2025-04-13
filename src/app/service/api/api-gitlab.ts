@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { body, param } from "express-validator";
 import { OAuthUserRequest } from "../models/info.js";
 import { ds } from '../db.js';
-import { getExtApiClient } from '../controllers/auth.js';
+import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { GitLabProject } from './gitlab-api-types.js';
 import { ProjectEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
 import { FileGroupType, ProjectVisibility, } from '../models/values.js';
@@ -26,7 +26,8 @@ export const fetchCommit = [
 
             const project = await ds.getRepository(ProjectEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: projectId } });
             if (!project) {
-                return { status: 404, message: '指定されたプロジェクトが見つかりません' };
+                res.status(404).json({ message: '指定されたプロジェクトが見つかりません' });
+                return;
             }
 
             const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
@@ -34,13 +35,16 @@ export const fetchCommit = [
             });
 
             if (project.visibility !== ProjectVisibility.Public && project.visibility !== ProjectVisibility.Login && !teamMember) {
-                return { status: 403, message: 'このプロジェクトにファイルをアップロードする権限がありません' };
+                res.status(403).json({ message: 'このプロジェクトにファイルをアップロードする権限がありません' });
+                return;
             }
 
-            const e = await getExtApiClient(req.info.user.tenantKey, provider);
-            if (e.uriBase) {
-            } else {
-                return res.status(400).json({ error: 'Provider not found' });
+            const e = {} as ExtApiClient;
+            try {
+                Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+            } catch (error) {
+                res.status(401).json({ error: `${provider}は認証されていません。` });
+                return;
             }
             const _axios = await getAxios(e.uriBase);
 

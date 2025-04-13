@@ -13,16 +13,17 @@ import { getOAuthAccountForTool, reform } from './common.js';
 
 // 1. 関数マッピングの作成
 export async function mattermostFunctionDefinitions(
+    providerName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
-    const provider = 'mattermost';
+    const provider = `mattermost-${providerName}`;
     return [
         {
             info: { group: provider, isActive: true, isInteractive: false, label: `投稿を検索`, },
             definition: {
                 type: 'function', function: {
-                    name: 'mm_search_team_posts',
+                    name: `mm_${providerName}_search_team_posts`,
                     description: `[Mattermost] 指定された条件に基づいてMattermost投稿を検索する。チームを跨いだ検索はできないが、詳細な条件を指定した検索が可能。\n投稿内容を提示する際はリンクもセットで提示するよ良い。`,
                     parameters: {
                         type: 'object',
@@ -76,7 +77,7 @@ export async function mattermostFunctionDefinitions(
             info: { group: provider, isActive: true, isInteractive: false, label: `mattermost：自分のユーザー情報`, },
             definition: {
                 type: 'function', function: {
-                    name: 'mm_user_info',
+                    name: `mm_${providerName}_user_info`,
                     description: `[Mattermost] 自分のユーザー情報`,
                     parameters: { type: 'object', properties: {}, }
                 }
@@ -97,7 +98,7 @@ export async function mattermostFunctionDefinitions(
             definition: {
                 type: 'function',
                 function: {
-                    name: 'mm_find_users',
+                    name: `mm_${providerName}_find_users`,
                     description: '[Mattermost] 指定された条件に基づいてMattermostユーザーを検索する',
                     parameters: {
                         type: 'object',
@@ -156,7 +157,7 @@ export async function mattermostFunctionDefinitions(
             definition: {
                 type: 'function',
                 function: {
-                    name: 'mm_find_user_alter_name_by_ids',
+                    name: `mm_${providerName}_find_user_alter_name_by_ids`,
                     description: '[Mattermost] 指定されたMattermostユーザーIDのリストを元に、ユーザーのメンション用キーワード（username）と表示用名（nickname）を取得する。',
                     parameters: {
                         type: 'object',
@@ -193,7 +194,7 @@ export async function mattermostFunctionDefinitions(
             definition: {
                 type: 'function',
                 function: {
-                    name: 'mm_get_channels',
+                    name: `mm_${providerName}_get_channels`,
                     description: Utils.trimLines(`
                         [Mattermost] ユーザーの所属する全チャンネルの一覧を取得する。
                         取得可能な項目が多く、データ量が爆発しやすいので必要な項目のみに絞って取得すること。
@@ -403,7 +404,7 @@ export async function mattermostFunctionDefinitions(
             definition: {
                 type: 'function',
                 function: {
-                    name: 'mm_send_message',
+                    name: `mm_${providerName}_send_message`,
                     description: 'チャンネルに新しい投稿を作成する。他の投稿へのコメントとして作成する場合はroot_idを指定する。',
                     parameters: {
                         type: 'object',

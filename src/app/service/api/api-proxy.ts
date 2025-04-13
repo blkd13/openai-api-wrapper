@@ -4,7 +4,7 @@ import { ds } from "../db.js";
 import { OAuthAccountEntity, OAuthAccountStatus } from "../entity/auth.entity.js";
 import { validationErrorHandler } from "../middleware/validation.js";
 import { OAuthUserRequest, UserRequest } from "../models/info.js";
-import { getExtApiClient, OAuth2TokenDto } from '../controllers/auth.js';
+import { ExtApiClient, getExtApiClient, OAuth2TokenDto } from '../controllers/auth.js';
 import { header, param, query } from 'express-validator';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { NextFunction } from 'http-proxy-middleware/dist/types.js';
@@ -60,13 +60,21 @@ export async function getAccessToken(tenantKey: string, userId: string, provider
 }
 
 export const getOAuthApiProxy = [
-    param('provider').trim().notEmpty(),
+    param('providerType').trim().notEmpty(),
+    param('providerName').trim().notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response, next: NextFunction) => {
         const req = _req as OAuthUserRequest;
         // console.log(req.params);
-        const { provider } = req.params as { provider: string };
-        const e = await getExtApiClient(req.info.user.tenantKey, provider);
+        const { providerType, providerName } = req.params as { providerType: string, providerName: string };
+        const provider = `${providerType}-${providerName}`;
+        const e = {} as ExtApiClient;
+        try {
+            Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+        } catch (error) {
+            res.status(401).json({ error: `${provider}は認証されていません。` });
+            return;
+        }
         // console.log(e);
         let url = '';
         try {
@@ -76,12 +84,13 @@ export const getOAuthApiProxy = [
             const baseUrlObj = new URL(e.uriBase);
             // console.log(url);
             const pathRewrite = {} as Record<string, string>;
-            pathRewrite['^/proxy/' + provider] = '';
+            pathRewrite[`^/proxy/${providerType}/${providerName}`] = '';
             const apiMap = {
                 // 'access-token': e.pathAccessToken,
                 'user-info': e.pathUserInfo,
             } as Record<string, string>;
-            pathRewrite[`^/basic-api/${provider}/${req.params[0]}`] = apiMap[req.params[0]];
+            // console.log(req.params[0]);
+            pathRewrite[`^/basic-api/${providerType}/${providerName}/${req.params[0]}`] = apiMap[req.params[0]];
             // console.log(pathRewrite);
 
             // httpsの証明書検証スキップ用のエージェント。社内だから検証しなくていい。
@@ -97,6 +106,10 @@ export const getOAuthApiProxy = [
             const proxyUrl = await getProxyUrl(e.uriBase);
             const target = proxyUrl || e.uriBase;
             const MMAUTHTOKEN = req.cookies.MMAUTHTOKEN;
+
+            // console.log(baseUrlObj);
+            // console.dir(pathRewrite, { depth: null });
+            // console.log(`proxyUrl=${req.url}`);
 
             // console.log(`target=${target}`);
             const proxy = createProxyMiddleware({
@@ -124,8 +137,9 @@ export const getOAuthApiProxy = [
                         console.error(error);
                     },
                     proxyReq: async (proxyReq, req) => {
-                        if (provider === 'mattermost') {
+                        if (providerType === 'mattermost') {
                             proxyReq.setHeader('Cookie', `MMAUTHTOKEN=${MMAUTHTOKEN}`);
+                            console.log('mattermost-proxyReq', proxyReq.path, proxyReq.getHeader('Cookie'));
                         } else {
                             // mattermostはAuthorizationを使わずにブラウザのCookieを使う
                             proxyReq.setHeader('Authorization', `Bearer ${accessToken}`);

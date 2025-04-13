@@ -17,10 +17,11 @@ import { convertPptxToPdf } from '../../common/media-funcs.js';
 
 // 1. 関数マッピングの作成
 export async function boxFunctionDefinitions(
+    providerName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
-    const provider = 'box';
+    const provider = `box-${providerName}`;
     return [
         // Box コンテンツ取得 API
         {
@@ -28,7 +29,7 @@ export async function boxFunctionDefinitions(
             definition: {
                 type: 'function',
                 function: {
-                    name: 'box_ai_content',
+                    name: `box_${providerName}_ai_content`,
                     description: `指定されたファイルIDに基づいてBOX-AIに問い合わせる`,
                     parameters: {
                         type: 'object',
@@ -148,6 +149,7 @@ export async function boxFunctionDefinitions(
                 const newLabel = `${label}-call_ai-${model}`;
                 // レスポンス返した後にゆるりとヒストリーを更新しておく。
                 const history = new PredictHistoryWrapperEntity();
+                history.tenantKey = req.info.user.tenantKey;
                 history.connectionId = connectionId;
                 history.streamId = streamId;
                 history.messageId = message.id;
@@ -273,7 +275,7 @@ export async function boxFunctionDefinitions(
             definition: {
                 type: 'function',
                 function: {
-                    name: 'box_search',
+                    name: `box_${providerName}_search`,
                     description: `ユーザーのコンテンツまたは会社全体でファイル、フォルダ、ウェブリンク、および共有ファイルを検索します。`,
                     parameters: {
                         type: 'object',
@@ -418,7 +420,7 @@ export async function boxFunctionDefinitions(
             info: { group: provider, isActive: true, isInteractive: false, label: `box：自分のユーザー情報`, },
             definition: {
                 type: 'function', function: {
-                    name: 'box_user_info',
+                    name: `box_${providerName}user_info`,
                     description: `box：自分のユーザー情報`,
                     parameters: { type: 'object', properties: {}, }
                 }

@@ -82,7 +82,7 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                 try {
                     // アクセストークン検証
                     const userToken = await verifyJwt<UserToken>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user');
-                    const userEntity = { id: userToken.id, role: userToken.role, name: userToken.name, email: userToken.email } as UserEntity;
+                    const userEntity = { id: userToken.id, role: userToken.role, name: userToken.name, email: userToken.email, tenantKey: userToken.tenantKey } as UserToken;
 
                     (req as UserRequest).info = { user: userToken, ip: xRealIp, cookie: req.cookies, };
                     return { isAuth: true, obj: userEntity };
@@ -154,7 +154,8 @@ export const authenticateOAuthUser = async (_req: Request, res: Response, next: 
     // JWT認証ロジック
     const req = _req as OAuthUserRequest;
     // console.log(`req.path=${req.path}`);
-    const provider = req.path.replaceAll(/^\//g, '').split('/')[1];
+    const [_, providerType, providerName] = req.path.replaceAll(/^\//g, '').split('/');
+    const provider = `${providerType}-${providerName}`;
     try {
         // console.log(`provider=${provider}`);
         const { accessToken, providerUserId, providerEmail, tokenExpiresAt, userInfo } = await getAccessToken(req.info.user.tenantKey, req.info.user.id, provider);

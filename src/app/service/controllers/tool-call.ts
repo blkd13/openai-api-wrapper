@@ -12,7 +12,7 @@ import { EntityNotFoundError } from "typeorm/index.js";
 
 import crypto from 'crypto';
 import { OAuthAccountEntity, OAuthAccountStatus, TenantEntity } from "../entity/auth.entity.js";
-import { getExtApiClient } from "./auth.js";
+import { ExtApiClient, getExtApiClient } from "./auth.js";
 import { Utils } from "../../common/utils.js";
 import { getAxios } from "../../common/http-client.js";
 
@@ -238,7 +238,14 @@ export const registApiKey = [
                     apiKey.createdIp = req.info.ip;
                 }
 
-                const e = await getExtApiClient(req.info.user.tenantKey, provider);
+                const e = {} as ExtApiClient;
+                try {
+                    Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+                } catch (error) {
+                    res.status(401).json({ error: `${provider}は認証されていません。` });
+                    return;
+                }
+
                 const url = `${e.uriBase}${e.pathUserInfo}`;
                 console.log(url);
                 const axios = await getAxios(url);

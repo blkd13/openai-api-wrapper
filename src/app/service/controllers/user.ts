@@ -1,12 +1,15 @@
 import { Request, Response } from 'express';
 import { body, param, query, validationResult } from 'express-validator';
-import { Not } from 'typeorm';
+import { BaseEntity, FindOptionsSelect, FindOptionsWhere, Not } from 'typeorm';
 
 import { ds } from '../db.js'; // データソース
 import { validationErrorHandler } from '../middleware/validation.js';
 import { UserSettingEntity } from '../entity/user.entity.js';
 import { UserRequest } from '../models/info.js';
-import { ApiProviderEntity, OAuth2Config, TenantEntity } from '../entity/auth.entity.js';
+import { ApiProviderAuthType, ApiProviderEntity, ApiProviderPostType, ApiProviderTemplateEntity, OAuth2Config, OAuth2ConfigTemplate, TenantEntity, UserRoleType } from '../entity/auth.entity.js';
+import { NextFunction } from 'http-proxy-middleware/dist/types.js';
+import { decrypt, encrypt } from './tool-call.js';
+import { MakeOptional } from '../../common/utils.js';
 
 /**
  * [UPSERT] ユーザー設定を作成または更新
@@ -108,186 +111,78 @@ export const deleteUserSetting = [
     },
 ];
 
-/**
- * [UPSERT] OAuthプロバイダー設定の作成または更新（テナント単位）
- */
-export const upsertOAuthProvider = [
-    param('type').isString().notEmpty(),
-    body('uriBase').isURL(),
-    body('clientId').notEmpty(),
-    body('clientSecret').notEmpty(),
-    body('pathAuthorize').notEmpty(),
-    body('pathAccessToken').notEmpty(),
-    body('pathUserInfo').notEmpty(),
-    body('pathTop').notEmpty(),
-    body('scope').optional().isString(),
-    body('postType').isIn(['json', 'params']),
-    body('redirectUri').isURL(),
-    body('requireMailAuth').isBoolean(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
-        const createdBy = req.info.user.id;
-        const ip = req.info.ip;
-        const { type } = req.params;
-        const bodyData = req.body;
 
-        // OAuth2Config 用のオブジェクトを作成
-        const oAuth2Config: OAuth2Config = {
-            uriBaseAuth: bodyData.uriBaseAuth, // 任意項目
-            clientId: bodyData.clientId,
-            clientSecret: bodyData.clientSecret,
-            pathAuthorize: bodyData.pathAuthorize,
-            pathAccessToken: bodyData.pathAccessToken,
-            pathTop: bodyData.pathTop,
-            scope: bodyData.scope,
-            postType: bodyData.postType,
-            redirectUri: bodyData.redirectUri,
-            requireMailAuth: bodyData.requireMailAuth,
-        };
-
-        try {
-            const repository = ds.getRepository(ApiProviderEntity);
-            let entity = await repository.findOne({
-                where: { tenantKey, type, uriBase: bodyData.uriBase }
-            });
-
-            if (entity) {
-                // 既存エンティティの更新
-                entity.uriBase = bodyData.uriBase;
-                entity.pathUserInfo = bodyData.pathUserInfo;
-                entity.oAuth2Config = oAuth2Config;
-                if (bodyData.description !== undefined) {
-                    entity.description = bodyData.description;
-                }
-                // provider, label もリクエストに含まれていれば更新
-                if (bodyData.provider !== undefined) {
-                    entity.provider = bodyData.provider;
-                }
-                if (bodyData.label !== undefined) {
-                    entity.label = bodyData.label;
-                }
-            } else {
-                // 新規作成時：新しいエンティティインスタンスを生成
-                entity = repository.create({
-                    tenantKey,
-                    type,
-                    uriBase: bodyData.uriBase,
-                    pathUserInfo: bodyData.pathUserInfo,
-                    oAuth2Config,
-                    description: bodyData.description,
-                    provider: bodyData.provider,
-                    label: bodyData.label,
-                    createdBy,
-                    createdIp: ip
-                });
-            }
-
-            entity.isDeleted = false; // 論理削除フラグをリセット
-            entity.updatedBy = createdBy;
-            entity.updatedIp = ip;
-
-            const saved = await repository.save(entity);
-            res.status(200).json(saved);
-        } catch (error) {
-            console.error('Error upserting OAuth provider:', error);
-            res.status(500).json({ message: 'OAuthプロバイダー設定の作成/更新中にエラーが発生しました' });
-        }
-    }
-];
-
+/* ApiProvider Controller */
 
 /**
- * [GET] OAuthプロバイダー設定の取得（テナント＋プロバイダー種別）
- */
-export const getOAuthProvider = [
-    param('type').isString().notEmpty(),
-    param('uriBase').isURL(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-        const { type, uriBase } = req.params;
-        const tenantKey = req.info.user.tenantKey;
-
-        try {
-            const entity = await ds.getRepository(ApiProviderEntity).findOne({
-                where: { tenantKey, type, uriBase, isDeleted: false }
-            });
-            if (!entity) return res.status(200).json({});
-            res.status(200).json(entity);
-        } catch (error) {
-            console.error('Error retrieving OAuth provider:', error);
-            res.status(500).json({ message: 'OAuthプロバイダー設定の取得中にエラーが発生しました' });
-        }
-    }
-];
-
-/**
- * [DELETE] OAuthプロバイダー設定の論理削除（テナント＋プロバイダー種別）
- */
-export const deleteOAuthProvider = [
-    param('type').isString().notEmpty(),
-    param('uriBase').isURL(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-        const { type, uriBase } = req.params;
-        const tenantKey = req.info.user.tenantKey;
-
-        try {
-            const repository = ds.getRepository(ApiProviderEntity);
-            const entity = await repository.findOne({
-                where: { tenantKey, type, uriBase, isDeleted: false }
-            });
-
-            if (!entity) {
-                return res.status(404).json({ message: 'OAuthプロバイダー設定が見つかりません' });
-            }
-
-            entity.isDeleted = true;
-            entity.updatedBy = req.info.user.id;
-            entity.updatedIp = req.info.ip;
-
-            await repository.save(entity);
-            res.status(204).send();
-        } catch (error) {
-            console.error('Error deleting OAuth provider:', error);
-            res.status(500).json({ message: 'OAuthプロバイダー設定の削除中にエラーが発生しました' });
-        }
-    }
-];
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/**
- * [GET] APIプロバイダー一覧の取得（テナント単位）
+ * [GET] APIプロバイダー一覧の取得
  */
 export const getApiProviders = [
+    param('tenantKey').optional({ values: 'undefined' }).isString(),
     query('type').optional().isString(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
-        const { type } = req.query;
+        const { type } = req.query as { type: string };
+        // 認証済み経路の方はパラメータに tenantKey が無いので、ユーザー情報から取得する
+        const nonAuth = !!req.params.tenantKey;
+        const isAdmin = req.info && req.info.user && [UserRoleType.Admin, UserRoleType.Maintainer].includes(req.info.user.role);
+        const tenantKey = isAdmin ? req.info.user.tenantKey : req.params.tenantKey;
+        // console.log('isAdmin:', isAdmin);
+        // tenantKey が指定されている場合、ユーザーのテナントキーと一致しない場合は403エラーを返す
+        if (isAdmin && req.params.tenantKey && req.params.tenantKey !== req.info.user.tenantKey) {
+            // そもそも tenantKey が指定されている場合はユーザ認証経路を使わないはずだが、経路としては空いているので塞いでおく。
+            return res.status(403).json({ message: '権限がありません' });
+        } else { }
 
         try {
-            const whereClause: any = {
+            const select: FindOptionsSelect<ApiProviderEntity> = {
+                id: true,
+                type: true,
+                authType: true,
+                name: true,
+                label: true,
+                description: false,
+            };
+
+            // 管理者の場合は oAuth2Config も取得
+            if (isAdmin) {
+                // console.log('Admin or Maintainer role detected, including oAuth2Config in selection.');
+                select.uriBase = true;
+                select.uriBaseAuth = true;
+                select.pathUserInfo = true;
+                select.description = true;
+                // select.pathUserInfo = true;
+                select.oAuth2Config = {
+                    clientId: true,
+                    // clientSecret: true, // セキュリティ上、クライアントシークレットは返さない
+                    // pathAuthorize: true,
+                    // pathAccessToken: true,
+                    // pathTop: true,
+                    // scope: true,
+                    // postType: true,
+                    // redirectUri: true,
+                    clientSecret: false,
+                    requireMailAuth: true
+                } as FindOptionsSelect<OAuth2Config>;
+            } else {
+                if (!nonAuth) {
+                    select.uriBase = true;
+                    select.pathUserInfo = true;
+                    select.description = true;
+                    select.oAuth2Config = {
+                        clientSecret: false,
+                    }
+                } else {
+                    // 
+                }
+            }
+            // console.dir(select, { depth: null });
+            const whereClause: {
+                tenantKey: string,
+                isDeleted: false,
+                type?: string,
+            } = {
                 tenantKey,
                 isDeleted: false
             };
@@ -296,15 +191,26 @@ export const getApiProviders = [
             if (type) {
                 whereClause.type = type;
             }
-
             const entities = await ds.getRepository(ApiProviderEntity).find({
+                select,
                 where: whereClause,
                 order: {
-                    type: 'ASC',
-                    provider: 'ASC',
-                    label: 'ASC'
+                    sortSeq: 'ASC',
                 }
             });
+            // console.dir(entities, { depth: null });
+
+            entities.forEach(entity => {
+                if (isAdmin) {
+                    if (entity.oAuth2Config) {
+                        entity.oAuth2Config.clientSecret = 'dummy';
+                        // delete (entity.oAuth2Config as any).clientSecret; // セキュリティ上、クライアントシークレットは返さない
+                    } else { }
+                } else {
+                    entity.oAuth2Config = undefined; // 管理者以外は oAuth2Config を返さない    
+                }
+            });
+            // console.dir(entities, { depth: null });
 
             res.status(200).json(entities);
         } catch (error) {
@@ -313,126 +219,155 @@ export const getApiProviders = [
         }
     }
 ];
-
 /**
- * [GET] APIプロバイダーの取得（ID指定）
+ * エンティティのフィールドを更新するヘルパー関数
  */
-export const getApiProviderById = [
-    param('id').isUUID(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
-        const { id } = req.params;
+const updateEntityFields = (entity: ApiProviderEntity, bodyData: MakeOptional<ApiProviderEntity, 'id' | 'createdBy' | 'createdIp' | 'updatedBy' | 'updatedIp'>, userId: string, ip: string) => {
+    entity.type = bodyData.type;
+    entity.name = bodyData.name;
+    entity.label = bodyData.label;
+    entity.authType = bodyData.authType;
+    entity.uriBase = bodyData.uriBase;
+    entity.uriBaseAuth = bodyData.uriBaseAuth || bodyData.uriBase;
+    entity.pathUserInfo = bodyData.pathUserInfo;
+    if (bodyData.description !== undefined) entity.description = bodyData.description;
 
-        try {
-            const entity = await ds.getRepository(ApiProviderEntity).findOne({
-                where: { id, tenantKey, isDeleted: false }
-            });
+    // OAuth2Configの更新
+    if (bodyData.oAuth2Config !== undefined) {
+        if (!entity.oAuth2Config) {
+            entity.oAuth2Config = {
+                // pathAuthorize: bodyData.oAuth2Config.pathAuthorize,
+                // pathAccessToken: bodyData.oAuth2Config.pathAccessToken,
+                // scope: bodyData.oAuth2Config.scope,
+                // postType: bodyData.oAuth2Config.postType,
+                // redirectUri: bodyData.oAuth2Config.redirectUri,
+                // clientId: bodyData.oAuth2Config.clientId,
+                // clientSecret: bodyData.oAuth2Config.clientSecret,
+                // requireMailAuth: bodyData.oAuth2Config.requireMailAuth
+            } as OAuth2Config;
+        }
 
-            if (!entity) {
-                return res.status(404).json({ message: 'APIプロバイダーが見つかりません' });
+        // 各フィールドを個別に更新
+        const oAuth2Fields = [
+            'pathAuthorize', 'pathAccessToken', 'scope',
+            'postType', 'redirectUri', 'clientId', 'requireMailAuth'
+        ];
+
+        oAuth2Fields.forEach(field => {
+            if ((bodyData.oAuth2Config as any)[field] !== undefined) {
+                (entity.oAuth2Config as any)[field] = (bodyData.oAuth2Config as any)[field];
             }
+        });
 
-            res.status(200).json(entity);
-        } catch (error) {
-            console.error('Error retrieving API provider:', error);
-            res.status(500).json({ message: 'APIプロバイダーの取得中にエラーが発生しました' });
+        // clientSecretは特別な処理が必要
+        if (bodyData.oAuth2Config.clientSecret !== undefined &&
+            bodyData.oAuth2Config.clientSecret !== 'dummy') {
+            entity.oAuth2Config.clientSecret = bodyData.oAuth2Config.clientSecret;
         }
     }
-];
+
+    entity.updatedBy = userId;
+    entity.updatedIp = ip;
+
+    return entity;
+};
 
 /**
- * [GET] APIプロバイダーの取得（プロバイダー指定）
+ * レスポンス用にデータを整形するヘルパー関数
  */
-export const getApiProviderByProvider = [
-    param('provider').isString().notEmpty(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
-        const { provider } = req.params;
+const prepareResponseData = (entity: ApiProviderEntity) => {
+    const responseData = { ...entity };
 
-        try {
-            const entity = await ds.getRepository(ApiProviderEntity).findOne({
-                where: { tenantKey, provider, isDeleted: false }
-            });
-
-            if (!entity) {
-                return res.status(404).json({ message: 'APIプロバイダーが見つかりません' });
-            }
-
-            res.status(200).json(entity);
-        } catch (error) {
-            console.error('Error retrieving API provider:', error);
-            res.status(500).json({ message: 'APIプロバイダーの取得中にエラーが発生しました' });
-        }
+    // クライアントシークレットを隠す
+    if (responseData.oAuth2Config && responseData.oAuth2Config.clientSecret) {
+        responseData.oAuth2Config.clientSecret = 'dummy';
     }
-];
+
+    return responseData;
+};
 
 /**
- * [GET] APIプロバイダーの取得（タイプ＋URIベース指定）
+ * [PUT] APIプロバイダーの作成または更新 (Upsert)
  */
-export const getApiProviderByTypeAndUri = [
-    param('type').isString().notEmpty(),
-    param('uriBase').isURL(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
-        const { type, uriBase } = req.params;
-
-        try {
-            const entity = await ds.getRepository(ApiProviderEntity).findOne({
-                where: { tenantKey, type, uriBase, isDeleted: false }
-            });
-
-            if (!entity) {
-                return res.status(404).json({ message: 'APIプロバイダーが見つかりません' });
-            }
-
-            res.status(200).json(entity);
-        } catch (error) {
-            console.error('Error retrieving API provider:', error);
-            res.status(500).json({ message: 'APIプロバイダーの取得中にエラーが発生しました' });
-        }
-    }
-];
-
-/**
- * [POST] APIプロバイダーの新規作成
- */
-export const createApiProvider = [
+export const upsertApiProvider = [
+    param('id').optional().isUUID(),
     body('type').isString().notEmpty(),
-    body('provider').isString().notEmpty(),
+    body('name').isString().notEmpty(),
     body('label').isString().notEmpty(),
     body('uriBase').isURL(),
+    body('uriBaseAuth').optional().isString(),
     body('pathUserInfo').isString().notEmpty(),
+    body('authType').isString().notEmpty(),
     body('description').optional().isString(),
+    // OAuth2Config バリデーション
     body('oAuth2Config').optional(),
-    body('oAuth2Config.clientId').optional().isString(),
-    body('oAuth2Config.clientSecret').optional().isString(),
     body('oAuth2Config.pathAuthorize').optional().isString(),
     body('oAuth2Config.pathAccessToken').optional().isString(),
-    body('oAuth2Config.pathTop').optional().isString(),
     body('oAuth2Config.scope').optional().isString(),
-    body('oAuth2Config.postType').optional().isIn(['json', 'params']),
+    body('oAuth2Config.postType').optional().isString(),
     body('oAuth2Config.redirectUri').optional().isURL(),
+    body('oAuth2Config.clientId').optional().isString(),
+    body('oAuth2Config.clientSecret').optional().isString(),
     body('oAuth2Config.requireMailAuth').optional().isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const tenantKey = req.info.user.tenantKey;
-        const createdBy = req.info.user.id;
+        const userId = req.info.user.id;
         const ip = req.info.ip;
-        const bodyData = req.body;
+        const bodyData = req.body as MakeOptional<ApiProviderEntity, 'id' | 'createdBy' | 'createdIp' | 'updatedBy' | 'updatedIp'>;
+        const id = req.params.id;
 
         try {
             const repository = ds.getRepository(ApiProviderEntity);
+            let entity: ApiProviderEntity | null = null;
+            let isNew = true;
 
-            // 既存エンティティのチェック（同一テナント内で type+uriBase と type+provider の両方が一意）
+            // IDが提供されている場合、既存のエンティティを検索
+            if (id) {
+                entity = await repository.findOne({
+                    where: { id, tenantKey, isDeleted: false }
+                });
+
+                if (entity) {
+                    isNew = false;
+
+                    // OAuth2Configの処理
+                    if (bodyData.oAuth2Config && entity.oAuth2Config) {
+                        // クライアントシークレットが'dummy'または空の場合、既存の値を保持
+                        if (!bodyData.oAuth2Config.clientSecret ||
+                            (bodyData.oAuth2Config.clientSecret &&
+                                bodyData.oAuth2Config.clientSecret === 'dummy')) {
+
+                            bodyData.oAuth2Config.clientSecret = decrypt(entity.oAuth2Config.clientSecret);
+                        }
+                    }
+                }
+            }
+
+            // 一意性チェック（同一テナント内で type+uriBase と type+provider の両方が一意）
+            const typeAndUriQuery: FindOptionsWhere<ApiProviderEntity> = {
+                tenantKey,
+                type: bodyData.type,
+                uriBase: bodyData.uriBase,
+                isDeleted: false
+            };
+
+            const typeAndProviderQuery: FindOptionsWhere<ApiProviderEntity> = {
+                tenantKey,
+                type: bodyData.type,
+                name: bodyData.name,
+                isDeleted: false
+            };
+
+            // 更新の場合は自分自身を除外
+            if (!isNew) {
+                typeAndUriQuery.id = Not(id);
+                typeAndProviderQuery.id = Not(id);
+            }
+
             const existsWithTypeAndUri = await repository.findOne({
-                where: { tenantKey, type: bodyData.type, uriBase: bodyData.uriBase }
+                where: typeAndUriQuery
             });
 
             if (existsWithTypeAndUri) {
@@ -441,144 +376,73 @@ export const createApiProvider = [
                 });
             }
 
-            const existsWithTypeAndProvider = await repository.findOne({
-                where: { tenantKey, type: bodyData.type, provider: bodyData.provider }
+            const existsWithTypeAndName = await repository.findOne({
+                where: typeAndProviderQuery
             });
 
-            if (existsWithTypeAndProvider) {
+            if (existsWithTypeAndName) {
                 return res.status(409).json({
                     message: '同じタイプとプロバイダー名を持つAPIプロバイダーが既に存在します'
                 });
             }
 
-            // 新規エンティティの作成
-            const entity = repository.create({
-                tenantKey,
-                type: bodyData.type,
-                provider: bodyData.provider,
-                label: bodyData.label,
-                uriBase: bodyData.uriBase,
-                pathUserInfo: bodyData.pathUserInfo,
-                oAuth2Config: bodyData.oAuth2Config,
-                description: bodyData.description,
-                isDeleted: false,
-                createdBy,
-                createdIp: ip,
-                updatedBy: createdBy,
-                updatedIp: ip
+            // 論理削除されたエンティティの復活チェック
+            const deletedEntity = await repository.findOne({
+                where: [
+                    { tenantKey, type: bodyData.type, uriBase: bodyData.uriBase, isDeleted: true },
+                    { tenantKey, type: bodyData.type, name: bodyData.name, isDeleted: true }
+                ]
             });
 
-            const saved = await repository.save(entity);
-            res.status(201).json(saved);
+            // 新規作成または更新
+            if (isNew) {
+                // 削除されたエンティティを再利用するか、新規エンティティの作成
+                if (deletedEntity) {
+                    entity = deletedEntity;
+                    // 基本情報の更新
+                    updateEntityFields(entity, bodyData, userId, ip);
+                    entity.isDeleted = false; // 論理削除フラグを解除
+                } else {
+                    entity = repository.create({
+                        tenantKey,
+                        type: bodyData.type,
+                        name: bodyData.name,
+                        label: bodyData.label,
+                        authType: bodyData.authType,
+                        uriBase: bodyData.uriBase,
+                        uriBaseAuth: bodyData.uriBaseAuth || bodyData.uriBase, // uriBaseAuthがない場合はuriBaseを使用
+                        pathUserInfo: bodyData.pathUserInfo,
+                        oAuth2Config: bodyData.oAuth2Config,
+                        description: bodyData.description,
+                        isDeleted: false,
+                        createdBy: userId,
+                        createdIp: ip,
+                        updatedBy: userId,
+                        updatedIp: ip
+                    });
+                }
+            } else {
+                // 既存エンティティの更新
+                updateEntityFields(entity!, bodyData, userId, ip);
+            }
+
+            // OAuth2ConfigのclientSecretを暗号化
+            if (entity && entity.oAuth2Config && entity.oAuth2Config.clientSecret) {
+                entity.oAuth2Config.clientSecret = encrypt(entity.oAuth2Config.clientSecret);
+            }
+
+            const saved = await repository.save(entity!);
+
+            // レスポンス用にデータを整形（機密情報を隠す等）
+            const responseData = prepareResponseData(saved);
+
+            res.status(isNew ? 201 : 200).json(responseData);
         } catch (error) {
-            console.error('Error creating API provider:', error);
-            res.status(500).json({ message: 'APIプロバイダーの作成中にエラーが発生しました' });
-        }
-    }
-];
-
-/**
- * [PUT] APIプロバイダーの更新
- */
-export const updateApiProvider = [
-    param('id').isUUID(),
-    body('type').optional().isString().notEmpty(),
-    body('provider').optional().isString().notEmpty(),
-    body('label').optional().isString().notEmpty(),
-    body('uriBase').optional().isURL(),
-    body('pathUserInfo').optional().isString().notEmpty(),
-    body('description').optional().isString(),
-    body('oAuth2Config').optional(),
-    body('oAuth2Config.uriBaseAuth').optional().isURL(),
-    body('oAuth2Config.clientId').optional().isString(),
-    body('oAuth2Config.clientSecret').optional().isString(),
-    body('oAuth2Config.pathAuthorize').optional().isString(),
-    body('oAuth2Config.pathAccessToken').optional().isString(),
-    body('oAuth2Config.pathTop').optional().isString(),
-    body('oAuth2Config.scope').optional().isString(),
-    body('oAuth2Config.postType').optional().isIn(['json', 'params']),
-    body('oAuth2Config.redirectUri').optional().isURL(),
-    body('oAuth2Config.requireMailAuth').optional().isBoolean(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
-        const { id } = req.params;
-        const updatedBy = req.info.user.id;
-        const ip = req.info.ip;
-        const bodyData = req.body;
-
-        try {
-            const repository = ds.getRepository(ApiProviderEntity);
-
-            // 更新対象のエンティティを取得
-            const entity = await repository.findOne({
-                where: { id, tenantKey, isDeleted: false }
+            console.error('Error upserting API provider:', error);
+            res.status(500).json({
+                message: 'APIプロバイダーの作成/更新中にエラーが発生しました',
+                error: process.env.NODE_ENV === 'development' ? (error as any).message : undefined
             });
-
-            if (!entity) {
-                return res.status(404).json({ message: 'APIプロバイダーが見つかりません' });
-            }
-
-            // type または provider が変更される場合、一意性チェック
-            if (bodyData.type && bodyData.type !== entity.type ||
-                bodyData.provider && bodyData.provider !== entity.provider ||
-                bodyData.uriBase && bodyData.uriBase !== entity.uriBase) {
-
-                // type + uriBase の一意性チェック
-                if (bodyData.type && bodyData.uriBase) {
-                    const existsWithTypeAndUri = await repository.findOne({
-                        where: {
-                            tenantKey,
-                            type: bodyData.type,
-                            uriBase: bodyData.uriBase,
-                            id: Not(id) // 自分自身を除外
-                        }
-                    });
-
-                    if (existsWithTypeAndUri) {
-                        return res.status(409).json({
-                            message: '同じタイプとURIベースを持つAPIプロバイダーが既に存在します'
-                        });
-                    }
-                }
-
-                // type + provider の一意性チェック
-                if (bodyData.type && bodyData.provider) {
-                    const existsWithTypeAndProvider = await repository.findOne({
-                        where: {
-                            tenantKey,
-                            type: bodyData.type,
-                            provider: bodyData.provider,
-                            id: Not(id) // 自分自身を除外
-                        }
-                    });
-
-                    if (existsWithTypeAndProvider) {
-                        return res.status(409).json({
-                            message: '同じタイプとプロバイダー名を持つAPIプロバイダーが既に存在します'
-                        });
-                    }
-                }
-            }
-
-            // エンティティの更新
-            if (bodyData.type !== undefined) entity.type = bodyData.type;
-            if (bodyData.provider !== undefined) entity.provider = bodyData.provider;
-            if (bodyData.label !== undefined) entity.label = bodyData.label;
-            if (bodyData.uriBase !== undefined) entity.uriBase = bodyData.uriBase;
-            if (bodyData.pathUserInfo !== undefined) entity.pathUserInfo = bodyData.pathUserInfo;
-            if (bodyData.description !== undefined) entity.description = bodyData.description;
-            if (bodyData.oAuth2Config !== undefined) entity.oAuth2Config = bodyData.oAuth2Config;
-
-            entity.updatedBy = updatedBy;
-            entity.updatedIp = ip;
-
-            const saved = await repository.save(entity);
-            res.status(200).json(saved);
-        } catch (error) {
-            console.error('Error updating API provider:', error);
-            res.status(500).json({ message: 'APIプロバイダーの更新中にエラーが発生しました' });
         }
     }
 ];
@@ -619,72 +483,249 @@ export const deleteApiProvider = [
     }
 ];
 
+/* ApiProviderTemplate Controller */
+
 /**
- * [PATCH] APIプロバイダーのOAuth2設定更新
+ * [GET] APIプロバイダーテンプレート一覧の取得
  */
-export const updateOAuth2Config = [
-    param('id').isUUID(),
-    body('uriBaseAuth').optional().isURL(),
-    body('clientId').optional().isString().notEmpty(),
-    body('clientSecret').optional().isString().notEmpty(),
-    body('pathAuthorize').optional().isString().notEmpty(),
-    body('pathAccessToken').optional().isString().notEmpty(),
-    body('pathTop').optional().isString().notEmpty(),
-    body('scope').optional().isString(),
-    body('postType').optional().isIn(['json', 'params']),
-    body('redirectUri').optional().isURL(),
-    body('requireMailAuth').optional().isBoolean(),
+export const getApiProviderTemplates = [
+    query('authType').optional().isIn(Object.values(ApiProviderAuthType)),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const tenantKey = req.info.user.tenantKey;
-        const { id } = req.params;
-        const updatedBy = req.info.user.id;
+        const { authType } = req.query as { authType: ApiProviderAuthType };
+
+        try {
+            const whereClause: FindOptionsWhere<ApiProviderTemplateEntity> = {
+                tenantKey,
+                isDeleted: false
+            };
+
+            // タイプが指定されていればフィルタリング
+            if (authType) {
+                whereClause.authType = authType;
+            }
+
+            const entities = await ds.getRepository(ApiProviderTemplateEntity).find({
+                where: whereClause,
+                order: {
+                    authType: 'ASC'
+                }
+            });
+
+            res.status(200).json(entities);
+        } catch (error) {
+            console.error('Error retrieving API provider templates:', error);
+            res.status(500).json({ message: 'APIプロバイダーテンプレート一覧の取得中にエラーが発生しました' });
+        }
+    }
+];
+
+/**
+ * [PUT] APIプロバイダーテンプレートの作成または更新 (Upsert)
+ */
+export const upsertApiProviderTemplate = [
+    param('id').optional().isUUID(),
+    body('name').isString().notEmpty().withMessage('名前は必須です'),
+    body('authType').isIn(Object.values(ApiProviderAuthType)).notEmpty().withMessage('タイプは OAuth2 または APIKey である必要があります'),
+    body('pathUserInfo').isString().notEmpty().withMessage('PathUserInfo は必須です'),
+
+    // Conditional validation for OAuth2 type
+    body('oAuth2Config.pathAuthorize')
+        .if(body('authType').equals(ApiProviderAuthType.OAuth2))
+        .isString().notEmpty().withMessage('OAuth2の場合、pathAuthorize は必須です'),
+
+    body('oAuth2Config.pathAccessToken')
+        .if(body('authType').equals(ApiProviderAuthType.OAuth2))
+        .isString().notEmpty().withMessage('OAuth2の場合、pathAccessToken は必須です'),
+
+    body('oAuth2Config.scope')
+        .if(body('authType').equals(ApiProviderAuthType.OAuth2))
+        .isString().notEmpty().withMessage('OAuth2の場合、scope は必須です'),
+
+    body('oAuth2Config.postType')
+        .if(body('authType').equals(ApiProviderAuthType.OAuth2))
+        .isIn(Object.values(ApiProviderPostType)).notEmpty().withMessage('OAuth2の場合、postType は json, params, または form である必要があります'),
+
+    body('oAuth2Config.redirectUri')
+        .if(body('authType').equals(ApiProviderAuthType.OAuth2))
+        .isString().notEmpty().withMessage('OAuth2の場合、redirectUri は必須です'),
+
+    // Conditional validation for APIKey type
+    body('uriBaseAuth')
+        .if(body('authType').equals(ApiProviderAuthType.APIKey))
+        .not().isEmpty().withMessage('APIKeyの場合、uriBaseAuth は必須です'),
+    // .isURL().withMessage('uriBaseAuth は有効なURLである必要があります'),
+
+    // Optional fields
+    body('uriBaseAuth')
+        .if(body('authType').equals(ApiProviderAuthType.OAuth2))
+        .optional({ nullable: true, checkFalsy: true }) // checkFalsy: true を追加して空文字も許容
+        .isURL().withMessage('uriBaseAuth は有効なURLである必要があります'),
+
+    body('description').optional({ nullable: true }).isString(),
+
+    // Custom validator to check all required fields based on type
+    (req: Request, res: Response, next: NextFunction) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { authType, oAuth2Config } = req.body;
+        const validationErrors = [];
+
+        // Additional validation for OAuth2
+        if (authType === ApiProviderAuthType.OAuth2) {
+            if (!oAuth2Config) {
+                validationErrors.push({ msg: 'OAuth2の場合、oAuth2Config は必須です', param: 'oAuth2Config' });
+            } else {
+                if (!oAuth2Config.pathAuthorize) {
+                    validationErrors.push({ msg: 'OAuth2の場合、pathAuthorize は必須です', param: 'oAuth2Config.pathAuthorize' });
+                }
+                if (!oAuth2Config.pathAccessToken) {
+                    validationErrors.push({ msg: 'OAuth2の場合、pathAccessToken は必須です', param: 'oAuth2Config.pathAccessToken' });
+                }
+                if (!oAuth2Config.scope) {
+                    validationErrors.push({ msg: 'OAuth2の場合、scope は必須です', param: 'oAuth2Config.scope' });
+                }
+                if (!oAuth2Config.postType) {
+                    validationErrors.push({ msg: 'OAuth2の場合、postType は必須です', param: 'oAuth2Config.postType' });
+                }
+                if (!oAuth2Config.redirectUri) {
+                    validationErrors.push({ msg: 'OAuth2の場合、redirectUri は必須です', param: 'oAuth2Config.redirectUri' });
+                }
+            }
+        }
+
+        // Additional validation for APIKey
+        if (authType === ApiProviderAuthType.APIKey && (req.body.uriBaseAuth === undefined || req.body.uriBaseAuth === '')) {
+            validationErrors.push({ msg: 'APIKeyの場合、uriBaseAuth は必須です', param: 'uriBaseAuth' });
+        }
+
+        if (validationErrors.length > 0) {
+            return res.status(400).json({ errors: validationErrors });
+        }
+
+        next();
+    },
+
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const tenantKey = req.info.user.tenantKey;
+        const userId = req.info.user.id;
         const ip = req.info.ip;
         const bodyData = req.body;
+        const id = req.params.id;
 
         try {
-            const repository = ds.getRepository(ApiProviderEntity);
-            const entity = await repository.findOne({
-                where: { id, tenantKey, isDeleted: false }
-            });
+            const repository = ds.getRepository(ApiProviderTemplateEntity);
+            let entity: ApiProviderTemplateEntity | null = null;
+            let isNew = true;
 
-            if (!entity) {
-                return res.status(404).json({ message: 'APIプロバイダーが見つかりません' });
+            // IDが提供されている場合、既存のエンティティを検索
+            if (id) {
+                entity = await repository.findOne({
+                    where: { id, tenantKey, isDeleted: false }
+                });
+
+                if (entity) {
+                    isNew = false;
+                }
             }
 
-            // 既存のOAuth2設定をコピー（または新規作成）
-            const oAuth2Config: OAuth2Config = entity.oAuth2Config ? { ...entity.oAuth2Config } : {} as OAuth2Config;
+            // name の一意性チェック
+            const nameQuery: any = {
+                tenantKey,
+                name: bodyData.name,
+                isDeleted: false
+            };
 
-            // 送信されたフィールドで更新
-            if (bodyData.uriBaseAuth !== undefined) oAuth2Config.uriBaseAuth = bodyData.uriBaseAuth;
-            if (bodyData.clientId !== undefined) oAuth2Config.clientId = bodyData.clientId;
-            if (bodyData.clientSecret !== undefined) oAuth2Config.clientSecret = bodyData.clientSecret;
-            if (bodyData.pathAuthorize !== undefined) oAuth2Config.pathAuthorize = bodyData.pathAuthorize;
-            if (bodyData.pathAccessToken !== undefined) oAuth2Config.pathAccessToken = bodyData.pathAccessToken;
-            if (bodyData.pathTop !== undefined) oAuth2Config.pathTop = bodyData.pathTop;
-            if (bodyData.scope !== undefined) oAuth2Config.scope = bodyData.scope;
-            if (bodyData.postType !== undefined) oAuth2Config.postType = bodyData.postType;
-            if (bodyData.redirectUri !== undefined) oAuth2Config.redirectUri = bodyData.redirectUri;
-            if (bodyData.requireMailAuth !== undefined) oAuth2Config.requireMailAuth = bodyData.requireMailAuth;
+            // 更新の場合は自分自身を除外
+            if (!isNew) {
+                nameQuery.id = Not(id);
+            }
 
-            entity.oAuth2Config = oAuth2Config;
-            entity.updatedBy = updatedBy;
-            entity.updatedIp = ip;
+            const existsWithName = await repository.findOne({
+                where: nameQuery
+            });
 
-            const saved = await repository.save(entity);
-            res.status(200).json(saved);
+            if (existsWithName) {
+                return res.status(409).json({
+                    message: '同じタイプを持つAPIプロバイダーテンプレートが既に存在します'
+                });
+            }
+
+            // 新規作成または更新
+            if (isNew) {
+                // 新規エンティティの作成
+                const newEntity: any = {
+                    tenantKey,
+                    name: bodyData.name,
+                    authType: bodyData.authType,
+                    pathUserInfo: bodyData.pathUserInfo,
+                    uriBaseAuth: bodyData.uriBaseAuth,
+                    description: bodyData.description,
+                    isDeleted: false,
+                    createdBy: userId,
+                    createdIp: ip,
+                    updatedBy: userId,
+                    updatedIp: ip
+                };
+
+                // OAuth2Configの追加（OAuth2の場合のみ）
+                if (bodyData.authType === ApiProviderAuthType.OAuth2 && bodyData.oAuth2Config) {
+                    newEntity.oAuth2Config = {
+                        pathAuthorize: bodyData.oAuth2Config.pathAuthorize,
+                        pathAccessToken: bodyData.oAuth2Config.pathAccessToken,
+                        scope: bodyData.oAuth2Config.scope,
+                        postType: bodyData.oAuth2Config.postType,
+                        redirectUri: bodyData.oAuth2Config.redirectUri
+                    };
+                }
+
+                entity = repository.create(newEntity) as any as ApiProviderTemplateEntity;
+            } else if (entity) {
+                // 既存エンティティの更新
+                entity!.name = bodyData.name;
+                entity!.authType = bodyData.authType;
+                entity!.pathUserInfo = bodyData.pathUserInfo;
+                if (bodyData.uriBaseAuth !== undefined) entity!.uriBaseAuth = bodyData.uriBaseAuth;
+                if (bodyData.description !== undefined) entity!.description = bodyData.description;
+
+                // OAuth2Configの更新（OAuth2の場合のみ）
+                if (bodyData.authType === ApiProviderAuthType.OAuth2 && bodyData.oAuth2Config) {
+                    entity.oAuth2Config = {
+                        pathAuthorize: bodyData.oAuth2Config.pathAuthorize,
+                        pathAccessToken: bodyData.oAuth2Config.pathAccessToken,
+                        scope: bodyData.oAuth2Config.scope,
+                        postType: bodyData.oAuth2Config.postType,
+                        redirectUri: bodyData.oAuth2Config.redirectUri,
+                    } as OAuth2ConfigTemplate;
+                } else {
+                    // APIKeyの場合はoAuth2Configをnullに設定
+                    entity!.oAuth2Config = undefined;
+                }
+
+                entity!.updatedBy = userId;
+                entity!.updatedIp = ip;
+            }
+
+            const saved = await repository.save(entity!);
+            res.status(isNew ? 201 : 200).json(saved);
         } catch (error) {
-            console.error('Error updating OAuth2 config:', error);
-            res.status(500).json({ message: 'OAuth2設定の更新中にエラーが発生しました' });
+            console.error('Error upserting API provider template:', error);
+            res.status(500).json({ message: 'APIプロバイダーテンプレートの作成/更新中にエラーが発生しました' });
         }
     }
 ];
 
 /**
- * [DELETE] APIプロバイダーのOAuth2設定削除
+ * [DELETE] APIプロバイダーテンプレートの論理削除
  */
-export const deleteOAuth2Config = [
+export const deleteApiProviderTemplate = [
     param('id').isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
@@ -695,75 +736,47 @@ export const deleteOAuth2Config = [
         const ip = req.info.ip;
 
         try {
-            const repository = ds.getRepository(ApiProviderEntity);
+            const repository = ds.getRepository(ApiProviderTemplateEntity);
             const entity = await repository.findOne({
                 where: { id, tenantKey, isDeleted: false }
             });
 
             if (!entity) {
-                return res.status(404).json({ message: 'APIプロバイダーが見つかりません' });
+                return res.status(404).json({ message: 'APIプロバイダーテンプレートが見つかりません' });
             }
 
-            if (!entity.oAuth2Config) {
-                return res.status(404).json({ message: 'OAuth2設定が存在しません' });
-            }
-
-            entity.oAuth2Config = undefined;
+            entity.isDeleted = true;
             entity.updatedBy = updatedBy;
             entity.updatedIp = ip;
 
-            const saved = await repository.save(entity);
-            res.status(200).json(saved);
+            await repository.save(entity);
+            res.status(204).send();
         } catch (error) {
-            console.error('Error deleting OAuth2 config:', error);
-            res.status(500).json({ message: 'OAuth2設定の削除中にエラーが発生しました' });
+            console.error('Error deleting API provider template:', error);
+            res.status(500).json({ message: 'APIプロバイダーテンプレートの削除中にエラーが発生しました' });
         }
     }
 ];
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+/* Tenant Controller */
 
 /**
  * [GET] テナント一覧の取得
- * 管理者ユーザー向け
  */
 export const getTenants = [
     query('isActive').optional().isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-
-        // 管理者権限チェック
-        if (req.info.user.role !== 'Admin') {
-            return res.status(403).json({ message: 'このアクションには管理者権限が必要です' });
-        }
-
+        const tenantKey = req.info.user.tenantKey;
         const { isActive } = req.query;
 
         try {
-            const whereClause: any = {};
+            const whereClause: any = {
+                tenantKey
+            };
 
-            // アクティブフラグでフィルタリング
+            // アクティブフラグが指定されていればフィルタリング
             if (isActive !== undefined) {
                 whereClause.isActive = isActive === 'true';
             }
@@ -784,295 +797,102 @@ export const getTenants = [
 ];
 
 /**
- * [GET] テナント情報の取得（ID指定）
+ * [PUT] テナントの作成または更新 (Upsert)
  */
-export const getTenantById = [
-    param('id').isUUID(),
+export const upsertTenant = [
+    param('id').optional().isUUID(),
+    body('name').isString().notEmpty(),
+    body('description').optional().isString(),
+    body('isActive').optional().isBoolean(),
     validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-        const { id } = req.params;
-
-        // 管理者または自分のテナントのみアクセス可能
-        if (req.info.user.role !== 'Admin' && req.info.user.tenantKey !== id) {
-            return res.status(403).json({ message: 'このテナント情報へのアクセス権限がありません' });
-        }
-
-        try {
-            const entity = await ds.getRepository(TenantEntity).findOne({
-                where: { id }
-            });
-
-            if (!entity) {
-                return res.status(404).json({ message: 'テナントが見つかりません' });
-            }
-
-            res.status(200).json(entity);
-        } catch (error) {
-            console.error('Error retrieving tenant:', error);
-            res.status(500).json({ message: 'テナント情報の取得中にエラーが発生しました' });
-        }
-    }
-];
-
-/**
- * [GET] 自分のテナント情報の取得
- */
-export const getMyTenant = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const tenantKey = req.info.user.tenantKey;
-
-        try {
-            const entity = await ds.getRepository(TenantEntity).findOne({
-                where: { id: tenantKey }
-            });
-
-            if (!entity) {
-                return res.status(404).json({ message: 'テナントが見つかりません' });
-            }
-
-            res.status(200).json(entity);
-        } catch (error) {
-            console.error('Error retrieving tenant:', error);
-            res.status(500).json({ message: 'テナント情報の取得中にエラーが発生しました' });
-        }
-    }
-];
-
-/**
- * [POST] テナントの新規作成
- * 管理者ユーザー向け
- */
-export const createTenant = [
-    body('name').isString().notEmpty().withMessage('テナント名は必須です'),
-    body('description').optional().isString(),
-    body('isActive').optional().isBoolean(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-
-        // 管理者権限チェック
-        if (req.info.user.role !== 'Admin') {
-            return res.status(403).json({ message: 'このアクションには管理者権限が必要です' });
-        }
-
-        const createdBy = req.info.user.id;
+        const userId = req.info.user.id;
         const ip = req.info.ip;
-        const { name, description, isActive = true } = req.body;
-
-        try {
-            // テナント名の重複チェック
-            const existingTenant = await ds.getRepository(TenantEntity).findOne({
-                where: { name }
-            });
-
-            if (existingTenant) {
-                return res.status(409).json({ message: '同じ名前のテナントが既に存在します' });
-            }
-
-            // 新規テナントの作成
-            const repository = ds.getRepository(TenantEntity);
-            const entity = repository.create({
-                name,
-                description,
-                isActive,
-                createdBy,
-                createdIp: ip,
-                updatedBy: createdBy,
-                updatedIp: ip
-            });
-
-            const saved = await repository.save(entity);
-            res.status(201).json(saved);
-        } catch (error) {
-            console.error('Error creating tenant:', error);
-            res.status(500).json({ message: 'テナントの作成中にエラーが発生しました' });
-        }
-    }
-];
-
-/**
- * [PUT] テナント情報の更新
- * 管理者ユーザー向け
- */
-export const updateTenant = [
-    param('id').isUUID(),
-    body('name').optional().isString().notEmpty(),
-    body('description').optional().isString(),
-    body('isActive').optional().isBoolean(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-
-        // 管理者権限チェック
-        if (req.info.user.role !== 'Admin') {
-            return res.status(403).json({ message: 'このアクションには管理者権限が必要です' });
-        }
-
-        const { id } = req.params;
-        const updatedBy = req.info.user.id;
-        const ip = req.info.ip;
-        const updateData = req.body;
+        const bodyData = req.body;
+        const id = req.params.id;
 
         try {
             const repository = ds.getRepository(TenantEntity);
-            const entity = await repository.findOne({
-                where: { id }
-            });
+            let entity: TenantEntity | null = null;
+            let isNew = true;
 
-            if (!entity) {
-                return res.status(404).json({ message: 'テナントが見つかりません' });
-            }
-
-            // テナント名の重複チェック（変更される場合のみ）
-            if (updateData.name && updateData.name !== entity.name) {
-                const existingTenant = await repository.findOne({
-                    where: { name: updateData.name, id: Not(id) }
+            // IDが提供されている場合、既存のエンティティを検索
+            if (id) {
+                entity = await repository.findOne({
+                    where: { id, tenantKey }
                 });
 
-                if (existingTenant) {
-                    return res.status(409).json({ message: '同じ名前のテナントが既に存在します' });
+                if (entity) {
+                    isNew = false;
                 }
             }
 
-            // エンティティの更新
-            if (updateData.name !== undefined) entity.name = updateData.name;
-            if (updateData.description !== undefined) entity.description = updateData.description;
-            if (updateData.isActive !== undefined) entity.isActive = updateData.isActive;
+            // 新規作成または更新
+            if (isNew) {
+                // 新規エンティティの作成
+                entity = repository.create({
+                    tenantKey,
+                    name: bodyData.name,
+                    description: bodyData.description,
+                    isActive: bodyData.isActive !== undefined ? bodyData.isActive : true,
+                    createdBy: userId,
+                    createdIp: ip,
+                    updatedBy: userId,
+                    updatedIp: ip
+                });
+            } else {
+                // 既存エンティティの更新
+                entity!.name = bodyData.name;
+                if (bodyData.description !== undefined) entity!.description = bodyData.description;
+                if (bodyData.isActive !== undefined) entity!.isActive = bodyData.isActive;
+                entity!.updatedBy = userId;
+                entity!.updatedIp = ip;
+            }
 
-            entity.updatedBy = updatedBy;
-            entity.updatedIp = ip;
-
-            const saved = await repository.save(entity);
-            res.status(200).json(saved);
+            const saved = await repository.save(entity!);
+            res.status(isNew ? 201 : 200).json(saved);
         } catch (error) {
-            console.error('Error updating tenant:', error);
-            res.status(500).json({ message: 'テナントの更新中にエラーが発生しました' });
+            console.error('Error upserting tenant:', error);
+            res.status(500).json({ message: 'テナントの作成/更新中にエラーが発生しました' });
         }
     }
 ];
 
 /**
- * [PATCH] テナントの有効化/無効化
- * 管理者ユーザー向け
+ * [DELETE] テナントの非アクティブ化
+ * 注意: テナントは物理的に削除せず、isActiveフラグをfalseに設定
  */
-export const toggleTenantActive = [
+export const deactivateTenant = [
     param('id').isUUID(),
-    body('isActive').isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-
-        // 管理者権限チェック
-        if (req.info.user.role !== 'Admin') {
-            return res.status(403).json({ message: 'このアクションには管理者権限が必要です' });
-        }
-
+        const tenantKey = req.info.user.tenantKey;
         const { id } = req.params;
-        const { isActive } = req.body;
         const updatedBy = req.info.user.id;
         const ip = req.info.ip;
 
         try {
             const repository = ds.getRepository(TenantEntity);
             const entity = await repository.findOne({
-                where: { id }
+                where: { id, tenantKey }
             });
 
             if (!entity) {
                 return res.status(404).json({ message: 'テナントが見つかりません' });
             }
 
-            entity.isActive = isActive;
+            entity.isActive = false;
             entity.updatedBy = updatedBy;
             entity.updatedIp = ip;
 
-            const saved = await repository.save(entity);
-            res.status(200).json(saved);
+            await repository.save(entity);
+            res.status(200).json(entity);
         } catch (error) {
-            console.error('Error toggling tenant active state:', error);
-            res.status(500).json({ message: 'テナントの状態変更中にエラーが発生しました' });
-        }
-    }
-];
-
-/**
- * [DELETE] テナントの削除
- * 管理者ユーザー向け - 物理削除に注意
- */
-export const deleteTenant = [
-    param('id').isUUID(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-
-        // 管理者権限チェック
-        if (req.info.user.role !== 'Admin') {
-            return res.status(403).json({ message: 'このアクションには管理者権限が必要です' });
-        }
-
-        const { id } = req.params;
-
-        try {
-            const repository = ds.getRepository(TenantEntity);
-            const entity = await repository.findOne({
-                where: { id }
-            });
-
-            if (!entity) {
-                return res.status(404).json({ message: 'テナントが見つかりません' });
-            }
-
-            // テナントの削除前に関連するエンティティの存在チェックなどを行うべき
-            // ここではシンプルに削除するが、実際の実装では関連チェックを行うことを推奨
-
-            await repository.remove(entity);
-            res.status(204).send();
-        } catch (error) {
-            console.error('Error deleting tenant:', error);
-            res.status(500).json({ message: 'テナントの削除中にエラーが発生しました' });
-        }
-    }
-];
-
-/**
- * [GET] テナントの統計情報取得
- * 管理者ユーザー向け
- */
-export const getTenantStats = [
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-
-        // 管理者権限チェック
-        if (req.info.user.role !== 'Admin') {
-            return res.status(403).json({ message: 'このアクションには管理者権限が必要です' });
-        }
-
-        try {
-            const tenantRepository = ds.getRepository(TenantEntity);
-
-            // アクティブテナント数
-            const activeTenantCount = await tenantRepository.count({
-                where: { isActive: true }
-            });
-
-            // 非アクティブテナント数
-            const inactiveTenantCount = await tenantRepository.count({
-                where: { isActive: false }
-            });
-
-            // 全テナント数
-            const totalTenantCount = activeTenantCount + inactiveTenantCount;
-
-            res.status(200).json({
-                total: totalTenantCount,
-                active: activeTenantCount,
-                inactive: inactiveTenantCount
-            });
-        } catch (error) {
-            console.error('Error retrieving tenant stats:', error);
-            res.status(500).json({ message: 'テナント統計情報の取得中にエラーが発生しました' });
+            console.error('Error deactivating tenant:', error);
+            res.status(500).json({ message: 'テナントの非アクティブ化中にエラーが発生しました' });
         }
     }
 ];

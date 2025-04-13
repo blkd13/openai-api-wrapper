@@ -19,7 +19,7 @@ const { BOX_DOWNLOAD_DIR } = process.env;
 const ITEM_QUERY = `fields=name,modified_at,modified_by,created_at,content_modified_at,shared_link,size,extension,lock,classification,permissions`;
 
 export const boxApiItem = [
-    param('provider').isString().notEmpty(),
+    param('providerName').isString().notEmpty(),
     param('types').isIn(['folders', 'collections']).notEmpty(),
     param('itemId').isString().notEmpty(),
     query('fromcache').isBoolean().optional(),
@@ -28,7 +28,8 @@ export const boxApiItem = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as OAuthUserRequest;
-        const { provider, types, itemId } = req.params as { provider: string, types: string, itemId: string };
+        const { providerName, types, itemId } = req.params as { providerName: string, types: string, itemId: string };
+        const provider = `box-${providerName}`;
         const type = types.substring(0, types.length - 1);
         const fromcache = req.query.fromcache === 'true';
         const offset = Number(req.query.offset) || 0;
@@ -43,15 +44,19 @@ export const boxApiItem = [
                     let itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id, itemId, offset, limit });
                     // キャッシュがあればそれを先に返しておく。APIの結果が返ってきたらそれでキャッシュを上書きしておく。
                     res.json(itemEntity.data);
-                } catch (e) {
+                    return;
+                } catch (error) {
                     res.status(404).json({ error: 'Cache not found' });
+                    return;
                 }
             } else {
                 // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
-                const e = await getExtApiClient(req.info.user.tenantKey, provider);
-                if (e.uriBase) {
-                } else {
-                    return res.status(400).json({ error: 'Provider not found' });
+                const e = {} as ExtApiClient;
+                try {
+                    Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+                } catch (error) {
+                    res.status(401).json({ error: `${provider}は認証されていません。` });
+                    return;
                 }
                 // collectionsのときとfolderの時で/itemsをつけるかつけないかが変わる。クソ仕様だと思う。
                 const url = `${e.uriBase}/2.0/${types}/${itemId}${type === 'collection' ? '/items' : ''}?offset=${offset}&limit=${limit}`;
@@ -60,32 +65,32 @@ export const boxApiItem = [
                 const axios = await getAxios(url);
                 const response = await axios.get<BoxApiFolder>(url, { headers: { Authorization: `Bearer ${req.info.oAuth.accessToken}`, }, });
                 const folder = response.data;
-                console.log(`Retrieved ${folder.item_collection.entries.length} items. Total count: ${folder.item_collection.total_count}`);
-                if (folder.item_collection.entries.length > 0) {
-                    const savedFolder = await ds.transaction(async (tm) => {
-                        let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id, type, itemId, offset, limit });
-                        if (itemEntity) {
-                        } else {
-                            itemEntity = new BoxItemEntity();
-                            itemEntity.userId = req.info.user.id;
-                            itemEntity.itemId = itemId;
-                            itemEntity.type = type;
+                const entries = (folder as any).entries || folder.item_collection.entries;
+                const total_count = (folder as any).total_count >= 0 ? (folder as any).total_count : folder.item_collection.total_count;
+                // console.log(`Retrieved ${entries.length} items. Total count: ${total_count}`);
+                const savedFolder = await ds.transaction(async (tm) => {
+                    let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id, type, itemId, offset, limit });
+                    if (itemEntity) {
+                    } else {
+                        itemEntity = new BoxItemEntity();
+                        itemEntity.tenantKey = req.info.user.tenantKey;
+                        itemEntity.userId = req.info.user.id;
+                        itemEntity.itemId = itemId;
+                        itemEntity.type = type;
 
-                            itemEntity.createdBy = req.info.user.id;
-                            itemEntity.createdIp = req.info.ip;
-                        }
-                        itemEntity.offset = offset;
-                        itemEntity.limit = limit;
-                        itemEntity.data = folder;
-                        itemEntity.updatedBy = req.info.user.id;
-                        itemEntity.updatedIp = req.info.ip;
+                        itemEntity.createdBy = req.info.user.id;
+                        itemEntity.createdIp = req.info.ip;
+                    }
+                    itemEntity.offset = offset;
+                    itemEntity.limit = limit;
+                    itemEntity.data = folder;
+                    itemEntity.updatedBy = req.info.user.id;
+                    itemEntity.updatedIp = req.info.ip;
 
-                        return await tm.getRepository(BoxItemEntity).save(itemEntity);
-                    });
-                    res.json(savedFolder.data);
-                } else {
-                    res.status(404).json({ error: 'Not Found' });
-                }
+                    return await tm.getRepository(BoxItemEntity).save(itemEntity);
+                });
+                res.json(savedFolder.data);
+                return;
             }
 
         } catch (error) {
@@ -221,19 +226,22 @@ export const boxApiItem = [
 
 // 
 export const upsertBoxApiCollection = [
-    param('provider').isString().notEmpty(),
+    param('providerName').isString().notEmpty(),
     body('collectionId').isString().notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as OAuthUserRequest;
-        const { provider } = req.params as { provider: string };
+        const { providerName } = req.params as { providerName: string };
+        const provider = `box-${providerName}`;
         const { collectionId } = req.body as { collectionId: string };
         try {
             // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
-            const e = await getExtApiClient(req.info.user.tenantKey, provider);
-            if (e.uriBase) {
-            } else {
-                return res.status(400).json({ error: 'Provider not found' });
+            const e = {} as ExtApiClient;
+            try {
+                Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+            } catch (error) {
+                res.status(401).json({ error: `${provider}は認証されていません。` });
+                return;
             }
             const url = `${e.uriBase}/2.0/collections/${collectionId}`;
             const axios = await getAxios(url);
@@ -249,6 +257,7 @@ export const upsertBoxApiCollection = [
                 if (collectionEntity) {
                 } else {
                     collectionEntity = new BoxCollectionEntity();
+                    collectionEntity.tenantKey = req.info.user.tenantKey;
                     collectionEntity.userId = req.info.user.id;
 
                     collectionEntity.collectionId = collection.id;
@@ -276,18 +285,21 @@ export const upsertBoxApiCollection = [
 ];
 
 export const boxApiCollection = [
-    param('provider').isString().notEmpty(),
+    param('providerName').isString().notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as OAuthUserRequest;
-        const { provider } = req.params as { provider: string, collectionId: string };
+        const { providerName } = req.params as { providerName: string, collectionId: string };
+        const provider = `box-${providerName}`;
         // console.log(`provider: ${provider}, collectionId: ${collectionId} fromcache: ${fromcache}`);
         try {
             // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
-            const e = await getExtApiClient(req.info.user.tenantKey, provider);
-            if (e.uriBase) {
-            } else {
-                return res.status(400).json({ error: 'Provider not found' });
+            const e = {} as ExtApiClient;
+            try {
+                Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+            } catch (error) {
+                res.status(401).json({ error: `${provider}は認証されていません。` });
+                return;
             }
             const url = `${e.uriBase}/2.0/collections`;
             const axios = await getAxios(url);
@@ -320,7 +332,7 @@ const upload = multer(); // multerを初期化
  * OPTINOSにデータのやり取りをさせる設計になっているBOX-API自体がダメだと思う。
  */
 export const boxUpload = [
-    param('provider').isString().notEmpty(),
+    param('providerName').isString().notEmpty(),
     param('fileId').optional().isString(),
     // body('name').isString().notEmpty(),
     // body('parent.id').isNumeric().notEmpty(),
@@ -334,15 +346,18 @@ export const boxUpload = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as OAuthUserRequest;
-        const { provider, fileId } = req.params as { provider: string, fileId: string };
+        const { providerName, fileId } = req.params as { providerName: string, fileId: string };
+        const provider = `box-${providerName}`;
         // const { name, parent, size } = req.body as { name: string, parent: { id: string }, size: number };
         // console.log(`provider: ${provider}, name: ${name} parent.id: ${parent.id} size=${size}`);
 
         // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
-        const e = await getExtApiClient(req.info.user.tenantKey, provider);
-        if (e.uriBase) {
-        } else {
-            return res.status(400).json({ error: 'Provider not found' });
+        const e = {} as ExtApiClient;
+        try {
+            Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+        } catch (error) {
+            res.status(401).json({ error: `${provider}は認証されていません。` });
+            return;
         }
 
         // 入力項目チェック
@@ -360,35 +375,37 @@ export const boxUpload = [
         }
 
         async function post(fileId: string, file: Express.Multer.File, attributes: Attributes) {
-            const url = fileId ? `${e.uriBase}/2.0/files/${fileId}/content` : `${e.uriBase}/2.0/files/content`;
-            console.log(url);
-            const axios = await getAxios(url);
-            const response = await axios.request<Attributes>({
-                url,
-                method: 'OPTIONS',
-                headers: {
-                    Authorization: `Bearer ${req.info.oAuth.accessToken}`,
-                    'Content-Type': 'multipart/form-data',
-                },
-                data: req.body.attributes,
-            });
-            const uploadInfo = response.data;
-            // console.log(`Preflight Success ${JSON.stringify(response.data)}`);
+            if (e) {
+                const url = fileId ? `${e.uriBase}/2.0/files/${fileId}/content` : `${e.uriBase}/2.0/files/content`;
+                console.log(url);
+                const axios = await getAxios(url);
+                const response = await axios.request<Attributes>({
+                    url,
+                    method: 'OPTIONS',
+                    headers: {
+                        Authorization: `Bearer ${req.info.oAuth.accessToken}`,
+                        'Content-Type': 'multipart/form-data',
+                    },
+                    data: req.body.attributes,
+                });
+                const uploadInfo = response.data;
+                // console.log(`Preflight Success ${JSON.stringify(response.data)}`);
 
-            const formData = new FormData();
-            formData.append('attributes', JSON.stringify(attributes));
-            const uint8Array = new Uint8Array(file.buffer);
-            const blob = new Blob([uint8Array], { type: file.mimetype });
-            formData.append('file', blob as any, file.originalname);
+                const formData = new FormData();
+                formData.append('attributes', JSON.stringify(attributes));
+                const uint8Array = new Uint8Array(file.buffer);
+                const blob = new Blob([uint8Array], { type: file.mimetype });
+                formData.append('file', blob as any, file.originalname);
 
-            const axios2 = await getAxios(uploadInfo.upload_url);
-            const uploadResponse = await axios2.post(uploadInfo.upload_url, formData, {
-                headers: {
-                    Authorization: `Bearer ${req.info.oAuth.accessToken}`,
-                    'Content-Type': 'multipart/form-data',
-                },
-            });
-            res.json(uploadResponse.data);
+                const axios2 = await getAxios(uploadInfo.upload_url);
+                const uploadResponse = await axios2.post(uploadInfo.upload_url, formData, {
+                    headers: {
+                        Authorization: `Bearer ${req.info.oAuth.accessToken}`,
+                        'Content-Type': 'multipart/form-data',
+                    },
+                });
+                res.json(uploadResponse.data);
+            } else { }
         }
 
         try {
@@ -419,18 +436,21 @@ export const boxUpload = [
 /**
  */
 export const boxDownload = [
-    param('provider').isString().notEmpty(),
+    param('providerName').isString().notEmpty(),
     param('fileId').isString().notEmpty(),
     query('format').optional().isIn(['binary', 'base64', 'pdf']),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as OAuthUserRequest;
-        const { provider, fileId } = req.params as { provider: string, fileId: string };
+        const { providerName, fileId } = req.params as { providerName: string, fileId: string };
+        const provider = `box-${providerName}`;
         const format = req.query.format || 'binary';
-        const e = await getExtApiClient(req.info.user.tenantKey, provider);
-        if (e.uriBase) {
-        } else {
-            return res.status(400).json({ error: 'Provider not found' });
+        const e = {} as ExtApiClient;
+        try {
+            Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+        } catch (error) {
+            res.status(401).json({ error: `${provider}は認証されていません。` });
+            return;
         }
 
         try {
@@ -471,17 +491,24 @@ export interface BoxFileInfo {
 }
 
 export const boxBatchDownload = [
-    param('provider').isString().notEmpty(),
+    param('providerName').isString().notEmpty(),
     param('fileId').isString().notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as OAuthUserRequest;
-        const { provider, fileId } = req.params as { provider: string, fileId: string };
+        const { providerName, fileId } = req.params as { providerName: string, fileId: string };
+        const provider = `box-${providerName}`;
         const userId = req.info.user.id;
         const ip = req.info.ip;
 
         // APIを呼び出してデータを取得
-        const e = await getExtApiClient(req.info.user.tenantKey, provider);
+        const e = {} as ExtApiClient;
+        try {
+            Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+        } catch (error) {
+            res.status(401).json({ error: `${provider}は認証されていません。` });
+            return;
+        }
         await boxDownloadCore(e, fileId, userId, ip)
             .then(resBody => {
                 res.json(resBody);
@@ -551,6 +578,7 @@ export async function boxApiItemCore(
             let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ tenantKey: e.tenantKey, userId, type, itemId });
             if (!itemEntity) {
                 itemEntity = new BoxItemEntity();
+                itemEntity.tenantKey = e.tenantKey;
                 itemEntity.userId = userId;
                 itemEntity.itemId = itemId;
                 itemEntity.type = type;
@@ -719,6 +747,7 @@ export async function boxDownloadCoreOnline(e: ExtApiClient, fileId: string, use
                 boxFile = existingBoxFile;
             } else {
                 boxFile = new BoxFileEntity();
+                boxFile.tenantKey = e.tenantKey;
                 boxFile.fileId = boxFileId;
                 boxFile.versionId = versionId;
                 boxFile.versionSha1 = infodata.file_version?.sha1;
@@ -769,6 +798,7 @@ export async function boxDownloadCoreOnline(e: ExtApiClient, fileId: string, use
 
             // ファイル内容は既存のものを再利用し、BoxFileEntityだけ新規作成
             const newBoxFile = new BoxFileEntity();
+            newBoxFile.tenantKey = e.tenantKey;
             newBoxFile.fileId = boxFileId;
             newBoxFile.versionId = versionId;
             newBoxFile.versionSha1 = sha1FromMeta;
@@ -840,6 +870,7 @@ export async function boxDownloadCoreOnline(e: ExtApiClient, fileId: string, use
 
         // 8. データベースエンティティを保存
         const fileBodyEntity = new BoxFileBodyEntity();
+        fileBodyEntity.tenantKey = e.tenantKey;
         fileBodyEntity.fileType = fileType;
         fileBodyEntity.fileSize = fileSize;
         fileBodyEntity.innerPath = innerPath; // カラム名が「innerPath」であることを前提
@@ -853,6 +884,7 @@ export async function boxDownloadCoreOnline(e: ExtApiClient, fileId: string, use
         await ds.getRepository(BoxFileBodyEntity).save(fileBodyEntity);
 
         const boxFile = new BoxFileEntity();
+        boxFile.tenantKey = e.tenantKey;
         boxFile.fileId = boxFileId;
         boxFile.versionId = versionId;
         boxFile.versionSha1 = sha1Digest;
@@ -961,6 +993,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
         if (metaData.entries && metaData.entries.length > 0) {
             const boxFile = new BoxFileEntity();
+            boxFile.tenantKey = e.tenantKey;
             boxFile.fileId = boxFileId;
             boxFile.versionId = versionId;
             boxFile.versionSha1 = infodata.file_version?.sha1;
@@ -1034,6 +1067,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
             // ファイル内容は既存のものを再利用し、BoxFileEntityだけ新規作成
             const newBoxFile = new BoxFileEntity();
+            newBoxFile.tenantKey = e.tenantKey;
             newBoxFile.fileId = boxFileId;
             newBoxFile.versionId = versionId;
             newBoxFile.versionSha1 = sha1FromMeta;
@@ -1058,6 +1092,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
         if (infodata.size > 2_147_483_648) {
             const boxFile = new BoxFileEntity();
+            boxFile.tenantKey = e.tenantKey;
             boxFile.fileId = boxFileId;
             boxFile.versionId = versionId;
             boxFile.versionSha1 = sha1FromMeta;
@@ -1122,6 +1157,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
         // 8. データベースエンティティを保存
         const fileBodyEntity = new BoxFileBodyEntity();
+        fileBodyEntity.tenantKey = e.tenantKey;
         fileBodyEntity.fileType = fileType;
         fileBodyEntity.fileSize = fileSize;
         fileBodyEntity.innerPath = innerPath; // カラム名が「innerPath」であることを前提
@@ -1135,6 +1171,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
         await ds.getRepository(BoxFileBodyEntity).save(fileBodyEntity);
 
         const boxFile = new BoxFileEntity();
+        boxFile.tenantKey = e.tenantKey;
         boxFile.fileId = boxFileId;
         boxFile.versionId = versionId;
         boxFile.versionSha1 = sha1Digest;

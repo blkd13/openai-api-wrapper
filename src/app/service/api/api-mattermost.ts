@@ -6,7 +6,7 @@ import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { MmFileEntity, MmPostEntity, MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity } from '../entity/api-mattermost.entity.js';
 import { ds } from '../db.js';
-import { getExtApiClient } from '../controllers/auth.js';
+import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { Utils } from '../../common/utils.js';
 import { MattermostChannel, MattermostEmoji, MattermostPost, MattermostUser, Post } from '../../agent/api-mattermost/api.js';
 import { Axios } from 'axios';
@@ -19,6 +19,7 @@ import { plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
 import { getAxios } from '../../common/http-client.js';
 
 export const getMmUsers = [
+    param('providerName').isString().notEmpty(),
     body('ids').optional().trim(),
     body('names').optional().trim(),
     validationErrorHandler,
@@ -26,7 +27,8 @@ export const getMmUsers = [
         const req = _req as UserRequest;
         // const ids = (req.body.ids as string || '').split(',').filter(id => id !== '');
         // const names = (req.body.names as string || '').split(',').filter(name => name !== '');
-        const { ids, names } = req.body;
+        const { ids, names } = req.body as { ids: string[], names: string[] };
+        const { providerName } = req.params as { providerName: string };
 
         if (ids.length === 0 && names.length === 0) {
             return res.status(400).json({ error: 'Either ids or names must be provided' });
@@ -60,10 +62,12 @@ export const getMmUsers = [
 
 // Timeline CRUD operations
 export const getTimelines = [
+    param('providerName').isString().notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const userId = req.info.user.id;
+        const { providerName } = req.params as { providerName: string };
         try {
             const timelines = await ds.getRepository(MmTimelineEntity).find({
                 where: { tenantKey: req.info.user.tenantKey, userId, status: MmTimelineStatus.Normal },
@@ -90,6 +94,7 @@ export const getTimelines = [
     }
 ];
 export const createTimeline = [
+    param('providerName').isString().notEmpty(),
     body('title').isString().notEmpty(),
     body('description').optional().isString(),
     body('channelIds').optional().isArray(),
@@ -97,12 +102,13 @@ export const createTimeline = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { title, description, channelIds } = req.body as { title: string, description: string, channelIds: string[] };
+        const { providerName } = req.params as { providerName: string };
         try {
             const savedTl = await ds.transaction(async em => {
-                const timeline = { userId: req.info.user.id, title, description, createdBy: req.info.user.id, updatedBy: req.info.user.id, createdIp: req.info.ip, updatedIp: req.info.ip };
+                const timeline = { tenantKey: req.info.user.tenantKey, userId: req.info.user.id, title, description, createdBy: req.info.user.id, updatedBy: req.info.user.id, createdIp: req.info.ip, updatedIp: req.info.ip };
                 const savedTl = await em.getRepository(MmTimelineEntity).save(timeline);
                 channelIds.forEach(async channelId => {
-                    await em.getRepository(MmTimelineChannelEntity).save({ channelId, timelineId: savedTl.id, isMute: false, createdBy: req.info.user.id, updatedBy: req.info.user.id, createdIp: req.info.ip, updatedIp: req.info.ip, lastViewedAt: new Date() });
+                    await em.getRepository(MmTimelineChannelEntity).save({ tenantKey: req.info.user.tenantKey, channelId, timelineId: savedTl.id, isMute: false, createdBy: req.info.user.id, updatedBy: req.info.user.id, createdIp: req.info.ip, updatedIp: req.info.ip, lastViewedAt: new Date() });
                 });
                 return savedTl;
             });
@@ -114,6 +120,7 @@ export const createTimeline = [
     }
 ];
 export const updateTimeline = [
+    param('providerName').isString().notEmpty(),
     param('id').isUUID().notEmpty(),
     body('title').isString().notEmpty(),
     body('description').optional(),
@@ -121,7 +128,7 @@ export const updateTimeline = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { id } = req.params as { id: string };
+        const { id, providerName } = req.params as { id: string, providerName: string };
         const { title, description, channelIds } = req.body as { title: string, description?: string, channelIds: string[] };
         try {
             const savedTl = await ds.transaction(async em => {
@@ -156,6 +163,7 @@ export const updateTimeline = [
                     if (channelsToAdd.length > 0) {
                         const newChannels = channelsToAdd.map(channelId => {
                             const newChannel = new MmTimelineChannelEntity();
+                            newChannel.tenantKey = req.info.user.tenantKey;
                             newChannel.timelineId = id;
                             newChannel.channelId = channelId;
                             newChannel.createdBy = req.info.user.id;
@@ -182,6 +190,7 @@ export const updateTimeline = [
     }
 ];
 export const updateTimelineChannel = [
+    param('providerName').isString().notEmpty(),
     param('timelineId').isUUID().notEmpty(),
     param('timelineChannelId').isUUID().notEmpty(),
     body('isMute').optional().isBoolean(),
@@ -191,7 +200,7 @@ export const updateTimelineChannel = [
 
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { timelineId, timelineChannelId } = req.params as { timelineId: string, timelineChannelId: string };
+        const { providerName, timelineId, timelineChannelId } = req.params as { providerName: string, timelineId: string, timelineChannelId: string };
         const { isMute, lastViewedAt } = req.body as { isMute: boolean, lastViewedAt?: Date };
         // console.log(req.body);
         try {
@@ -237,11 +246,12 @@ export const updateTimelineChannel = [
 ];
 
 export const deleteTimeline = [
+    param('providerName').isString().notEmpty(),
     param('id').isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { id } = req.params;
+        const { providerName, id } = req.params as { providerName: string, id: string };
         const timelineRepository = ds.getRepository(MmTimelineEntity);
         try {
             const timeline = await timelineRepository.findOne({ where: { tenantKey: req.info.user.tenantKey, id } });
@@ -262,6 +272,7 @@ export const deleteTimeline = [
 export type ToAiIdType = 'timeline' | 'timelineChannel' | 'channel' | 'thread';
 export type ToAiFilterType = 'timespan' | 'count' | 'batch';
 export const mattermostToAi = [
+    param('providerName').isString().notEmpty(),
     body('projectId').isUUID().notEmpty(),
     body('id').isString().notEmpty(),
     body('title').isString().notEmpty(),
@@ -272,11 +283,18 @@ export const mattermostToAi = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
+        const { providerName } = req.params as { providerName: string };
         const { projectId, id, idType, filterType, params, systemPrompt } = req.body as { projectId: string, id: string, idType: ToAiIdType, filterType: ToAiFilterType, params: any, systemPrompt: string };
         let { title } = req.body as { title: string };
         // console.log(req.body);
         const provider = 'mattermost';
-        const e = await getExtApiClient(req.info.user.tenantKey, provider);
+        const e = {} as ExtApiClient;
+        try {
+            Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+        } catch (error) {
+            res.status(401).json({ error: `${provider}は認証されていません。` });
+            return;
+        }
         const axios = await getAxios(e.uriBase);
 
         const initialArgs = {
@@ -619,14 +637,16 @@ export const mattermostToAi = [
                                 || file.mime_type.startsWith('video/')
                             ).map(async file => {
                                 // console.log(file.mime_type, file.name);
-                                const imageUrl = `${e.uriBase}/api/v4/files/${file.id}`;
-                                const fileObj = { type: 'file', text: file.name, dataUrl: file.dataUrl || '', fileId: '' };
-                                // await掛ける前にリストに入れておかないと順序が崩れる。
-                                contents.push(fileObj as FileContentPart);
-                                // console.log(imageUrl, file.mime_type, file.dataUrl?.substring(0, 50).replaceAll(/\n/g, ''), file.dataUrl?.length, file.name);
-                                file.dataUrl = await downloadImageAsDataURL(axios, `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, imageUrl);
-                                fileObj.dataUrl = file.dataUrl || '';
-                                (fileObj as any).postId = post.id; // postIdで紐づげグルーピングができるようにしておく
+                                if (e) {
+                                    const imageUrl = `${e.uriBase}/api/v4/files/${file.id}`;
+                                    const fileObj = { type: 'file', text: file.name, dataUrl: file.dataUrl || '', fileId: '' };
+                                    // await掛ける前にリストに入れておかないと順序が崩れる。
+                                    contents.push(fileObj as FileContentPart);
+                                    // console.log(imageUrl, file.mime_type, file.dataUrl?.substring(0, 50).replaceAll(/\n/g, ''), file.dataUrl?.length, file.name);
+                                    file.dataUrl = await downloadImageAsDataURL(axios, `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, imageUrl);
+                                    fileObj.dataUrl = file.dataUrl || '';
+                                    (fileObj as any).postId = post.id; // postIdで紐づげグルーピングができるようにしておく
+                                } else { }
                             });
                             return Promise.all(files);
                         } else {
@@ -648,6 +668,7 @@ export const mattermostToAi = [
             // thread作成
             const savedThread = await ds.transaction(async tm => {
                 const threadGroup = new ThreadGroupEntity();
+                threadGroup.tenantKey = req.info.user.tenantKey;
                 threadGroup.projectId = projectId;
                 threadGroup.title = title;
                 threadGroup.description = ``;
@@ -661,6 +682,7 @@ export const mattermostToAi = [
 
                 // 新しいスレッドを作成
                 const thread = new ThreadEntity();
+                thread.tenantKey = req.info.user.tenantKey;
                 thread.status = ThreadStatus.Normal;
                 thread.threadGroupId = savedThreadGroup.id;
                 thread.inDtoJson = JSON.stringify(inDtoJson);
@@ -721,6 +743,7 @@ export const mattermostToAi = [
                 const fileIdFileGroupIdMap: { [fileId: string]: string } = {};
                 const savedFileListList = await Promise.all(Object.entries(cotentsImageUrlListGroupByPostId).map(async ([postId, contentsImageUrlList]) => {
                     const fileGroup = new FileGroupEntity();
+                    fileGroup.tenantKey = req.info.user.tenantKey;
                     fileGroup.type = FileGroupType.UPLOAD;
                     fileGroup.uploadedBy = req.info.user.id;
                     fileGroup.isActive = true;
@@ -742,6 +765,7 @@ export const mattermostToAi = [
                         (content.content as FileContentPart).fileId = savedFile.id;
 
                         const fileAccess = new FileAccessEntity();
+                        fileAccess.tenantKey = req.info.user.tenantKey;
                         fileAccess.fileId = savedFile.id;
                         fileAccess.teamId = project.teamId;
                         fileAccess.canRead = true;
@@ -776,6 +800,7 @@ export const mattermostToAi = [
                 for (const msg of msgList) {
                     // 新規作成の場合
                     messageGroup = new MessageGroupEntity();
+                    messageGroup.tenantKey = req.info.user.tenantKey;
                     messageGroup.threadId = savedThread.id;
                     messageGroup.createdBy = req.info.user.id;
                     messageGroup.createdIp = req.info.ip;
@@ -791,6 +816,7 @@ export const mattermostToAi = [
 
                     // 新規作成の場合
                     message = new MessageEntity();
+                    message.tenantKey = req.info.user.tenantKey;
                     message.createdBy = req.info.user.id;
                     message.createdIp = req.info.ip;
 
@@ -811,6 +837,7 @@ export const mattermostToAi = [
                     for (const [index, content] of (msg.message as ContentPartEntity[]).entries()) {
                         // 新しいContentPartを作成
                         let contentPart = new ContentPartEntity();
+                        contentPart.tenantKey = req.info.user.tenantKey;
                         contentPart.messageId = savedMessage.id;
                         contentPart.createdBy = req.info.user.id;
                         contentPart.createdIp = req.info.ip;

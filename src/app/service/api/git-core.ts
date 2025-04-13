@@ -129,6 +129,7 @@ export async function gitCat(tenantKey: string, userId: string, ip: string, prov
         // (3) 無ければ新規作成
         if (!gitProject) {
             gitProject = new GitProjectEntity();
+            gitProject.tenantKey = tenantKey;
             gitProject.provider = provider;
             gitProject.gitProjectId = gitlabProjectId;
             gitProject.status = GitProjectStatus.Cloning;
@@ -247,6 +248,7 @@ export async function copyFromFirst(firstFileGroupId: string, project: ProjectEn
         // fileAccessはコピーじゃなくて全部権限OKで作っておく。
         await Promise.all(savedfiles.map(_file => {
             const fileAccess = new FileAccessEntity();
+            fileAccess.tenantKey = tenantKey;
             fileAccess.fileId = _file.id;
             fileAccess.teamId = project.teamId;
             fileAccess.canRead = true;
@@ -299,6 +301,7 @@ export async function gitFetchCommitId(
 
         // 新しい GitProjectCommitEntity を作成して紐づける
         let gitProjectCommit = new GitProjectCommitEntity();
+        gitProjectCommit.tenantKey = tenantKey;
         gitProjectCommit.provider = provider;
         gitProjectCommit.gitProjectId = gitProjectId;
         gitProjectCommit.commitId = commitId;

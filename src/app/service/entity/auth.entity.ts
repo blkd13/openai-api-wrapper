@@ -260,35 +260,53 @@ export class OAuthAccountEntity extends MyBaseEntity {
     status!: OAuthAccountStatus;
 }
 
-export interface OAuth2Config {
-    uriBaseAuth?: string;
+export interface OAuth2Config extends OAuth2ConfigTemplate {
     clientId: string;
     clientSecret: string;
+    requireMailAuth: boolean;
+}
+
+export enum ApiProviderAuthType {
+    OAuth2 = 'OAuth2',
+    APIKey = 'APIKey',
+}
+
+export enum ApiProviderPostType {
+    json = 'json',
+    params = 'params',
+    form = 'form',
+}
+export interface OAuth2ConfigTemplate {
     pathAuthorize: string;
     pathAccessToken: string;
     pathTop: string;
     scope: string;
-    postType: 'json' | 'params';
+    postType: ApiProviderPostType;
     redirectUri: string;
-    requireMailAuth: boolean;
 }
 
 @Entity()
-@Index(['tenantKey', 'type', 'uriBase'], { unique: true }) // テナントごとに一意
-@Index(['tenantKey', 'type', 'provider'], { unique: true }) // テナントごとに一意
+// @Index(['tenantKey', 'type', 'uriBase'], { unique: true }) // テナントごとに一意
+@Index(['tenantKey', 'type', 'name'], { unique: true }) // テナントごとに一意
 export class ApiProviderEntity extends MyBaseEntity {
 
     @Column()
     type!: string; // 'gitlab' | 'gitea' | etc
 
     @Column()
-    provider!: string; // 'gitlab-local' | etc
+    name!: string; // 'gitlab-local' | etc
 
     @Column()
     label!: string; // 'GitLab' | 'Gitea' | etc
 
+    @Column({ type: 'enum', enum: ApiProviderAuthType, default: ApiProviderAuthType.OAuth2 })
+    authType!: ApiProviderAuthType;
+
     @Column()
     uriBase!: string;
+
+    @Column({ nullable: true })
+    uriBaseAuth?: string;
 
     @Column()
     pathUserInfo!: string;
@@ -299,6 +317,10 @@ export class ApiProviderEntity extends MyBaseEntity {
     @Column({ nullable: true })
     description?: string;
 
+    @Column({ type: 'integer' })
+    @Generated('increment')
+    sortSeq!: number;
+
     @Column({ default: false })
     isDeleted!: boolean;
 }
@@ -308,31 +330,36 @@ export class ApiProviderTemplateEntity extends MyBaseEntity {
 
     @Index({ unique: true })
     @Column()
-    type!: string; // 'gitlab' | 'gitea' | etc
+    name!: string; // 'gitlab' | 'gitea' | etc
+
+    @Column({ type: 'enum', enum: ApiProviderAuthType, default: ApiProviderAuthType.OAuth2 })
+    authType!: ApiProviderAuthType;
 
     @Column()
     pathUserInfo!: string;
 
-    @Column({ nullable: true })
+    @Column()
     uriBaseAuth?: string;
-    @Column({ nullable: true })
-    pathAuthorize?: string;
-    @Column({ nullable: true })
-    pathAccessToken?: string;
-    @Column({ nullable: true })
-    pathTop?: string;
-    @Column({ nullable: true })
-    scope?: string;
-    @Column({ nullable: true })
-    postType?: 'json' | 'params';
-    @Column({ nullable: true })
-    redirectUri?: string;
+
+    @Column({ nullable: true, type: 'jsonb' })
+    oAuth2Config?: OAuth2ConfigTemplate;
 
     @Column({ nullable: true })
     description?: string;
 
     @Column({ default: false })
     isDeleted!: boolean;
+}
+
+export interface SiteConfig {
+    theme?: string;
+    logoUrl?: string;
+    contactEmail?: string;
+    supportUrl?: string;
+    privacyPolicyUrl?: string;
+    termsOfServiceUrl?: string;
+    oauth2RedirectUriList?: string[];
+    pathTop?: string;
 }
 
 @Entity()
@@ -342,6 +369,9 @@ export class TenantEntity extends MyBaseEntity {
 
     @Column({ nullable: true })
     description?: string;
+
+    @Column({ nullable: true, type: 'jsonb' })
+    siteConfig!: SiteConfig;
 
     @Column({ default: true })
     isActive!: boolean;

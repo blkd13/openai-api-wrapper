@@ -1006,6 +1006,13 @@ export class Utils {
     }
 }
 
+/**
+ * TypeScriptの型を部分的にオプショナルにするユーティリティ型
+ * @template T - オブジェクトの型
+ * @template K - オプショナルにするプロパティのキーの型
+ * @returns - オプショナルにしたオブジェクトの型
+ */
+export type MakeOptional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 
 class RequestLimiter {
     private activeRequests: number = 0;

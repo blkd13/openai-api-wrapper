@@ -5,7 +5,7 @@ import { ds } from '../db.js';
 import { OAuthUserRequest } from '../models/info.js';
 import { ProjectEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
 import { FileGroupType, ProjectVisibility } from '../models/values.js';
-import { getExtApiClient } from '../controllers/auth.js';
+import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { GitProjectCommitEntity } from '../entity/api-git.entity.js';
 import { FileGroupEntity } from '../entity/file-models.entity.js';
 import { copyFromFirst, gitFetchCommitId } from './git-core.js';
@@ -35,7 +35,8 @@ export const fetchCommit = [
             // プロジェクトの存在確認
             const project = await ds.getRepository(ProjectEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: projectId } });
             if (!project) {
-                return res.status(404).json({ error: '指定されたプロジェクトが見つかりません' });
+                res.status(404).json({ error: '指定されたプロジェクトが見つかりません' });
+                return;
             }
 
             // 権限チェック (Public / Login 以外はチームメンバーである必要がある)
@@ -43,13 +44,17 @@ export const fetchCommit = [
                 where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id, teamId: project.teamId },
             });
             if (project.visibility !== ProjectVisibility.Public && project.visibility !== ProjectVisibility.Login && !teamMember) {
-                return res.status(403).json({ error: 'このプロジェクトにファイルをアップロードする権限がありません' });
+                res.status(403).json({ error: 'このプロジェクトにファイルをアップロードする権限がありません' });
+                return;
             }
 
             // OAuth2設定読み込み
-            const e = await getExtApiClient(req.info.user.tenantKey, provider);
-            if (!e.uriBase) {
-                return res.status(400).json({ error: 'Provider not found' });
+            const e = {} as ExtApiClient;
+            try {
+                Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+            } catch (error) {
+                res.status(401).json({ error: `${provider}は認証されていません。` });
+                return;
             }
             const _axios = await getAxios(e.uriBase);
 
@@ -116,7 +121,7 @@ export const fetchCommit = [
                 try {
                     const obj = JSON.parse(err.message);
                     res.status(obj.status || 500).json(obj);
-                } catch (e) {
+                } catch (error) {
                     res.status(500).json({ error: 'Failed to download all files' });
                 }
             } else {

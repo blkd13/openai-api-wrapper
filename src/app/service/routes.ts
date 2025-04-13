@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, getDepartmentMemberLog, getDepartmentMemberLogForUser, genApiToken, getOAuthAccount } from './controllers/auth.js';
+import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, getDepartmentMemberLog, getDepartmentMemberLogForUser, genApiToken, getOAuthAccount, getDepartmentMemberForUser } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateOAuthUser, authenticateUserTokenMiddleGenerator } from './middleware/authenticate.js';
 import { chatCompletion, chatCompletionStream, codegenCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
@@ -41,7 +41,7 @@ import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCr
 import { UserRoleType } from './entity/auth.entity.js';
 import { getOAuthApiProxy } from './api/api-proxy.js';
 import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
-import { createApiProvider, createTenant, deleteApiProvider, deleteOAuth2Config, deleteTenant, deleteUserSetting, getApiProviderById, getApiProviderByProvider, getApiProviderByTypeAndUri, getApiProviders, getMyTenant, getTenantById, getTenants, getTenantStats, getUserSetting, toggleTenantActive, updateApiProvider, updateOAuth2Config, updateTenant, upsertOAuthProvider, upsertUserSetting } from './controllers/user.js';
+import { getUserSetting, upsertUserSetting, deleteUserSetting, getApiProviders, upsertApiProvider, deleteApiProvider, getApiProviderTemplates, upsertApiProviderTemplate, deleteApiProviderTemplate, getTenants, upsertTenant, deactivateTenant } from './controllers/user.js';
 import * as gitlab from './api/api-gitlab.js';
 import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
@@ -65,20 +65,19 @@ authMaintainerRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.Maint
 authInviteRouter.use(authenticateInviteToken);
 
 // 個別コントローラーの設定
-authNoneRouter.post('/login', userLogin);
+// authNoneRouter.post('/login', userLogin);
 authNoneRouter.post('/:tenantKey/login', userLogin);
 authNoneRouter.get('/logout', logout);
-authNoneRouter.post('/onetime', onetimeLogin);
 authNoneRouter.post('/:tenantKey/onetime', onetimeLogin);
-authNoneRouter.post('/request-for-password-reset', requestForPasswordReset);
 authNoneRouter.post('/:tenantKey/request-for-password-reset', requestForPasswordReset);
+// authNoneRouter.post('/onetime', onetimeLogin);
+// authNoneRouter.post('/rwequest-for-password-reset', requestForPasswordReset);
 // authNoneRouter.post('/guest', guestLogin);
 authInviteRouter.post('/password-reset', passwordReset);
 authInviteRouter.post('/oauth-emailauth', oAuthEmailAuth);
 
 // OAuth2
 authNoneRouter.get('/oauth/:tenantKey/:provider/login', userLoginOAuth2);
-authNoneRouter.get('/oauth/:provider/callback', userLoginOAuth2Callback); // 認証があっても無くても動くようにしておく
 authNoneRouter.get('/oauth/callback', userLoginOAuth2Callback); // 認証があっても無くても動くようにしておく
 
 // ユーザー認証系
@@ -134,8 +133,8 @@ authUserRouter.patch('/project/:id', updateProject);
 authUserRouter.delete('/project/:id', deleteProject);
 
 // プロジェクト取得（認証あり・なし両方に対応）
-authNoneRouter.get('/project', getProjectList);
-authNoneRouter.get('/project/:id', getProject);
+// authNoneRouter.get('/project', getProjectList);
+// authNoneRouter.get('/project/:id', getProject);
 authUserRouter.get('/project', getProjectList);
 authUserRouter.get('/project/:id', getProject);
 
@@ -174,8 +173,8 @@ authUserRouter.get('/:id/download', downloadFile); // ファイルダウンロ�
 authUserRouter.get('/list', getFileList); // ファイル一覧取得
 authUserRouter.put('/:id/access', updateFileAccess); // ファイルアクセス権の更新
 
-// 認証なしでのメッセージグループ詳細取得
-authNoneRouter.get('/message-group/:messageGroupId', getMessageGroupDetails);
+// // 認証なしでのメッセージグループ詳細取得
+// authNoneRouter.get('/message-group/:messageGroupId', getMessageGroupDetails);
 
 // // ディレクトリツリー系
 // authUserRouter.get('/directory-tree/:path/*', getDirectoryTree); // 最低1階層は必要
@@ -184,24 +183,25 @@ authNoneRouter.get('/message-group/:messageGroupId', getMessageGroupDetails);
 
 // 部管理用
 authUserRouter.get(`/department`, getDepartmentList); // 部署一覧取得
+authUserRouter.get(`/department-member`, getDepartmentMemberForUser); // 部署情報取得
 authAdminRouter.get(`/department`, getDepartment); // 部署情報取得
 authAdminRouter.patch(`/department/:departmentId`, patchDepartmentMember);
 authAdminRouter.get(`/predict-history/:userId`, getDepartmentMemberLog);
 
 
 // Mattermost
-authUserRouter.get(`/mattermost/user`, getMmUsers); // 自作のmattermost user取得API
-authUserRouter.post(`/mattermost/user`, getMmUsers); // 自作のmattermost user取得API
-authUserRouter.get(`/mattermost/timeline`, getTimelines);
-authUserRouter.post(`/mattermost/timeline`, createTimeline);
-authUserRouter.patch(`/mattermost/timeline/:id`, updateTimeline);
-authUserRouter.patch(`/mattermost/timeline/:timelineId/channel/:timelineChannelId`, updateTimelineChannel);
-authUserRouter.delete(`/mattermost/timeline/:id`, deleteTimeline);
-authUserRouter.post(`/mattermost/timeline/to-ai`, mattermostToAi);
+authUserRouter.get(`/mattermost/:providerName/user`, getMmUsers); // 自作のmattermost user取得API
+authUserRouter.post(`/mattermost/:providerName/user`, getMmUsers); // 自作のmattermost user取得API
+authUserRouter.get(`/mattermost/:providerName/timeline`, getTimelines);
+authUserRouter.post(`/mattermost/:providerName/timeline`, createTimeline);
+authUserRouter.patch(`/mattermost/:providerName/timeline/:id`, updateTimeline);
+authUserRouter.patch(`/mattermost/:providerName/timeline/:timelineId/channel/:timelineChannelId`, updateTimelineChannel);
+authUserRouter.delete(`/mattermost/:providerName/timeline/:id`, deleteTimeline);
+authUserRouter.post(`/mattermost/:providerName/timeline/to-ai`, mattermostToAi);
 
 // OAuth2 マスタ
 authUserRouter.get(`/oauth/account`, getOAuthAccountList);
-authUserRouter.get(`/oauth/account/:provider`, getOAuthAccount);
+authUserRouter.get(`/oauth/account/:providerType/:providerName`, getOAuthAccount);
 // OAuth2 API連携（クライアント側のApiInterceptorと連動しているので、必ず二つ目のパスを:providerにしておくこと）
 authUserRouter.use('/oauth/api', authOAuthRouter);
 
@@ -211,47 +211,43 @@ authUserRouter.delete('/oauth/api-keys/:provider/:id', deleteApiKey);
 
 authOAuthRouter.use(authenticateOAuthUser);
 // authUserRouter.get(`/proxy/mattermost/websocket`, getOAuthApiWebSocketProxy);
-authOAuthRouter.get(`/proxy/:provider/*`, getOAuthApiProxy);
-authOAuthRouter.put(`/proxy/:provider/*`, getOAuthApiProxy);
-authOAuthRouter.post(`/proxy/:provider/*`, getOAuthApiProxy);
-authOAuthRouter.patch(`/proxy/:provider/*`, getOAuthApiProxy);
-authOAuthRouter.delete(`/proxy/:provider/*`, getOAuthApiProxy);
-// authOAuthRouter.options(`/proxy/:provider/*`, getOAuthApiProxy);  // 利かない
-authOAuthRouter.get(`/basic-api/:provider/*`, getOAuthApiProxy);
-authOAuthRouter.post(`/basic-api/:provider/*`, getOAuthApiProxy);
+authOAuthRouter.get(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);
+authOAuthRouter.put(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);
+authOAuthRouter.post(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);
+authOAuthRouter.patch(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);
+authOAuthRouter.delete(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);
+// authOAuthRouter.options(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);  // 利かない
+authOAuthRouter.get(`/basic-api/:providerType/:providerName/*`, getOAuthApiProxy);
+authOAuthRouter.post(`/basic-api/:providerType/:providerName/*`, getOAuthApiProxy);
 
 // gitlab
 // authOAuthRouter.post(`/gitlab/:provider/files/:gitlabProjectId`, gitlab.fetchCommit);
-authOAuthRouter.post(`/gitlab/:provider/files/:gitlabProjectId/:refType/*`, gitlab.fetchCommit);
+authOAuthRouter.post(`/basic-api/gitlab/:providerName/files/:gitlabProjectId/:refType/*`, gitlab.fetchCommit);
 // gitea
 // authOAuthRouter.post(`/gitea/:provider/files/:owner/:repo`, gitea.fetchCommit);
-authOAuthRouter.post(`/gitea/:provider/files/:owner/:repo/:refType/*`, gitea.fetchCommit);
+authOAuthRouter.post(`/basic-api/gitea/:providerName/files/:owner/:repo/:refType/*`, gitea.fetchCommit);
 
 // box
-authOAuthRouter.get(`/box/:provider/2.0/:types/:itemId`, boxApiItem); // folder用
-authOAuthRouter.get(`/box/:provider/2.0/:types/:itemId/items`, boxApiItem); // collections用
-authOAuthRouter.get(`/box/:provider/2.0/collections`, boxApiCollection);
-authOAuthRouter.post(`/box/:provider/2.0/collections`, upsertBoxApiCollection);
-authOAuthRouter.post(`/box/:provider/2.0/files/content`, boxUpload);
-authOAuthRouter.get(`/box/:provider/2.0/files/:fileId/content`, boxDownload);
-authOAuthRouter.post(`/box/:provider/2.0/files/:fileId/content`, boxUpload);
+authOAuthRouter.get(`/custom-api/box/:providerName/2.0/:types/:itemId`, boxApiItem); // folder用
+authOAuthRouter.get(`/custom-api/box/:providerName/2.0/:types/:itemId/items`, boxApiItem); // collections用
+authOAuthRouter.get(`/custom-api/box/:providerName/2.0/collections`, boxApiCollection);
+authOAuthRouter.post(`/custom-api/box/:providerName/2.0/collections`, upsertBoxApiCollection);
+authOAuthRouter.post(`/custom-api/box/:providerName/2.0/files/content`, boxUpload);
+authOAuthRouter.get(`/custom-api/box/:providerName/2.0/files/:fileId/content`, boxDownload);
+authOAuthRouter.post(`/custom-api/box/:providerName/2.0/files/:fileId/content`, boxUpload);
 
-authAdminRouter.post(`/ext-api-provider/:type`, upsertOAuthProvider); // 
+authNoneRouter.get('/:tenantKey/ext-api-providers', getApiProviders);
 authUserRouter.get('/ext-api-providers', getApiProviders);
-authUserRouter.get('/ext-api-provider/id/:id', getApiProviderById);
-authUserRouter.get('/ext-api-provider/provider/:provider', getApiProviderByProvider);
-// authUserRouter.get('/ext-api-provider/type/:type/uri/:uriBase', getApiProviderByTypeAndUri);
-authAdminRouter.post('/ext-api-provider', createApiProvider);
-authAdminRouter.put('/ext-api-provider/:id', updateApiProvider);
+authAdminRouter.post('/ext-api-provider', upsertApiProvider);
+authAdminRouter.put('/ext-api-provider/:id', upsertApiProvider);
 authAdminRouter.delete('/ext-api-provider/:id', deleteApiProvider);
-authAdminRouter.patch('/ext-api-provider/:id/oauth2', updateOAuth2Config);
-authAdminRouter.delete('/ext-api-provider/:id/oauth2', deleteOAuth2Config);
 
-authUserRouter.get('/tenant/my', getMyTenant);
-authUserRouter.get('/tenant/:id', getTenantById);
-authMaintainerRouter.get('/tenants', getTenants);
-authMaintainerRouter.get('/tenant/stats', getTenantStats);
-authMaintainerRouter.post('/tenant/', createTenant);
-authMaintainerRouter.put('/tenant/:id', updateTenant);
-authMaintainerRouter.patch('/tenant/:id/active', toggleTenantActive);
-authMaintainerRouter.delete('/tenant/:id', deleteTenant);
+authAdminRouter.get(`/ext-api-provider-templates`, getApiProviderTemplates); // 
+authMaintainerRouter.post('/ext-api-provider-template', upsertApiProviderTemplate); //
+authMaintainerRouter.put('/ext-api-provider-template/:id', upsertApiProviderTemplate); //
+authMaintainerRouter.delete('/ext-api-provider-template/:id', deleteApiProviderTemplate); //
+
+authMaintainerRouter.get('/tenants', getTenants); // テナント一覧取得
+authMaintainerRouter.post('/tenants', upsertTenant); // テナント登録・更新
+authMaintainerRouter.put('/tenants/:tenantKey', upsertTenant); // テナント登録・更新
+authMaintainerRouter.delete('/tenants/:tenantKey', deactivateTenant); // テナント無効化

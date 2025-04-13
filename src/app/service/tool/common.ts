@@ -437,6 +437,7 @@ export function commonFunctionDefinitions(
                 const newLabel = `${label}-call_ai-${model}`;
                 // レスポンス返した後にゆるりとヒストリーを更新しておく。
                 const history = new PredictHistoryWrapperEntity();
+                history.tenantKey = req.info.user.tenantKey;
                 history.connectionId = connectionId;
                 history.streamId = streamId;
                 history.messageId = message.id;

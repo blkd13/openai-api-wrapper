@@ -12,17 +12,17 @@ import { getOAuthAccountForTool, reform } from "./common.js";
 import { GiteaRepository } from "../api/api-gitea.js";
 
 // 1. 関数マッピングの作成
-export async function giteaFunctionDefinitions(providerSubName: string,
+export async function giteaFunctionDefinitions(providerName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
-    const provider = `gitea-${providerSubName}`;
+    const provider = `gitea-${providerName}`;
     return [
         {
             info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリ検索`, },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_search_repos`,
+                    name: `gitea_${providerName}_search_repos`,
                     description: `Giteaでリポジトリを検索`,
                     parameters: {
                         type: 'object',
@@ -86,7 +86,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリのコミット履歴`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_repository_commits`,
+                    name: `gitea_${providerName}_repository_commits`,
                     description: `指定したプロジェクトのコミット履歴を取得`,
                     parameters: {
                         type: 'object',
@@ -175,7 +175,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリのブランチ/タグ一覧`, },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_repository_refs`,
+                    name: `gitea_${providerName}_repository_refs`,
                     description: `指定したプロジェクトのブランチまたはタグ一覧を取得`,
                     parameters: {
                         type: 'object',
@@ -237,7 +237,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `コミット間の差分を取得`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_repository_compare`,
+                    name: `gitea_${providerName}_repository_compare`,
                     description: `指定したプロジェクトの2つのコミット（ブランチやタグ）間の差分を取得`,
                     parameters: {
                         type: 'object',
@@ -302,7 +302,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `特定コミットの詳細`, },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_repository_commit`,
+                    name: `gitea_${providerName}_repository_commit`,
                     description: `指定したプロジェクトの特定のコミット詳細と変更内容を取得`,
                     parameters: {
                         type: 'object',
@@ -352,7 +352,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
         //     info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリ全ファイル一覧を取得`, },
         //     definition: {
         //         type: 'function', function: {
-        //             name: `gitea_${providerSubName}_repository_all_file_list`,
+        //             name: `gitea_${providerName}_repository_all_file_list`,
         //             description: `指定したリポジトリの全ファイルの一覧を取得`,
         //             parameters: {
         //                 type: 'object',
@@ -423,7 +423,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
         //     info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリ全ファイル取得`, },
         //     definition: {
         //         type: 'function', function: {
-        //             name: `gitea_${providerSubName}_get_all_repository_files`,
+        //             name: `gitea_${providerName}_get_all_repository_files`,
         //             description: `指定したリポジトリの全ファイル内容を一度に取得`,
         //             parameters: {
         //                 type: 'object',
@@ -591,7 +591,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `課題検索`, },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_search_issues`,
+                    name: `gitea_${providerName}_search_issues`,
                     description: `Giteaで課題（Issue）を検索`,
                     parameters: {
                         type: 'object',
@@ -672,7 +672,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `自分のリポジトリ一覧`, },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_my_repos`,
+                    name: `gitea_${providerName}_my_repos`,
                     description: `自分のリポジトリ一覧を取得`,
                     parameters: {
                         type: 'object',
@@ -713,7 +713,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリの課題一覧`, },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_repo_issues`,
+                    name: `gitea_${providerName}_repo_issues`,
                     description: `指定したリポジトリの課題（Issue）一覧を取得`,
                     parameters: {
                         type: 'object',
@@ -779,7 +779,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリのプルリクエスト一覧`, },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_repo_pulls`,
+                    name: `gitea_${providerName}_repo_pulls`,
                     description: `指定したリポジトリのプルリクエスト一覧を取得`,
                     parameters: {
                         type: 'object',
@@ -833,11 +833,11 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             }
         },
         {
-            info: { group: provider, isActive: true, isInteractive: false, label: `gitea-${providerSubName}：自分のユーザー情報`, },
+            info: { group: provider, isActive: true, isInteractive: false, label: `gitea-${providerName}：自分のユーザー情報`, },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_user_info`,
-                    description: `gitea-${providerSubName}：自分のユーザー情報`,
+                    name: `gitea_${providerName}_user_info`,
+                    description: `gitea-${providerName}：自分のユーザー情報`,
                     parameters: { type: 'object', properties: {}, }
                 }
             },
@@ -856,7 +856,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_file_content`,
+                    name: `gitea_${providerName}_file_content`,
                     description: `指定したリポジトリからファイル内容を取得`,
                     parameters: {
                         type: 'object',
@@ -939,7 +939,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリファイル内容取得`, responseType: 'markdown' },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_file_content_ai_summary`,
+                    name: `gitea_${providerName}_file_content_ai_summary`,
                     description: `指定したリポジトリからファイル内容のAI要約を取得`,
                     parameters: {
                         type: 'object',
@@ -1029,6 +1029,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
                         const newLabel = `${label}-call_ai-${inDto.args.model}`;
                         // レスポンス返した後にゆるりとヒストリーを更新しておく。
                         const history = new PredictHistoryWrapperEntity();
+                        history.tenantKey = req.info.user.tenantKey;
                         history.connectionId = connectionId;
                         history.streamId = streamId;
                         history.messageId = message.id;
@@ -1073,7 +1074,7 @@ export async function giteaFunctionDefinitions(providerSubName: string,
             info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリファイル一覧取得（ls風）`, responseType: 'text' },
             definition: {
                 type: 'function', function: {
-                    name: `gitea_${providerSubName}_repository_tree`,
+                    name: `gitea_${providerName}_repository_tree`,
                     description: `指定したリポジトリ内のファイルとディレクトリ一覧をls形式で取得`,
                     parameters: {
                         type: 'object',

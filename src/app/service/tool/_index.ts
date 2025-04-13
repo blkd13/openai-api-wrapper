@@ -16,12 +16,12 @@ export async function functionDefinitions(
     req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
     const functionDefinitions = [
-        ...await mattermostFunctionDefinitions(obj, req, aiApi, connectionId, streamId, message, label),
-        ...await boxFunctionDefinitions(obj, req, aiApi, connectionId, streamId, message, label),
-        ...await confluenceFunctionDefinitions('', obj, req, aiApi, connectionId, streamId, message, label),
-        ...await jiraFunctionDefinitions('', obj, req, aiApi, connectionId, streamId, message, label),
-        ...await giteaFunctionDefinitions('local', obj, req, aiApi, connectionId, streamId, message, label),
-        ...await gitlabFunctionDefinitions('local', obj, req, aiApi, connectionId, streamId, message, label),
+        ...await mattermostFunctionDefinitions('sample', obj, req, aiApi, connectionId, streamId, message, label),
+        ...await boxFunctionDefinitions('sample', obj, req, aiApi, connectionId, streamId, message, label),
+        ...await confluenceFunctionDefinitions('sample', obj, req, aiApi, connectionId, streamId, message, label),
+        ...await jiraFunctionDefinitions('sample', obj, req, aiApi, connectionId, streamId, message, label),
+        ...await giteaFunctionDefinitions('sample', obj, req, aiApi, connectionId, streamId, message, label),
+        ...await gitlabFunctionDefinitions('sample', obj, req, aiApi, connectionId, streamId, message, label),
         ...commonFunctionDefinitions(obj, req, aiApi, connectionId, streamId, message, label),
     ].map(_func => {
         const func = _func as MyToolType;

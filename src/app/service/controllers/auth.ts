@@ -7,7 +7,7 @@ import nodemailer from 'nodemailer';
 import { Request, Response } from 'express';
 
 import { InviteRequest, UserRequest } from '../models/info.js';
-import { UserEntity, InviteEntity, LoginHistoryEntity, UserRoleType, DepartmentMemberEntity, DepartmentRoleType, DepartmentEntity, UserStatus, SessionEntity, OAuthAccountEntity, OAuthAccountStatus, TenantEntity, ApiProviderEntity, OAuth2Config } from '../entity/auth.entity.js';
+import { UserEntity, InviteEntity, LoginHistoryEntity, UserRoleType, DepartmentMemberEntity, DepartmentRoleType, DepartmentEntity, UserStatus, SessionEntity, OAuthAccountEntity, OAuthAccountStatus, TenantEntity, ApiProviderEntity, ApiProviderTemplateEntity, ApiProviderAuthType } from '../entity/auth.entity.js';
 import { InviteToken, ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_EXPIRES_IN, REFRESH_TOKEN_JWT_SECRET, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN, RefreshToken, UserToken, API_TOKEN_EXPIRES_IN, API_TOKEN_JWT_SECRET } from '../middleware/authenticate.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { EntityManager, In, MoreThan, Not } from 'typeorm';
@@ -225,18 +225,36 @@ export const genApiToken = [
     }
 ];
 
-export type ExtApiClient = ApiProviderEntity & { axiosWithAuth: Promise<((userId: string) => Promise<AxiosInstance>)>, };
+export type ExtApiClient = ApiProviderEntity & { provider: string, redirectUri: string, pathTop: string, axiosWithAuth: Promise<((userId: string) => Promise<AxiosInstance>)>, };
 const eMas: Record<string, ExtApiClient> = {};
 export async function getExtApiClient(tenantKey: string, provider: string): Promise<ExtApiClient> {
+    const pType = provider.substring(0, provider.indexOf('-'));
+    const pName = provider.substring(provider.indexOf('-') + 1);
     const eKey = `${tenantKey}:${provider}`;
     if (eMas[eKey]) {
         return Promise.resolve(eMas[eKey]);
     } else {
+        // tenant存在チェック
+        // console.log(`getExtApiClient-000 ${tenantKey} ${provider}`);
         const tenant = await ds.getRepository(TenantEntity).findOneByOrFail({ tenantKey, isActive: true });
+        // console.log(`getExtApiClient-111 ${tenantKey} ${provider}`);
         const apiProvider = await ds.getRepository(ApiProviderEntity).findOneByOrFail({
-            tenantKey, provider, isDeleted: false,
+            tenantKey, type: pType, name: pName, isDeleted: false,
         });
+        // console.log(`getExtApiClient-222 ${tenantKey} ${provider}`);
+        // providerTemplate定義はcommonにしかないので、tenantKeyはcommon固定
+        // クライアントシークレットは暗号化されているので復号化する。
+        if (apiProvider.authType === ApiProviderAuthType.OAuth2 && apiProvider.oAuth2Config) {
+            apiProvider.oAuth2Config.clientSecret = decrypt(apiProvider.oAuth2Config.clientSecret);
+        } else { }
+
+        // console.dir(apiProviderTemplate, { depth: null });
+        // console.dir(apiProvider, { depth: null });
+        // console.log(`getExtApiClient-333 ${tenantKey} ${provider}`);
         const apiClient = {
+            provider,
+            redirectUri: `${tenant.siteConfig.oauth2RedirectUriList?.at(0) || ''}`,
+            pathTop: tenant.siteConfig.pathTop || '',
             ...apiProvider,
             axiosWithAuth: getOAuthClient(tenantKey, provider, apiProvider.uriBase),
         } as ExtApiClient;
@@ -256,7 +274,7 @@ export async function getOAuthClient(tenantKey: string, provider: string, uriBas
 
         const oAuthAccount = await getAccessToken(tenantKey, userId, provider);
 
-        console.log(`getOAuthClient ${provider} ${oAuthAccount.accessToken}`);
+        // console.log(`getOAuthClient ${provider} ${oAuthAccount.accessToken}`);
         const headers = {
             Authorization: `Bearer ${decrypt(oAuthAccount.accessToken)}`,
             'Content-Type': 'application/json',
@@ -313,26 +331,34 @@ export const userLoginOAuth2 = [
         // OAuth2認可エンドポイントにリダイレクト
         const { tenantKey, provider } = req.params as { tenantKey: string, provider: string };
         // console.log(`OAuth2 login request: ${provider} ${JSON.stringify(req.query)}`);
-        const e = await getExtApiClient(tenantKey, provider);
-        if (!e || !e.oAuth2Config) {
-            res.status(400).json({ error: 'Provider not found' });
+        const e = {} as ExtApiClient;
+        try {
+            Object.assign(e, await getExtApiClient(tenantKey, provider));
+        } catch (error) {
+            res.status(401).json({ error: `${provider}は認証されていません。` });
+            return;
+        }
+        if (e.oAuth2Config) {
+        } else {
+            res.status(401).json({ error: 'OAuth2 config not found' });
             return;
         }
         // パスによってリダイレクトURIを振り分ける
-        const redirectUri = `${e.oAuth2Config.redirectUri}`;
+        const redirectUri = `${e.redirectUri}`;
 
         const stateSeed = Utils.generateUUID();
         // stateにリダイレクト先URL等の任意情報を埋め込む用の JWT の生成
         const statePack: OAuth2State = { tenantKey, type: 'oauth-state', stateSeed, provider, redirectUri, query: req.query };
         const state = jwt.sign(statePack, OAUTH2_FLOW_STATE_JWT_SECRET as string, { expiresIn: OAUTH2_FLOW_STATE_EXPIRES_IN as ms.StringValue });
         // console.log(e);
-        const authURL = `${e.oAuth2Config.uriBaseAuth || e.uriBase}${e.oAuth2Config.pathAuthorize}?client_id=${e.oAuth2Config.clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${e.oAuth2Config.scope}&state=${state}`;
+        const authURL = `${e.uriBaseAuth || e.uriBase}${e.oAuth2Config.pathAuthorize}?client_id=${e.oAuth2Config.clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${e.oAuth2Config.scope}&state=${state}`;
 
         // ログイン済みの場合、ログイン済みの情報とOAuth2の認証を紐づけるためのJWTの生成
         const pack: OAuth2FlowState = { tenantKey, type: 'oauth-flow', state, provider, redirectUri, accessToken: req.cookies?.access_token, refreshToken: req.cookies?.refresh_token };
         const oauth2FlowState = jwt.sign(pack, OAUTH2_FLOW_STATE_JWT_SECRET as string, { expiresIn: OAUTH2_FLOW_STATE_EXPIRES_IN as ms.StringValue });
         // ID紐づけ用のCookieをセット
-        res.cookie(`oauth_onetime_${provider}`, oauth2FlowState, {
+        // res.cookie(`oauth_onetime_${provider}`, oauth2FlowState, {
+        res.cookie(`oauth_onetime`, oauth2FlowState, {
             maxAge: Utils.parseTimeStringToMilliseconds(OAUTH2_FLOW_STATE_EXPIRES_IN as string), // クッキーの有効期限をミリ秒で指定
             httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
             secure: true, // HTTPSでのみ送信されるようにする
@@ -383,18 +409,26 @@ export function verifyJwt<T>(token: string, secret: string, tokenType?: string):
  * @param res 
  * @returns 
  */
-async function handleOAuthCallback(tm: EntityManager, req: Request, res: Response, xRealIp: string): Promise<UserEntity | null> {
+async function handleOAuthCallback(oAuth2State: OAuth2State, tm: EntityManager, req: Request, res: Response, xRealIp: string): Promise<UserEntity | null> {
     // oauth2FlowState の検証
-    let oAuth2FlowStateToken: string = req.cookies[`oauth_onetime_${req.params.provider}`];
+    // let oAuth2FlowStateToken: string = req.cookies[`oauth_onetime_${req.params.provider}`];
+    let oAuth2FlowStateToken: string = req.cookies[`oauth_onetime`];
     let oAuth2FlowState: OAuth2FlowState;
 
-    res.cookie(`oauth_onetime_${req.params.provider}`, '', { maxAge: 0 }); // 一度使ったら消す
+    // res.cookie(`oauth_onetime_${req.params.provider}`, '', { maxAge: 0 }); // 一度使ったら消す
+    res.cookie(`oauth_onetime`, '', { maxAge: 0 }); // 一度使ったら消す
 
     try {
         const decoded = await verifyJwt<OAuth2FlowState>(oAuth2FlowStateToken, OAUTH2_FLOW_STATE_JWT_SECRET);
         oAuth2FlowState = decoded;
     } catch (err) {
         throw new Error(`OAuth2 flow state verification failed. ${err}`);
+    }
+    // console.log(`oAuth2FlowState: ${JSON.stringify(oAuth2FlowState)}`);
+    // console.log(`oAuth2State: ${JSON.stringify(oAuth2State)}`);
+    if (oAuth2State.provider === oAuth2FlowState.provider) {
+    } else {
+        throw new Error(`Invalid OAuth2 flow state. ${oAuth2FlowState.provider}!=${oAuth2State.provider}`);
     }
 
     // stateおよびtypeチェック
@@ -551,11 +585,20 @@ export const userLoginOAuth2Callback = [
         try {
             decoded = await verifyJwt<OAuth2State>(state, OAUTH2_FLOW_STATE_JWT_SECRET);
         } catch (err) {
-            throw new Error(`OAuth2 flow state verification failed. ${err}`);
+            // throw new Error(`OAuth2 flow state verification failed. ${err}`);
+            res.status(401).json({ error: `OAuth2 flow state verification failed. ${err}` });
+            return;
         }
         const oAuth2FlowState = decoded as OAuth2State;
 
-        const e = await getExtApiClient(oAuth2FlowState.tenantKey, oAuth2FlowState.provider);
+        const e = {} as ExtApiClient;
+        try {
+            Object.assign(e, await getExtApiClient(oAuth2FlowState.tenantKey, oAuth2FlowState.provider));
+        } catch (error) {
+            res.status(401).json({ error: `${oAuth2FlowState.provider}は認証されていません。` });
+            return;
+        }
+
         const tenantKey = oAuth2FlowState.tenantKey;
         const provider = oAuth2FlowState.provider;
 
@@ -569,9 +612,9 @@ export const userLoginOAuth2Callback = [
                 } else { }
 
                 // oAuth2FlowState の検証
-                const authenticatedUser = await handleOAuthCallback(manager, req, res, ipAddress);
+                const authenticatedUser = await handleOAuthCallback(oAuth2FlowState, manager, req, res, ipAddress);
 
-                const postData = { client_id: e.oAuth2Config.clientId, client_secret: e.oAuth2Config.clientSecret, grant_type: 'authorization_code', code: code, redirect_uri: `${e.oAuth2Config.redirectUri}` };
+                const postData = { client_id: e.oAuth2Config.clientId, client_secret: e.oAuth2Config.clientSecret, grant_type: 'authorization_code', code: code, redirect_uri: `${e.redirectUri}` };
                 let params = null, body = null;
                 if (e.oAuth2Config.postType === 'params') {
                     params = postData;
@@ -707,7 +750,7 @@ export const userLoginOAuth2Callback = [
                 if (e.oAuth2Config.requireMailAuth === false) {
                     // 追加メール認証不要
                     // 保存
-                    if (provider === 'mattermost') {
+                    if (provider.startsWith('mattermost-')) {
                         // // mattermost の認証トークンは保存しないようにする。
                         // token.data.access_token = `dummy`;
                         // token.data.refresh_token = `dummy`;
@@ -730,8 +773,8 @@ export const userLoginOAuth2Callback = [
                     // res.redirect(`${e.pathTop}${redirectType}`);
                     try {
                         const decoded = await verifyJwt<OAuth2State>(state, OAUTH2_FLOW_STATE_JWT_SECRET);
-                        console.log(`OAuth2 login success: ${provider} ${oAuthUserInfo.email} ${decoded.query.fromUrl || e.oAuth2Config.pathTop}`);
-                        res.redirect(`${decoded.query.fromUrl || e.oAuth2Config.pathTop}`);
+                        console.log(`OAuth2 login success: ${provider} ${oAuthUserInfo.email} ${decoded.query.fromUrl || e.pathTop}`);
+                        res.redirect(`${decoded.query.fromUrl || e.pathTop}`);
                         // // HTMLをクライアントに送信
                         // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title><meta http-equiv="refresh" content="0; URL=${decoded.query.fromUrl || e.pathTop}"></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
                         return;
@@ -925,6 +968,7 @@ export const logout = [
                     res.sendStatus(401);
                     return;
                 }
+                // console.dir(refreshToken, { depth: null });
                 ds.transaction(async manager => {
                     const currSession = await manager.getRepository(SessionEntity).findOneOrFail({ where: { tenantKey: refreshToken.tenantKey, id: refreshToken.sessionId } });
                     currSession.expiresAt = new Date(); // 即時expire
@@ -1378,12 +1422,19 @@ export const getDepartment = [
                 'meta/llama3-405b-instruct-maas',
                 'claude-3-5-sonnet@20240620',
                 'claude-3-5-sonnet-v2@20241022',
+                'claude-3-7-sonnet@20250219',
                 'gemini-flash-experimental',
                 'gemini-pro-experimental',
                 'gemini-exp-1206',
+                'gemini-2.5-pro',
+                'gemini-2.5-pro-exp',
+                'gemini-2.5-pro-preview',
+                'gemini-2.0-flash',
+                'gemini-2.0-flash-001',
                 'gemini-2.0-flash-exp',
                 'gemini-2.0-flash-thinking-exp-1219',
                 'gemini-2.0-flash-thinking-exp-01-21',
+                'o3-mini',
                 'o1-preview',
                 'o1',
             ].includes(history.model)) {
@@ -1502,6 +1553,23 @@ export const getDepartmentMemberLogForUser = [
           `);
         // 纏める
         res.json({ predictHistory });
+    }
+];
+
+export const getDepartmentMemberForUser = [
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const userId = req.info.user.id;
+        const departmentMemberList = await ds.getRepository(DepartmentMemberEntity).find({
+            select: ['departmentId', 'departmentRole', 'userId', 'name'],
+            where: {
+                tenantKey: req.info.user.tenantKey,
+                userId: userId,
+            },
+        });
+        // 纏める
+        res.json({ departmentMemberList });
     }
 ];
 
@@ -1677,11 +1745,13 @@ export const getOAuthAccountList = [
  * [user認証] OAuth認証済みアカウント一覧を取得
  */
 export const getOAuthAccount = [
-    param('provider').isString().notEmpty(),
+    param('providerType').isString().notEmpty(),
+    param('providerName').isString().notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const provider = req.params.provider as string;
+        const { providerType, providerName } = req.params as { providerType: string, providerName: string };
+        const provider = `${providerType}-${providerName}`;
         try {
             // const accessToken = await getAccessToken(req.info.user.id, provider);
             const oauthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
@@ -1692,7 +1762,7 @@ export const getOAuthAccount = [
             // console.log(oauthAccounts);
             res.json({ oauthAccount });
         } catch (error) {
-            console.error('Error fetching OAuth accounts:', error);
+            // console.error('Error fetching OAuth accounts:', error);
             res.status(401).json({ message: 'OAuth認証済みアカウントが取得できませんでした。' });
         }
     }
