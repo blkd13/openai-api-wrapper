@@ -1268,6 +1268,7 @@ export const upsertMessageWithContents = [
                 messageGroup.previousMessageGroupId = previousMessageGroupId; // 変えちゃダメな気はする。
                 messageGroup.type = messageGroupType;
                 messageGroup.role = role;
+                messageGroup.source = 'user';
                 // messageGroup.argsIndex;
                 messageGroup.updatedBy = req.info.user.id;
                 messageGroup.updatedIp = req.info.ip;
@@ -1477,6 +1478,7 @@ export const upsertMessageWithContents2 = [
                 }
                 messageGroup.type = messageGroupType;
                 messageGroup.role = role;
+                messageGroup.source = 'user';
                 // messageGroup.subSeq; // subSeqは使ってないと思う
                 messageGroup.updatedBy = req.info.user.id;
                 messageGroup.updatedIp = req.info.ip;
@@ -1698,6 +1700,7 @@ export const upsertMessageWithContents3 = [
                 }
                 newMessageGroup.type = type;
                 newMessageGroup.role = role;
+                newMessageGroup.source = 'user';
                 newMessageGroup.updatedBy = req.info.user.id;
                 newMessageGroup.updatedIp = req.info.ip;
                 if (targetType === 'message-group') {
@@ -2061,6 +2064,7 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
             newMessageGroup.previousMessageGroupId = idRemapTable.messageGroup[messageGroup.previousMessageGroupId];
         } else { }
         newMessageGroup.role = messageGroup.role;
+        newMessageGroup.source = messageGroup.source;
         // newMessageGroup.editedRootMessageGroupId = messageGroup.editedRootMessageGroupId;
         newMessageGroup.tenantKey = req.info.user.tenantKey;
         newMessageGroup.createdBy = req.info.user.id;

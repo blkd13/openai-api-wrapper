@@ -808,6 +808,7 @@ export const mattermostToAi = [
                     messageGroup.previousMessageGroupId = previousMessageGroupId; // 変えちゃダメな気はする。
                     messageGroup.type = MessageGroupType.Single;
                     messageGroup.role = msg.role;
+                    messageGroup.source = 'user';
                     const label = msg.message.filter(message => message.type === 'text').map(message => message.text).join('\n').substring(0, 250);
                     // messageGroup.label = label;
 

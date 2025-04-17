@@ -22,6 +22,7 @@ import { Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
 import { OAuthAccountEntity } from '../entity/auth.entity.js';
 import { getAxios, getProxyUrl } from '../../common/http-client.js';
+import { stdout } from 'process';
 
 
 const turndownService = new TurndownService();
@@ -177,30 +178,60 @@ export function commonFunctionDefinitions(
                     }
                 }
             },
-            handler: async (args: { query: string, num?: number, loadContentType?: 'NONE' | 'HTML' | 'MARKDOWN' | 'TEXT' }): Promise<{ title: string, link: string }[]> => {
+            handler: async (args: { query: string, num?: number, loadContentType?: 'NONE' | 'HTML' | 'MARKDOWN' | 'TEXT' }): Promise<{ title: string, link: string, snippet?: string, body?: string }[]> => {
                 const { query, num = 10, loadContentType = 'NONE' } = args;
                 const GOOGLE_CUSTOM_SEARCH_API_KEY = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY || '';
                 const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID || '';
-                const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(GOOGLE_CUSTOM_SEARCH_API_KEY)}&cx=${encodeURIComponent(GOOGLE_CSE_ID)}&q=${encodeURIComponent(query)}&num=${num}`;
-                const response = await (await getAxios(url)).get<CustomSearchResponse>(url);
-                const items = response.data.items || [];
-                // console.dir(response.data, { depth: null });
+
+                // 10件ずつ分割してリクエストするための処理
+                const maxResultsPerRequest = 10; // Google APIの制限
+                const totalRequests = Math.min(Math.ceil(num / maxResultsPerRequest), 100); // 最大100リクエストまで
+                let allItems: any[] = [];
+
+                for (let i = 0; i < totalRequests; i++) {
+                    // 何件目から取得するか (1-indexed)
+                    const start = i * maxResultsPerRequest + 1;
+
+                    // 残りの取得件数が10件未満の場合は残り件数だけリクエスト
+                    const currentNum = Math.min(maxResultsPerRequest, num - (i * maxResultsPerRequest));
+
+                    if (currentNum <= 0) break; // 既に必要な件数を取得済みの場合
+
+                    const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(GOOGLE_CUSTOM_SEARCH_API_KEY)}&cx=${encodeURIComponent(GOOGLE_CSE_ID)}&q=${encodeURIComponent(query)}&num=${currentNum}&start=${start}`;
+                    console.log(`Google Custom Search API URL (${i + 1}/${totalRequests}): ${url}`);
+
+                    try {
+                        const response = await (await getAxios(url)).get<CustomSearchResponse>(url);
+                        const items = response.data.items || [];
+                        allItems = [...allItems, ...items];
+
+                        // 検索結果が期待より少ない場合は早期終了
+                        if (!items.length || items.length < currentNum) {
+                            console.log(`Received fewer results than requested (${items.length}/${currentNum}). Stopping pagination.`);
+                            break;
+                        }
+                    } catch (error) {
+                        console.error(`Error fetching search results for batch ${i + 1}:`, error);
+                        break; // エラーが発生した場合はループを中断
+                    }
+                }
+
+                // 指定された件数に制限
+                allItems = allItems.slice(0, num);
 
                 if (loadContentType === 'NONE' || loadContentType.toUpperCase() === 'NONE') {
-                    return items.map(item => ({ title: item.title, snippet: item.snippet, link: item.link }));
+                    return allItems.map(item => ({ title: item.title, snippet: item.snippet, link: item.link }));
                 } else {
-                    // console.dir(items);
-                    const res = await Promise.all(items.map(async item => {
+                    const res = await Promise.all(allItems.map(async item => {
                         try {
                             const text = await fetchRenderedText(item.link, loadContentType);
                             return { title: item.title, link: item.link, body: text };
                         } catch (e) {
                             console.log('fetchRenderedTextError');
                             console.error(e);
-                            return { title: item.title, link: item.link, body: response.data };
+                            return { title: item.title, link: item.link, body: "コンテンツの取得に失敗しました" };
                         }
                     }));
-                    // console.dir(res);
                     return res;
                 }
             },
@@ -234,7 +265,7 @@ export function commonFunctionDefinitions(
         },
         {
             // TODO ファイル出力とかもできるようにしたい。主に画像だけど。リンクをどっか経由で返しておけばいいカナ的な。
-            info: { group: 'command', isActive: true, isInteractive: true, label: 'Pythonコード実行' },
+            info: { group: 'command', isActive: true, isInteractive: false, label: 'Pythonコード実行', responseType: 'markdown' },
             definition: {
                 type: 'function',
                 function: {
@@ -268,13 +299,31 @@ export function commonFunctionDefinitions(
                     }
                 }
             },
-            handler: async (args: { codeSet: { code: string, fullpath?: string }[], entryPoint?: string, requirements?: string[], pythonVersion?: string }): Promise<{ stdout: string, stderr: string }> => {
+            handler: async (args: { codeSet: { code: string, fullpath?: string }[], entryPoint?: string, requirements?: string[], pythonVersion?: string }): Promise<string> => {
                 const { codeSet, entryPoint = 'script.py', requirements = [], pythonVersion = '3.11' } = args;
                 const execAsync = promisify(exec);
 
                 // 一時ディレクトリのパス（tryブロックの外で定義）
                 const uniqueId = randomUUID();
                 const tmpDir = path.join(os.tmpdir(), `py-docker-${uniqueId}`);
+                const formatter = (obj: { stdout: string, stderr: string }) => {
+                    let stdoutType = 'text';
+                    if (obj.stdout.startsWith('<?xml version="1.0" encoding="utf-8" standalone="no"?>') && obj.stdout.includes('<svg')) {
+                        stdoutType = 'svg';
+                    } else { }
+                    return Utils.trimLines(`
+                        # stdout
+                        
+                        \`\`\`${stdoutType}
+                        ${obj.stdout}
+                        \`\`\`
+    
+                        # stderr
+                        \`\`\`text
+                        ${obj.stderr}
+                        \`\`\`
+                    `);
+                };
 
                 try {
                     // プラットフォームの検出
@@ -283,13 +332,16 @@ export function commonFunctionDefinitions(
                     // 一時ディレクトリの作成
                     await fs.mkdir(tmpDir, { recursive: true });
 
-                    // Pythonスクリプトファイルの作成
-                    for (const codeObj of codeSet) {
-                        const { code, fullpath } = codeObj;
-                        const scriptPath = path.join(tmpDir, fullpath || 'script.py');
-                        // console.log(`Writing Python script to: ${scriptPath}`);
-                        // TODO インデント無視しちゃってるからダメだと思う。本当はmatplotのshowをオーバーライドしてしまうのが正攻法だとは思う。
-                        await fs.writeFile(scriptPath, code.replaceAll(/plt.show()/g, Utils.trimLines(`
+                    let isEntryPointExists = false;
+                    try {
+                        // Pythonスクリプトファイルの作成
+                        for (const codeObj of codeSet) {
+                            const { code, fullpath } = codeObj;
+                            isEntryPointExists = isEntryPointExists || (fullpath === entryPoint);
+                            const scriptPath = path.join(tmpDir, fullpath || 'script.py');
+                            // console.log(`Writing Python script to: ${scriptPath}`);
+                            // TODO インデント無視しちゃってるからダメだと思う。本当はmatplotのshowをオーバーライドしてしまうのが正攻法だとは思う。
+                            await fs.writeFile(scriptPath, code.replaceAll(/plt.show\(\)/g, Utils.trimLines(`
                             # SVG形式でバイト列として保存
                             from io import BytesIO
                             buf = BytesIO()
@@ -298,15 +350,21 @@ export function commonFunctionDefinitions(
 
                             # 標準出力に書き込み
                             svg_content = buf.getvalue().decode('utf-8')
-                            print(svg_content)
+                            # print(svg_content)
 
                             # plt.show()の代わりに使用
                             plt.close()
                         `)));
+                        }
+                    } catch {
+                        return formatter({
+                            stdout: '',
+                            stderr: '入力引数の型が不正です。codeSetは配列で、各要素はオブジェクトである必要があります。',
+                        });
                     }
 
                     // エントリーポイントのフルパス
-                    const scriptPath = path.join(tmpDir, entryPoint);
+                    const scriptPath = path.join(tmpDir, isEntryPointExists ? entryPoint : codeSet[0].fullpath || 'script.py');
                     // console.log(`Entry point script path: ${scriptPath}`);
 
                     // 必要に応じて、requirements.txtファイルも作成
@@ -358,15 +416,16 @@ export function commonFunctionDefinitions(
                     // console.log(`Command: ${command}`);
 
                     // コマンドを実行
-                    return await execAsync(command, { cwd: tmpDir });
+                    const result = await execAsync(command, { cwd: tmpDir });
+                    return formatter(result);
                 } catch (error: any) {
                     console.error('Error executing Python code:', error);
                     // エラーが発生した場合、標準出力と標準エラーを返す
                     // console.error('stdout:', error.stdout);
-                    return {
+                    return formatter({
                         stdout: error.stdout || '',
                         stderr: error.stderr || error.message || '実行時にエラーが発生しました',
-                    };
+                    });
                 } finally {
                     // console.log(`Cleaning up temporary directory: ${tmpDir}`);
                     // 終了後に一時ディレクトリを削除

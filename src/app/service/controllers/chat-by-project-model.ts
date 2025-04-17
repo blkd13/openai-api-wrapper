@@ -728,11 +728,11 @@ export const chatCompletionByProjectModel = [
                     const results: { [messageGroupId: string]: MessageGroupEntity } = {};
 
                     for (const messageGroupId of Object.keys(messageGroupMas)) {
-                        const args = messageGroupMas[messageGroupId];
                         const newMessageGroup = new MessageGroupEntity();
                         newMessageGroup.threadId = messageGroupMas[messageGroupId].threadId;
                         newMessageGroup.type = MessageGroupType.Single;
                         newMessageGroup.role = 'assistant';
+                        newMessageGroup.source = messageArgsSetList.find(inDto => inDto.messageGroup.id === messageGroupId)?.args.model;
                         newMessageGroup.tenantKey = req.info.user.tenantKey;
                         newMessageGroup.createdBy = req.info.user.id;
                         newMessageGroup.createdIp = req.info.ip;
@@ -1060,7 +1060,7 @@ export const chatCompletionByProjectModel = [
 
                         // toolTransactionを保存
                         for (const toolTransaction of toolTransanctionList) {
-                            // console.log(`SAVE_BLOCK:TRAN:toolCallGroupId=${toolTransaction.toolCallId} type=${toolTransaction.toolCall.type}`);
+                            console.log(`SAVE_BLOCK:TRAN:toolCallGroupId=${toolTransaction.toolCallId} type=${JSON.stringify(toolTransaction)}`);
                             const toolCallEntity = new ToolCallPartEntity();
                             toolCallEntity.toolCallGroupId = stock.toolMaster[toolTransaction.toolCallId].toolCallGroupId;
                             toolCallEntity.toolCallId = toolTransaction.toolCallId;
@@ -1252,7 +1252,7 @@ export const chatCompletionByProjectModel = [
                             // console.log('chunk=' + chunk.choices[0].finish_reason + ':' + JSON.stringify(chunk.choices[0]));
                             // finish_reasonがある場合はstockしたtoransactionを全て保存していく
                             // これをstockを溜めるめるループの中でやろうとするとawaitの追い越しでぶっ壊れるのでこの位置でやる。実はこの位置でも追い越しは発生するような気がしてならないが、とりあえずこれでいく。
-                            if (chunk.choices.find(choice => choice.finish_reason)) {
+                            if (chunk.choices.find(choice => choice.finish_reason) || chunk.choices[0].delta.role === 'info' as any) { // infoはすぐcommitしておきたいので先だしする。
                                 // console.log('--------========================contents========================--------');
                                 // console.dir(stock.transaction, { depth: null });
                                 // for (const toolTransaction of stock.toolTransaction) {

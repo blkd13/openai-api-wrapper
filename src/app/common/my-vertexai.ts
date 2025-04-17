@@ -300,7 +300,7 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: 
         // 何も設定しなくてもいいかも。。
         // req.region = 'us-central1';
         // req.resourcePath = `projects/${GCP_PROJECT_ID}/locations/${req.region}/endpoints/openapi/chat/completions`;
-    } else if ((args.model.startsWith('gemini-') && args.model.includes('-exp')) || args.model.startsWith('gemini-2.0-')) { // gemini系のexp（実験版）はus-central1に固定
+    } else if ((args.model.startsWith('gemini-') && args.model.includes('-exp')) || args.model.startsWith('gemini-2')) { // gemini系のexp（実験版）はus-central1に固定
         // 何も設定しなくてもいいかも。。
         // req.region = 'us-central1';
         // req.resourcePath = `projects/${GCP_PROJECT_ID}/locations/${req.region}/endpoints/openapi/chat/completions`;

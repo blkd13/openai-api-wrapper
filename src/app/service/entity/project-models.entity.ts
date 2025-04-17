@@ -316,6 +316,9 @@ export class MessageGroupEntity extends MyBaseEntity {
     @Column({ type: 'integer', default: 0 })
     touchCounter!: number; // タッチカウンター（TypeORMのせいで更新時刻だけを更新したいときに変更されたプロパティが無いと更新が反映されないから）
 
+    @Column({ nullable: true })
+    source?: string; // ソース情報（user/AIモデル名）。本来はnullableにすべきではなかったが後からではどうにもならなかったので。
+
     // @Column({ nullable: true })
     // editedRootMessageGroupId!: string;
 }

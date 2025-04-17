@@ -169,7 +169,7 @@ export const SHORT_NAME: { [key: string]: string } = {
     'o1': 'o1      ',
     'o1-preview': 'o1-pre  ',
     'o3-mini': 'o3-mini ',
-    'o3     ': 'o3      ',
+    'o3': 'o3      ',
     'o4-mini': 'o4-mini ',
     'gpt-4o-2024-05-13': 'gpt4-o  ',
     'gpt-3.5-turbo': 'gpt3-16k',

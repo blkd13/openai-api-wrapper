@@ -155,7 +155,7 @@ export function providerPrediction(model: string, provider?: AiProvider): AiProv
     } else if (model.startsWith('claude-')) {
         return 'anthropic';
         return 'anthropic_vertexai';
-    } else if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3')) {
+    } else if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4')) {
         return 'openai';
         return 'azure';
     } else if (model.startsWith('deepseek-r1-distill-') || model.startsWith('llama-3.3-70b-')) {
@@ -510,7 +510,9 @@ class RunBit {
                     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options: _options }, Utils.genJsonSafer()), {}, (err) => { });
                     // console.log({ idempotencyKey: options.idempotencyKey, stream: options.stream });
                     // なんでか知らんけどazureClientを通すとargs.modelが消えてしまったり、破壊的なことが起こるのでコピーを送る
-                    runPromise = (((args.model === 'o1' || args.model === 'o3-mini') ? azureClient_03 : azureClient_02).chat.completions.create({ ...args }, _options) as APIPromise<Stream<ChatCompletionChunk>>)
+                    runPromise = ((['o1', 'o3-mini', 'o3', 'o4-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano'].includes(args.model)
+                        ? azureClient_03
+                        : azureClient_02).chat.completions.create({ ...args }, _options) as APIPromise<Stream<ChatCompletionChunk>>)
                         .withResponse().then(async (response) => {
                             // < x-ratelimit-remaining-requests: 99
                             // < x-ratelimit-remaining-tokens: 99888
@@ -944,7 +946,7 @@ class RunBit {
                                     isOver128 = content.usageMetadata.totalTokenCount > 128000;
                                 } else { }
                                 Object.assign(usageMetadata, content.usageMetadata);
-                                if (commonArgs.model.startsWith('gemini-2.0-')) {
+                                if (commonArgs.model.startsWith('gemini-2')) {
                                     // gemini-2系からはトークンベースの課金になるので、トークン数を使う。
                                     tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
                                     tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
@@ -1982,7 +1984,7 @@ export class OpenAIApiWrapper {
                         } else {
                             return null;
                         }
-                    }).filter(chunk => !!chunk);
+                    }).filter(chunk => !!chunk) as Chat.ChatCompletionChunk[];
                     // console.log(`infos ${infos.length}`);
                     toolCallsSub.length = 0; // toolCallsAllを空にしておくと動かなくなるけど、なんでこうしたかったんだっけ？    
                     return concat(...infos.map(info => of(info)), of(chunk));
