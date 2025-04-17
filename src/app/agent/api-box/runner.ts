@@ -14,8 +14,9 @@ function getLocalIP() {
     const interfaces = os.networkInterfaces();
     if (interfaces) {
         for (const name of Object.keys(interfaces)) {
-            if (interfaces[name]) {
-                for (const iface of interfaces[name]) {
+            const ifaceList = interfaces[name];
+            if (ifaceList && Array.isArray(ifaceList)) {
+                for (const iface of ifaceList) {
                     // IPv4 かつ内部IPアドレスでないものを探す
                     if (iface.family === 'IPv4' && !iface.internal) {
                         return iface.address;

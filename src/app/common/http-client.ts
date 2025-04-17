@@ -10,7 +10,7 @@ const { PROXY_TYPE = '', PROXY_FIXED_URL = '', PROXY_PAC_URL = '' } = process.en
 
 const proxyMap = new Map<string, string>();
 const noProxyAgent = new Agent({ keepAlive: true });
-const proxyPacMap: { [key: string]: string } = {};
+const proxyPacMap: { [PROXY_PAC_URL: string]: string } = {};
 
 export async function getProxyUrl(targetUrl: string): Promise<string> {
     const urlObject = new URL(targetUrl);
@@ -35,7 +35,7 @@ export async function getProxyUrl(targetUrl: string): Promise<string> {
         } else {
             throw new Error('PROXY_PAC_URL is not valid');
         }
-        proxyPacMap[pacScript] = pacScript;
+        proxyPacMap[PROXY_PAC_URL] = pacScript;
 
         const quickjs = await getQuickJS();
         const FindProxyForURL = createPacResolver(quickjs, pacScript);

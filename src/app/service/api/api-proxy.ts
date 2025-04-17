@@ -19,7 +19,7 @@ export async function getAccessToken(tenantKey: string, userId: string, provider
     // console.log(oAuthAccount.tokenExpiresAt, new Date());
     if (oAuthAccount.tokenExpiresAt && oAuthAccount.tokenExpiresAt < new Date()) {
         if (oAuthAccount.refreshToken && e.oAuth2Config) {
-            console.error('リフレッシュトークンを使って新しいアクセストークンを取得します。',);
+            console.log('リフレッシュトークンを使って新しいアクセストークンを取得します。',);
             // トークンリフレッシュ
             const postData = { client_id: e.oAuth2Config.clientId, client_secret: e.oAuth2Config.clientSecret, grant_type: 'refresh_token', refresh_token: decrypt(oAuthAccount.refreshToken) };
             let params = null, body = null;
