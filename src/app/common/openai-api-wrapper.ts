@@ -721,7 +721,7 @@ class RunBit {
                                     isOver128 = content.usageMetadata.totalTokenCount > 128000;
                                 } else { }
                                 Object.assign(usageMetadata, content.usageMetadata);
-                                if (commonArgs.model.startsWith('gemini-2.0-')) {
+                                if (commonArgs.model.startsWith('gemini-2')) {
                                     // gemini-2系からはトークンベースの課金になるので、トークン数を使う。
                                     tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
                                     tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;

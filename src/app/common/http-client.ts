@@ -1,12 +1,16 @@
 import fs from 'fs/promises';
+import fetch from 'node-fetch';
 import { getQuickJS } from '@tootallnate/quickjs-emscripten';
 import { createPacResolver } from 'pac-resolver';
 import axios, { AxiosHeaders, AxiosInstance, HeadersDefaults, RawAxiosRequestHeaders } from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { Agent } from 'http';
 
 const { PROXY_TYPE = '', PROXY_FIXED_URL = '', PROXY_PAC_URL = '' } = process.env as { PROXY_TYPE: string, PROXY_FIXED_URL: string, PROXY_PAC_URL: string };
 
 const proxyMap = new Map<string, string>();
+const noProxyAgent = new Agent({ keepAlive: true });
+const proxyPacMap: { [key: string]: string } = {};
 
 export async function getProxyUrl(targetUrl: string): Promise<string> {
     const urlObject = new URL(targetUrl);
@@ -16,8 +20,14 @@ export async function getProxyUrl(targetUrl: string): Promise<string> {
         } else { }
 
         let pacScript = '';
-        if (PROXY_PAC_URL.startsWith('http')) {
-            const res = await fetch(PROXY_PAC_URL);
+        if (proxyPacMap[PROXY_PAC_URL]) {
+            pacScript = proxyPacMap[PROXY_PAC_URL];
+        } else if (PROXY_PAC_URL.startsWith('http') || PROXY_PAC_URL.startsWith('https')) {
+            // Fetch the PAC script from the URL
+            const res = await fetch(PROXY_PAC_URL, { agent: noProxyAgent });
+            if (!res.ok) {
+                throw new Error(`Failed to fetch PAC script: ${res.status} ${res.statusText}`);
+            }
             pacScript = await res.text();
         } else if (PROXY_PAC_URL.startsWith('file:')) {
             const path = new URL(PROXY_PAC_URL).pathname;
@@ -25,6 +35,7 @@ export async function getProxyUrl(targetUrl: string): Promise<string> {
         } else {
             throw new Error('PROXY_PAC_URL is not valid');
         }
+        proxyPacMap[pacScript] = pacScript;
 
         const quickjs = await getQuickJS();
         const FindProxyForURL = createPacResolver(quickjs, pacScript);
