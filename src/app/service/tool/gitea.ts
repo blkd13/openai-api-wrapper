@@ -59,7 +59,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { keyword: string, uid?: number, limit: number, page: number, private: boolean }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, page, keyword, uid } = args;
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
@@ -122,7 +122,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { project_id: number, sha?: string, path?: string, limit: number, page: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, sha, path, limit = 20, page = 1 } = args;
 
                 const queryMap = {} as { [key: string]: string };
@@ -214,7 +214,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { project_id: number, ref_type: string, query: string, limit: number, page: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, ref_type = 'branches', query = '', limit = 20, page = 1 } = args;
 
                 // project_idからリポジトリ情報を取得するためのリクエスト
@@ -260,7 +260,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { project_id: number, base: string, head: string }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, base, head } = args;
 
                 // project_idからリポジトリ情報を取得するためのリクエスト
@@ -321,7 +321,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { project_id: number, sha: string }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, sha } = args;
 
                 // project_idからリポジトリ情報を取得するためのリクエスト
@@ -636,7 +636,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { keyword?: string, owner?: string, repo?: string, state?: string, labels?: string, limit: number, page: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, page, state } = args;
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
@@ -695,7 +695,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { limit: number, page: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, page } = args;
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
@@ -755,7 +755,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { owner: string, repo: string, state?: string, labels?: string, limit: number, page: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, page, state, owner, repo } = args;
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上
@@ -817,7 +817,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { owner: string, repo: string, state?: string, limit: number, page: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, page, state, owner, repo } = args;
                 limit = Math.max(Math.min(limit || 10, 50), 1); // 1以上50以下
                 page = Math.max(page || 1, 1); // 1以上

@@ -111,7 +111,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { membership: boolean, per_page: number, page: number, order_by: string, sort: string }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { per_page, page, membership, order_by, sort } = args;
                 per_page = Math.max(Math.min(per_page || 20, 100), 1); // 1以上100以下
                 page = Math.max(page || 1, 1); // 1以上
@@ -168,7 +168,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { project_id: number, ref_name?: string, path?: string, per_page?: number, page?: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, ref_name, path = '', per_page = 20, page = 1 } = args;
                 const queryMap = {} as { [key: string]: string };
                 if (path) queryMap.path = path;
@@ -247,7 +247,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { project_id: number, ref_type: string, search?: string, regex?: string }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, ref_type = 'branches', search, regex, } = args;
 
                 const queryMap = {} as { [key: string]: string };
@@ -296,7 +296,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { project_id: number, from: string, to: string, straight: boolean }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, from, to, straight = true } = args;
 
                 const url = `${e.uriBase}/api/v4/projects/${project_id}/repository/compare?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&straight=${straight}`;
@@ -352,7 +352,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { project_id: number, commit_id: string, stats: boolean }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { project_id, commit_id, stats = true } = args;
 
                 // Get commit details
@@ -493,7 +493,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { project_id: number, state: string, per_page: number, page: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { project_id, state, per_page, page } = args;
                 per_page = Math.max(Math.min(per_page || 20, 100), 1); // 1以上100以下
                 page = Math.max(page || 1, 1); // 1以上
@@ -546,7 +546,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                 }
             },
             handler: async (args: { project_id: number, state: string, per_page: number, page: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { project_id, state, per_page, page } = args;
                 per_page = Math.max(Math.min(per_page || 20, 100), 1); // 1以上100以下
                 page = Math.max(page || 1, 1); // 1以上

@@ -57,7 +57,7 @@ export async function jiraFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { jql: string, maxResults: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { jql, maxResults = 10 } = args;
 
                 // ユーザー情報を取得

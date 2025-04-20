@@ -737,8 +737,12 @@ export const userLoginOAuth2Callback = [
                     oAuthAccount.createdBy = user.id;
                     oAuthAccount.createdIp = ipAddress;
                 }
-                oAuthAccount.accessToken = encrypt(token.data.access_token);
-                oAuthAccount.refreshToken = encrypt(token.data.refresh_token);
+
+                // トークンは暗号化して保存する。
+                token.data.access_token = encrypt(token.data.access_token);
+                token.data.refresh_token = encrypt(token.data.refresh_token);
+                oAuthAccount.accessToken = token.data.access_token;
+                oAuthAccount.refreshToken = token.data.refresh_token;
                 oAuthAccount.tokenBody = JSON.stringify(token.data);
                 // 現在の時刻にexpiresInSeconds（秒）を加算して、有効期限のDateオブジェクトを作成
                 if (token.data.expires_in) {

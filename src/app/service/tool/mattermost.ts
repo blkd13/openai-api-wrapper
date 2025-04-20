@@ -53,7 +53,7 @@ export async function mattermostFunctionDefinitions(
                 }
             },
             handler: async (args: { limit: number, teamName: string, term: string }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit, term } = args;
                 limit = Math.max(Math.min(limit || 50, 200), 1); // 1以上200以下
                 const user_id = req.info.user.id;
@@ -83,7 +83,7 @@ export async function mattermostFunctionDefinitions(
                 }
             },
             handler: async (args: {}): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let url;
                 url = `${e.uriBase}${e.pathUserInfo}`;
                 const result = (await axiosWithAuth.get(url)).data;
@@ -174,7 +174,7 @@ export async function mattermostFunctionDefinitions(
             },
             handler: async (args: { ids: string[], }):
                 Promise<{ name: string, id: string, text: string }[]> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 const { ids } = args;
                 const resultList = await ds.getRepository(MmUserEntity).find({
                     select: ['id', 'username', 'nickname'],
@@ -423,7 +423,7 @@ export async function mattermostFunctionDefinitions(
                 }
             },
             handler: async (args: { channel_id: string, message: string, root_id?: string, file_ids?: string[], props?: any, metadata?: any, set_online?: boolean }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 // クエリパラメータの構築
                 const queryParams = args.set_online !== undefined ? `?set_online=${args.set_online}` : '';
 

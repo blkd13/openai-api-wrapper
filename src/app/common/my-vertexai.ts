@@ -286,6 +286,13 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: 
         ];
     }
 
+    // gemini-2.5-flash-preview-04-17 の場合は、thinking_configを設定する。
+    if (args.model === 'gemini-2.5-flash-preview-04-17') {
+        (req.generationConfig as any).thinking_config = { thinking_budget: 0 };
+    } else if (args.model === 'gemini-2.5-flash-thinking-preview-04-17') {
+        args.model = 'gemini-2.5-flash-preview-04-17';
+    }
+
     // コンテンツキャッシュ
     const cachedContent = (args as any).cachedContent as CachedContent;
     delete (args as any).cachedContent;

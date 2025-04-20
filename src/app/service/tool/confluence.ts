@@ -30,7 +30,7 @@ export async function confluenceFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { id: number }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { id } = args;
 
                 let url, data;
@@ -62,7 +62,7 @@ export async function confluenceFunctionDefinitions(providerSubName: string,
                 }
             },
             handler: async (args: { limit: number, cql: string }): Promise<any> => {
-                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { limit } = args;
                 limit = Math.max(Math.min(limit || 50, 200), 1); // 1以上200以下
 

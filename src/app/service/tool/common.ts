@@ -22,10 +22,10 @@ import { Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
 import { OAuthAccountEntity } from '../entity/auth.entity.js';
 import { getAxios, getProxyUrl } from '../../common/http-client.js';
-import { stdout } from 'process';
 
 
 const turndownService = new TurndownService();
+turndownService.remove(['script', 'style']); // 特定のHTML要素を削除
 
 // puppeteer-extraをインスタンス化
 const puppeteerExtra = new PuppeteerExtra(puppeteer);
@@ -95,10 +95,14 @@ async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOW
 
         // Cloudflareの「お待ちください」画面に対応するための追加の待機
         const cloudflareDetected = await page.evaluate(() => {
-            return document.body.innerText.includes('Checking your browser') ||
-                document.body.innerText.includes('Please wait') ||
-                document.body.innerText.includes('Just a moment') ||
-                document.body.innerText.includes('あなたが人間であることを確認');
+            try {
+                return document.body.innerText.includes('Checking your browser') ||
+                    document.body.innerText.includes('Please wait') ||
+                    document.body.innerText.includes('Just a moment') ||
+                    document.body.innerText.includes('あなたが人間であることを確認');
+            } catch (error) {
+                return false;
+            }
         });
 
         if (cloudflareDetected) {
@@ -108,10 +112,14 @@ async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOW
 
             // 追加：ページが完全に読み込まれるまで待機
             await page.waitForFunction(() => {
-                return !document.body.innerText.includes('Checking your browser') &&
-                    !document.body.innerText.includes('Please wait') &&
-                    !document.body.innerText.includes('Just a moment') &&
-                    !document.body.innerText.includes('あなたが人間であることを確認');
+                try {
+                    return !document.body.innerText.includes('Checking your browser') &&
+                        !document.body.innerText.includes('Please wait') &&
+                        !document.body.innerText.includes('Just a moment') &&
+                        !document.body.innerText.includes('あなたが人間であることを確認');
+                } catch (error) {
+                    return false;
+                }
             }, { timeout: 30000 }).catch(e => {
                 console.log('Still on Cloudflare page after waiting, continuing anyway...');
             });
@@ -123,10 +131,24 @@ async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOW
         // コンテンツの読み込みタイプを設定（デフォルトは'TEXT'）
         ['TEXT', 'HTML', 'MARKDOWN'].includes((loadContentType || '').toUpperCase()) ? (loadContentType = loadContentType.toUpperCase() as any) : (loadContentType = 'TEXT');
         if (loadContentType.toUpperCase() === 'TEXT') {
-            result = await page.evaluate(() => document.body.innerText);
+            result = await page.evaluate(() => {
+                try {
+                    return document.body.innerText;
+                } catch (error) {
+                    console.error('Error while extracting text content:', error);
+                    return '';
+                }
+            });
             result = result.trim();
         } else {
-            const html = await page.evaluate(() => document.documentElement.outerHTML);
+            const html = await page.evaluate(() => {
+                try {
+                    return document.documentElement.outerHTML;
+                } catch (error) {
+                    console.error('Error while extracting HTML content:', error);
+                    return '';
+                }
+            });
             if (loadContentType.toUpperCase() === 'HTML') {
                 result = html;
             } else {
@@ -172,7 +194,7 @@ export function commonFunctionDefinitions(
                         properties: {
                             query: { type: 'string', description: '検索クエリ' },
                             num: { type: 'number', description: '検索結果の最大数', default: 30 },
-                            loadContentType: { type: 'string', description: `コンテンツの読込タイプ（'NONE'/'HTML'/'MARKDOWN'/'TEXT'）`, default: 'NONE' },
+                            loadContentType: { type: 'string', description: `コンテンツの読込タイプ（'NONE'/'MARKDOWN'/'TEXT'）`, default: 'NONE' }, // HTML形式はバーストしがちなので消した。
                         },
                         required: ['query']
                     }
