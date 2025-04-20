@@ -293,7 +293,7 @@ export async function gitFetchCommitId(
     }));
 
     // アップロードしてファイルグループを取得
-    const uploadedFileGroupList = await uploadFileFunction(userId, projectId, contents, fileGroupType, ip, repositoryName, JSON.stringify(descriptionObject));
+    const uploadedFileGroupList = await uploadFileFunction(userId, projectId, contents, fileGroupType, tenantKey, ip, repositoryName, JSON.stringify(descriptionObject));
 
     // 成功
     if (uploadedFileGroupList.length === 1) {
