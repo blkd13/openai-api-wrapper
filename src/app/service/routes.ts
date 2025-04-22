@@ -33,6 +33,7 @@ import {
     threadClone,
     threadGroupClone,
     editMessageWithContents,
+    updateThreadGroupTitleAndDescription,
 } from './controllers/project-models.js';
 
 // import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
@@ -140,6 +141,7 @@ authUserRouter.get('/project/:id', getProject);
 
 // スレッド関連
 authUserRouter.post('/project/:projectId/thread-group', upsertThreadGroup);
+authUserRouter.patch('/project/:projectId/thread-group', updateThreadGroupTitleAndDescription);
 authUserRouter.get('/project/:projectId/thread-group', getThreadGroupList);
 // authUserRouter.get('/thread/:id', getThread);
 // authUserRouter.patch('/thread/:id', updateThread);

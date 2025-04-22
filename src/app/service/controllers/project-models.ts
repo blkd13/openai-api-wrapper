@@ -820,6 +820,80 @@ export const deleteProject = [
 /**
  * [user認証] スレッドグループ作成
  */
+export const updateThreadGroupTitleAndDescription = [
+    param('projectId').isUUID().notEmpty(),
+    body('id').notEmpty().isUUID(),
+    body('title').trim().isString(),
+    body('description').trim().isString(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { id, title, description } = req.body as { id: string, title: string, description: string };
+        const { projectId } = req.params;
+
+        try {
+            let savedThreadGroup;
+            await ds.transaction(async transactionalEntityManager => {
+                // プロジェクトの存在確認
+                const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
+                    where: { tenantKey: req.info.user.tenantKey, id: projectId }
+                });
+
+                const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
+                    where: { tenantKey: req.info.user.tenantKey, id }
+                });
+
+                // TODO なんか権限チェックは適当だから考え直した方がよい。本来はthreadGroupの権限も組み合わせて見るべき
+                let hasPermission = false;
+                switch (project.visibility) {
+                    // スレ立て可否はプロジェクトの公開設定によらず、チームのロールのみで判断
+                    case ProjectVisibility.Default:
+                    case ProjectVisibility.Team:
+                    case ProjectVisibility.Public:
+                    case ProjectVisibility.Login:
+                        // ユーザーがプロジェクトのチームメンバーであるか確認し、ロールを取得
+                        const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
+                            where: {
+                                tenantKey: req.info.user.tenantKey,
+                                teamId: project.teamId,
+                                userId: req.info.user.id
+                            }
+                        });
+
+                        if (teamMember && (teamMember.role === TeamMemberRoleType.Owner || teamMember.role === TeamMemberRoleType.Member)) {
+                            hasPermission = true;
+                        }
+                        break;
+                }
+
+                if (!hasPermission) {
+                    throw new Error('スレッドを作成する権限がありません');
+                }
+
+                // スレッドグループの更新
+                threadGroup.title = title;
+                threadGroup.description = description;
+                threadGroup.updatedBy = req.info.user.id;
+                threadGroup.updatedIp = req.info.ip;
+                savedThreadGroup = await transactionalEntityManager.save(ThreadGroupEntity, threadGroup);
+            });
+            res.status(201).json(savedThreadGroup);
+        } catch (error) {
+            console.error('Error creating thread:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: '指定されたプロジェクトが見つかりません' });
+            } else if ((error as any).message === 'スレッドを作成する権限がありません' || (error as any).message === '不正なスレッド公開設定です') {
+                res.status(403).json({ message: (error as any).message });
+            } else {
+                res.status(500).json({ message: 'スレッドの作成中にエラーが発生しました' });
+            }
+        }
+    }
+];
+
+/**
+ * [user認証] スレッドグループ作成
+ */
 export const upsertThreadGroup = [
     param('projectId').isUUID().notEmpty(),
     body('title').trim().isString(),
@@ -2255,13 +2329,18 @@ export const threadClone = [
 ];
 
 /**
- * [user認証] スレッドのクローン
+ * [user認証] スレッドグループのクローン
  */
 export const threadGroupClone = [
     param('threadGroupId').isUUID().notEmpty(),
+    body('type').optional().isIn(Object.values(ThreadGroupType)),
+    body('title').optional().isString(),
+    body('description').optional().isString(),
+    validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { threadGroupId } = req.params;
+        const { type, title, description } = req.body as { type: ThreadGroupType, title: string, description: string };
 
         try {
             const result = await ds.transaction(async transactionalEntityManager => {
@@ -2276,8 +2355,9 @@ export const threadGroupClone = [
                 // スレッドグループのクローン
                 const newThreadGroup = new ThreadGroupEntity();
                 newThreadGroup.projectId = project.id;
-                newThreadGroup.title = threadGroup.title;
-                newThreadGroup.description = threadGroup.description;
+                newThreadGroup.type = type || threadGroup.type;
+                newThreadGroup.title = title || threadGroup.title;
+                newThreadGroup.description = description || threadGroup.description;
                 newThreadGroup.status = ThreadGroupStatus.Normal; // 新規スレッドグループは常にNormal
                 newThreadGroup.tenantKey = req.info.user.tenantKey;
                 newThreadGroup.createdBy = req.info.user.id;
