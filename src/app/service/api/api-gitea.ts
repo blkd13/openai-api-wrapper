@@ -12,7 +12,7 @@ import { copyFromFirst, gitFetchCommitId } from './git-core.js';
 import { getAxios } from '../../common/http-client.js';
 
 export const fetchCommit = [
-    param('provider').isString().notEmpty(),
+    param('providerName').isString().notEmpty(),
     param('owner').isString().notEmpty(),
     param('repo').isString().notEmpty(),
     param('refType').isIn(['branches', 'tags', 'commits']).optional(),
@@ -21,13 +21,14 @@ export const fetchCommit = [
     async (_req: Request, res: Response) => {
         try {
             const req = _req as OAuthUserRequest;
-            const { provider, owner, repo, refType } = req.params as {
-                provider: string;
+            const { providerName, owner, repo, refType } = req.params as {
+                providerName: string;
                 owner: string;
                 repo: string;
                 refType?: 'branches' | 'tags' | 'commits';
             };
             const { projectId } = req.body as { projectId: string; };
+            const provider = `gitlab-${providerName}`;
 
             // refId は省略可能なので route 定義上 [0] に入る部分を取り出す想定
             const refId = req.params[0] as string | undefined;

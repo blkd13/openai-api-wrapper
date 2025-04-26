@@ -224,10 +224,10 @@ authOAuthRouter.post(`/basic-api/:providerType/:providerName/*`, getOAuthApiProx
 
 // gitlab
 // authOAuthRouter.post(`/gitlab/:provider/files/:gitlabProjectId`, gitlab.fetchCommit);
-authOAuthRouter.post(`/basic-api/gitlab/:providerName/files/:gitlabProjectId/:refType/*`, gitlab.fetchCommit);
+authOAuthRouter.post(`/custom-api/gitlab/:providerName/files/:gitlabProjectId/:refType/*`, gitlab.fetchCommit);
 // gitea
 // authOAuthRouter.post(`/gitea/:provider/files/:owner/:repo`, gitea.fetchCommit);
-authOAuthRouter.post(`/basic-api/gitea/:providerName/files/:owner/:repo/:refType/*`, gitea.fetchCommit);
+authOAuthRouter.post(`/custom-api/gitea/:providerName/files/:owner/:repo/:refType/*`, gitea.fetchCommit);
 
 // box
 authOAuthRouter.get(`/custom-api/box/:providerName/2.0/:types/:itemId`, boxApiItem); // folder用

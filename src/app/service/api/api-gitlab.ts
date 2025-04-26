@@ -11,7 +11,7 @@ import { copyFromFirst, gitFetchCommitId } from './git-core.js';
 import { getAxios } from '../../common/http-client.js';
 
 export const fetchCommit = [
-    param('provider').isString().notEmpty(),
+    param('providerName').isString().notEmpty(),
     param('gitlabProjectId').isNumeric().notEmpty(),
     param('refType').isIn(['branches', 'tags', 'commits']).optional(),
     // param('refId').isString().optional(),
@@ -19,8 +19,9 @@ export const fetchCommit = [
     async (_req: Request, res: Response) => {
         try {
             const req = _req as OAuthUserRequest;
-            const { provider, gitlabProjectId, refType } = req.params as { provider: string, gitlabProjectId: string, refType?: 'branches' | 'tags' | 'commits' };
+            const { providerName, gitlabProjectId, refType } = req.params as { providerName: string, gitlabProjectId: string, refType?: 'branches' | 'tags' | 'commits' };
             const { projectId } = req.body as { projectId: string };
+            const provider = `gitlab-${providerName}`;
 
             const refId = req.params[0] as string | undefined;
 
