@@ -880,7 +880,7 @@ class RunBit {
                     systemInstruction: req.systemInstruction,
                     cachedContent: req.cachedContent as any,
                     generationConfig: req.generationConfig as any,
-                    safetySettings: req.safetySettings,
+                    safetySettings: req.safetySettings as any,
                     toolConfig: req.toolConfig as any,
                     tools: req.tools as any,
                 };
