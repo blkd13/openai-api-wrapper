@@ -136,7 +136,7 @@ async function buildFileGroupBodyMap(
  */
 export type ArgsBuildType = 'threadGroup' | 'thread' | 'messageGroup' | 'message' | 'contentPart';
 export type MessageSet = { threadGroup: ThreadGroupEntity, thread: ThreadEntity, messageGroup: MessageGroupEntity, message: MessageEntity, contentPartList: ContentPartEntity[] };
-export type MessageArgsSet = MessageSet & { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
+export type MessageArgsSet = MessageSet & { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, } & { totalTokens?: number, totalBillableCharacters?: number };
 async function buildArgs(
     tenantKey: string,
     userId: string,
@@ -165,14 +165,21 @@ async function buildArgs(
         return convertKeysToCamelCase(activeMessage);
     };
     const getLatestMessageGroupsByThreadIds = async (threadIds: string[]): Promise<MessageGroupEntity[]> => {
-        const activeGroups = await ds.getRepository(MessageGroupEntity)
+        const subQuery = ds.getRepository(MessageGroupEntity)
             .createQueryBuilder("t")
-            .select("t.*")
-            .addSelect("ROW_NUMBER() OVER (PARTITION BY COALESCE(t.thread_id, t.id::text) ORDER BY t.last_update DESC)", "rn")
-            .where("t.tenant_key =:tenantKey AND t.thread_id IN (:...ids)", { tenantKey, ids: threadIds })
-            .andWhere("rn = :rn", { rn: 1 })
-            .getRawMany()
-            .then(rawData => rawData.filter(row => row.rn === '1')); // フィルタリングをアプリケーション側で実施;
+            .select([
+                "t.*",
+                "ROW_NUMBER() OVER (PARTITION BY COALESCE(t.thread_id, t.id::text) ORDER BY t.last_update DESC) AS rn"
+            ])
+            .where("t.tenant_key = :tenantKey AND t.thread_id IN (:...ids)", { tenantKey, ids: threadIds });
+
+        const activeGroups = await ds.createQueryBuilder()
+            .select("*")
+            .from("(" + subQuery.getQuery() + ")", "sub")
+            .setParameters(subQuery.getParameters())
+            .where("sub.rn = :rn", { rn: 1 })
+            .getRawMany();
+
         const previousIds = new Set(activeGroups.map(g => g.previousMessageGroupId).filter(Boolean));
         return convertKeysToCamelCase(activeGroups.filter(group => !previousIds.has(group.id)));
     };
@@ -241,8 +248,15 @@ async function buildArgs(
         } else if (type === 'thread') {
             threadList = await getActiveThreadsByThreadIds(idList);
             messageGroupList = await getLatestMessageGroupsByThreadIds(threadList.map(t => t.id));
+            // // threadListのIDと同じ順にmessageGroupListを並び替え
+            // messageGroupList = threadList.map(thread =>
+            //     messageGroupList.find(mg => mg.threadId === thread.id)
+            // ).filter((mg): mg is MessageGroupEntity => mg !== undefined);
+            // console.log(messageGroupList);
             tailMessageList = await getLatestMessagesByMessageGroupIds(messageGroupList.map(mg => mg.id));
+            // console.log(tailMessageList);
             threadGroupList = await getActiveThreadGroupsByThreadGroupIds(threadList.map(t => t.threadGroupId));
+            // console.log(threadGroupList);
         } else if (type === 'threadGroup') {
             threadGroupList = await getActiveThreadGroupsByThreadGroupIds(idList);
             threadList = await ds.getRepository(ThreadEntity).find({
@@ -412,6 +426,7 @@ async function buildArgs(
             }, { totalTokens: 0, totalBillableCharacters: 0 });
 
             messageArgsSetList.push({
+                ...messageSet,
                 totalTokens: textTokenCountSum.totalTokens + fileTokenCountSum.totalTokens,
                 totalBillableCharacters: textTokenCountSum.totalBillableCharacters + fileTokenCountSum.totalBillableCharacters,
             } as any); // 面倒なので無理矢理トークン数だけ返す
@@ -594,26 +609,26 @@ async function buildArgs(
         messageArgsSetList.push({ ...messageSet, args: inDto.args, options: inDto.options });
 
         // 無理矢理だが、o系のモデルは出力が苦手なので調整しておく。
-        if (inDto.args.model.startsWith('o1') || inDto.args.model.startsWith('o3')) {
+        if (inDto.args.model.startsWith('o1') || inDto.args.model.startsWith('o3') || inDto.args.model.startsWith('o4')) {
             inDto.args.messages.forEach(message => {
-                if (message.role === 'system') {
-                    // o系は出力が苦手なので調整しておく。
-                    const additionPrompt = Utils.trimLines(`
-                        
-                        ## 標準的な出力フォーマット
-                        
-                        この後、特に指示がない限り以下のフォーマットで出力してください。
-        
-                        - markdown形式
-                        - 数式を書く際はkatexが反応する形式で書いてください（例：$...$）。
-                        - ファイル出力する際はブロックの先頭にファイル名をフルパスで埋め込んでください（例：\`\`\`typescript src/app/filename.ts\n...\n\`\`\` ）
-                    `);
-                    if (typeof message.content === 'string') {
-                        message.content = message.content + additionPrompt;
-                    } else if (Array.isArray(message.content)) {
-                        message.content.push({ type: 'text', text: additionPrompt });
-                    }
-                } else { }
+                // if (message.role === 'system') {
+                //     // o系は出力が苦手なので調整しておく。
+                //     const additionPrompt = Utils.trimLines(`
+
+                //         ## 標準的な出力フォーマット
+
+                //         この後、特に指示がない限り以下のフォーマットで出力してください。
+
+                //         - markdown形式
+                //         - 数式を書く際はkatexが反応する形式で書いてください（例：$...$）。
+                //         - ファイル出力する際はブロックの先頭にファイル名をフルパスで埋め込んでください（例：\`\`\`typescript src/app/filename.ts\n...\n\`\`\` ）
+                //     `);
+                //     if (typeof message.content === 'string') {
+                //         message.content = message.content + additionPrompt;
+                //     } else if (Array.isArray(message.content)) {
+                //         message.content.push({ type: 'text', text: additionPrompt });
+                //     }
+                // } else { }
             });
         } else { }
 
@@ -1014,15 +1029,20 @@ export const chatCompletionByProjectModel = [
                     inDto.args.tools = [];
                 }
 
-                // // システムプロンプトは文字列にしておく。
-                // inDto.args.messages.forEach(message => {
-                //     if (message.role === 'system' || message.role === 'assistant' || message.role === 'tool') {
-                //         if (typeof message.content === 'string') {
-                //         } else if (Array.isArray(message.content)) {
-                //             message.content = message.content.filter(content => content.type === 'text').map(content => content.type === 'text' ? content.text : '').join('');
-                //         } else { }
-                //     } else { }
-                // });
+                // システムプロンプトは文字列にしておく。
+                inDto.args.messages.forEach(message => {
+                    if (message.role === 'system' || message.role === 'assistant' || message.role === 'tool') {
+                        if (typeof message.content === 'string') {
+                        } else if (Array.isArray(message.content)) {
+                            message.content = message.content.filter(content => content.type === 'text').map(content => content.type === 'text' ? content.text : '').join('');
+                        } else { }
+                    } else { }
+                    // 変数を代入しておく
+                    if (message.role === 'system' && typeof message.content === 'string') {
+                        message.content = message.content.replaceAll(/\$\{user_name\}/g, JSON.stringify(req.info.user));
+                        message.content = message.content.replaceAll(/\$\{current_datetime\}/g, new Date().toISOString());
+                    } else { }
+                });
 
                 // sockにためてたまったら更新する方式にしないとチャンクの追い越しとかが面倒になるので。。
                 async function saveStock() {
@@ -1448,6 +1468,7 @@ export const geminiCountTokensByProjectModel = [
             let inputCounter = 0; // トークン計測をする必要があるものが何個あるのか。
             // argsを組み立てる
             args.messages = messageList.map(message => {
+                message.role = 'user'; // systemだとトークン計上されないので
                 const _message = {
                     role: message.role,
                     content: [] as ChatCompletionContentPart[],
@@ -1521,6 +1542,43 @@ export const geminiCountTokensByProjectModel = [
                 // inputCounterが0の場合は元々計算済みのものを返却するだけ
                 res.end(JSON.stringify(preTokenCount));
             }
+        } catch (error) {
+            res.status(503).end(Utils.errorFormat(error));
+        }
+    }
+];
+
+/**
+ * 失敗作
+ * [認証不要] トークンカウント
+ * トークンカウントは呼び出し回数が多いので、
+ * DB未保存分のメッセージを未保存のまま処理するようにひと手間かける。
+ */
+export const geminiCountTokensByThread = [
+    body('ids').isArray(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const ids = req.body.ids as string[];
+        try {
+            const result: { id: string, totalTokens: number, totalBillableCharacters: number }[] = [];
+            if (ids.length > 0) {
+                // メッセージIDが指定されていたらまずそれらを読み込む
+                const { messageArgsSetList } = await buildArgs(req.info.user.tenantKey, req.info.user.id, 'thread', ids, 'countOnly');
+                // 指定されたIDの順番に並び替え
+                const messageArgsSetListSorted = ids.map(id => messageArgsSetList.find(m => m.thread.id === id) as MessageArgsSet);
+                // 実体はトークン数だけが返ってくる
+                messageArgsSetListSorted.map(messageArgsSet => {
+                    result.push({
+                        id: messageArgsSet.thread.id,
+                        totalTokens: messageArgsSet.totalTokens || 0,
+                        totalBillableCharacters: messageArgsSet.totalBillableCharacters || 0,
+                    });
+                });
+            } else { }
+
+            // inputCounterが0の場合は元々計算済みのものを返却するだけ
+            res.end(JSON.stringify(result));
         } catch (error) {
             res.status(503).end(Utils.errorFormat(error));
         }
