@@ -257,12 +257,12 @@ export function commonFunctionDefinitions(
                 } else {
                     const res = await Promise.all(allItems.map(async item => {
                         try {
-                            const text = await fetchRenderedText(item.link, loadContentType);
-                            return { title: item.title, snippet: item.snippet, link: item.link, favicon: item.favicon, body: text.body };
+                            const html = await fetchRenderedText(item.link, loadContentType);
+                            return { title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: html.body };
                         } catch (error) {
                             console.log('fetchRenderedTextError');
                             console.error(error);
-                            return { title: item.title, snippet: item.snippet, link: item.link, favicon: item.favicon, body: Utils.errorFormat(error) };
+                            return { title: item.title, snippet: item.snippet, link: item.link, favicon: '', body: Utils.errorFormat(error) };
                         }
                     }));
                     return res;
