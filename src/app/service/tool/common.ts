@@ -35,7 +35,7 @@ puppeteerExtra.use(StealthPlugin());
 // 待機用のヘルパー関数
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML'): Promise<{ title: string, body: string }> {
+async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML'): Promise<{ title: string, favicon: string, body: string }> {
     // headless: "new"
     const args = ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors'];
     let proxyUrl = '';
@@ -128,34 +128,37 @@ async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOW
             }
 
             // ページのテキストを取得
-            let result: { title: string, body: string };
+            let result: { title: string, body: string, favicon: string };
 
             // コンテンツの読み込みタイプを設定（デフォルトは'TEXT'）
             ['TEXT', 'HTML', 'MARKDOWN'].includes((loadContentType || '').toUpperCase()) ? (loadContentType = loadContentType.toUpperCase() as any) : (loadContentType = 'TEXT');
             if (loadContentType.toUpperCase() === 'TEXT') {
                 result = await page.evaluate(() => {
                     try {
-                        return { title: document.title, body: document.body.innerText };
+                        const link = document.querySelector('link[rel~="icon"]') as HTMLLinkElement | null;
+                        return { title: document.title, body: document.body.innerText, favicon: link ? link.href : '' };
                     } catch (error) {
                         console.error('Error while extracting text content:', error);
-                        return { title: '', body: '' };
+                        return { title: '', body: '', favicon: '' };
                     }
                 });
             } else {
                 const html = await page.evaluate(() => {
                     try {
-                        return { title: document.title, body: document.documentElement.outerHTML };
+                        const link = document.querySelector('link[rel~="icon"]') as HTMLLinkElement | null;
+                        return { title: document.title, body: document.documentElement.outerHTML, favicon: link ? link.href : '' };
                     } catch (error) {
                         console.error('Error while extracting HTML content:', error);
-                        return { title: '', body: '' };
+                        return { title: '', body: '', favicon: '' };
                     }
                 });
                 if (loadContentType.toUpperCase() === 'HTML') {
-                    result = { title: html.title, body: html.body };
+                    result = { title: html.title, body: html.body, favicon: html.favicon };
                 } else {
                     result = {
                         title: html.title,
                         body: turndownService.turndown(html.body),
+                        favicon: html.favicon,
                     };
                 }
             }
@@ -255,11 +258,11 @@ export function commonFunctionDefinitions(
                     const res = await Promise.all(allItems.map(async item => {
                         try {
                             const text = await fetchRenderedText(item.link, loadContentType);
-                            return { title: item.title, snippet: item.snippet, link: item.link, body: text.body };
+                            return { title: item.title, snippet: item.snippet, link: item.link, favicon: item.favicon, body: text.body };
                         } catch (error) {
                             console.log('fetchRenderedTextError');
                             console.error(error);
-                            return { title: item.title, snippet: item.snippet, link: item.link, body: Utils.errorFormat(error) };
+                            return { title: item.title, snippet: item.snippet, link: item.link, favicon: item.favicon, body: Utils.errorFormat(error) };
                         }
                     }));
                     return res;
@@ -282,16 +285,16 @@ export function commonFunctionDefinitions(
                     }
                 }
             },
-            handler: async (args: { urls: string[], loadContentType: 'HTML' | 'MARKDOWN' | 'TEXT' }): Promise<{ title: string, url: string, body: string }[]> => {
+            handler: async (args: { urls: string[], loadContentType: 'HTML' | 'MARKDOWN' | 'TEXT' }): Promise<{ title: string, url: string, body: string, favicon: string }[]> => {
                 const { urls, loadContentType = 'TEXT' } = args;
                 return Promise.all(urls.map(async url => {
                     try {
                         const html = await fetchRenderedText(url, loadContentType);
-                        return { title: html.title, url, body: html.body };
+                        return { title: html.title, url, body: html.body, favicon: html.favicon };
                     } catch (error) {
                         console.log('fetchRenderedTextError');
                         console.error(error);
-                        return { title: 'error', url, body: Utils.errorFormat(error) };
+                        return { title: 'error', url, body: Utils.errorFormat(error), favicon: '' };
                     }
                 }));
             },
