@@ -2714,6 +2714,7 @@ export const invalidMimeList = [
     // 'application/vnd.ms-excel',
     // 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'application/java-vm',
+    'application/java-archive',
     'application/x-elf',
     // 'application/xml',
     'application/x-msdownload',

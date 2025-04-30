@@ -12,7 +12,7 @@ export const VISION_MODELS = [
     'gemini-2.0-flash-001', 'gemini-2.0-pro-exp-02-05', 'gemini-2.0-flash-lite-preview-02-05', 'gemini-2.0-flash-lite-001',
     'claude-3-7-sonnet', 'claude-3-7-sonnet@20250219', 'claude-3-7-sonnet-thinking@20250219',
     'command-a-03-2025', 'command-r', 'command-r-plus', 'c4ai-aya-expanse-32b', 'c4ai-aya-expanse-8b', 'c4ai-aya-vision-32b', 'c4ai-aya-vision-8b',
-    'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+    'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4.5-preview',
 ];
 export const JSON_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'];
 export const GPT4_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview'];
@@ -47,7 +47,7 @@ export type GPTModels = TiktokenModel
     | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-5-sonnet-20240229' | 'claude-3-opus-20240229' | 'claude-3-5-sonnet-20240620' | 'claude-3-5-sonnet-20241022' | 'claude-3-5-sonnet@20240620' | 'claude-3-5-sonnet-v2@20241022' | 'claude-3-7-sonnet-20250219' | 'claude-3-7-sonnet-thinking-20250219' | 'claude-3-7-sonnet' | 'claude-3-7-sonnet-thinking@20250219'
     | 'deepseek-coder' | 'deepseek-chat'
     | 'command-a-03-2025' | 'command-r' | 'command-r-plus' | 'c4ai-aya-expanse-32b' | 'c4ai-aya-expanse-8b' | 'c4ai-aya-vision-32b' | 'c4ai-aya-vision-8b'
-    | 'o4-mini' | 'o3' | 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-4.1-nano'
+    | 'o4-mini' | 'o3' | 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-4.1-nano' | 'gpt-4.5-preview'
     ;
 
 export type AiProvider = 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai' | 'anthropic_vertexai' | 'openapi_vertexai' | 'cerebras' | 'cohere' | 'gemini';
@@ -61,11 +61,12 @@ export const COST_TABLE: { [key: string]: { prompt: number, completion: number }
     'gpt4-32k': { prompt: 0.06000000, completion: 0.120000, },
     'gpt4-vis': { prompt: 0.01000000, completion: 0.030000, },
     'gpt4-128': { prompt: 0.01000000, completion: 0.030000, },
-    'gpt4-o  ': { prompt: 0.00500000, completion: 0.015000, },
+    'gpt4-o  ': { prompt: 0.00250000, completion: 0.010000, },
     'gpt4-om ': { prompt: 0.00015000, completion: 0.000600, },
     'gpt4.1  ': { prompt: 0.00200000, completion: 0.008000, },
     'gpt4.1m ': { prompt: 0.00040000, completion: 0.001600, },
     'gpt4.1n ': { prompt: 0.00010000, completion: 0.000400, },
+    'gpt45p  ': { prompt: 0.07500000, completion: 0.150000, },
     'o1      ': { prompt: 0.01650000, completion: 0.066000, },
     'o1-pre  ': { prompt: 0.01650000, completion: 0.066000, },
     'o1-pro  ': { prompt: 0.15000000, completion: 0.600000, },
@@ -170,6 +171,7 @@ export const SHORT_NAME: { [key: string]: string } = {
     'gpt-4-0125-preview': 'gpt4-128',
     'gpt-4-vision-preview': 'gpt4-vis',
     'gpt-4o': 'gpt4-o  ',
+    'gpt-4.5-preview': 'gpt45p  ',
     'o1': 'o1      ',
     'o1-preview': 'o1-pre  ',
     'o3-mini': 'o3-mini ',
@@ -272,6 +274,7 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
     'gpt4.1  ': { maxTokens: 32_768, limitRequests: 10000, limitTokens: 1047576, remainingRequests: 10, remainingTokens: 8000, resetRequests: '0ms', resetTokens: '0s', },
     'gpt4.1n ': { maxTokens: 32_768, limitRequests: 10000, limitTokens: 1047576, remainingRequests: 10, remainingTokens: 8000, resetRequests: '0ms', resetTokens: '0s', },
     'gpt4.1m ': { maxTokens: 32_768, limitRequests: 10000, limitTokens: 1047576, remainingRequests: 10, remainingTokens: 8000, resetRequests: '0ms', resetTokens: '0s', },
+    'gpt45p  ': { maxTokens: 16_384, limitRequests: 10000, limitTokens: 1047576, remainingRequests: 10, remainingTokens: 8000, resetRequests: '0ms', resetTokens: '0s', },
     'gpt4-32k': { maxTokens: 4096, limitRequests: 10000, limitTokens: 300000, remainingRequests: 10, remainingTokens: 32000, resetRequests: '0ms', resetTokens: '0s', },
     'gpt4-128': { maxTokens: 4096, limitRequests: 10000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
     'gpt4-vis': { maxTokens: 4096, limitRequests: 10000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },

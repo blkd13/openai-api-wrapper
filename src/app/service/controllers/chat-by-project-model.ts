@@ -1080,7 +1080,7 @@ export const chatCompletionByProjectModel = [
 
                         // toolTransactionを保存
                         for (const toolTransaction of toolTransanctionList) {
-                            console.log(`SAVE_BLOCK:TRAN:toolCallGroupId=${toolTransaction.toolCallId} type=${JSON.stringify(toolTransaction)}`);
+                            // console.log(`SAVE_BLOCK:TRAN:toolCallGroupId=${toolTransaction.toolCallId} type=${JSON.stringify(toolTransaction)}`);
                             const toolCallEntity = new ToolCallPartEntity();
                             toolCallEntity.toolCallGroupId = stock.toolMaster[toolTransaction.toolCallId].toolCallGroupId;
                             toolCallEntity.toolCallId = toolTransaction.toolCallId;

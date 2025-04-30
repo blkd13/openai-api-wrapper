@@ -184,11 +184,11 @@ export function commonFunctionDefinitions(
 ): MyToolType[] {
     return [
         {
-            info: { group: 'web', isActive: true, isInteractive: false, label: 'Google検索', },
+            info: { group: 'web', isActive: true, isInteractive: false, label: 'Web検索', },
             definition: {
                 type: 'function', function: {
-                    name: 'google_search',
-                    description: `Google検索を行う。`,
+                    name: 'web_search',
+                    description: `web検索を行う。`,
                     parameters: {
                         type: 'object',
                         properties: {
