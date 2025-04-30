@@ -35,7 +35,7 @@ puppeteerExtra.use(StealthPlugin());
 // 待機用のヘルパー関数
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML'): Promise<string> {
+async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML'): Promise<{ title: string, body: string }> {
     // headless: "new"
     const args = ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors'];
     let proxyUrl = '';
@@ -52,115 +52,123 @@ async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOW
         console.error(err);
     }
 
-    // ブラウザの起動オプションを設定
-    const browser = await puppeteerExtra.launch({
-        headless: true,
-        // ignoreHTTPSErrors: true,  // SSL証明書エラーを無視
-        args,
-    }); // ヘッドレスブラウザを起動
-
-    console.log(`puppeteer ${proxyUrl ? 'proxy' : 'direct'} url=${url}`);
-    const page = await browser.newPage();
-
-    // ユーザーエージェントを設定（より実際のブラウザに近いものを使用）
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
-
-    // 追加の対策: WebDriverフラグを削除
-    await page.evaluateOnNewDocument(() => {
-        // WebDriverプロパティを削除
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined
-        });
-
-        // 追加のブラウザ指紋対策
-        // プラグインを模倣
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5],
-        });
-
-        // 言語設定を一般的なものに
-        Object.defineProperty(navigator, 'languages', {
-            get: () => ['en-US', 'en'],
-        });
-    });
-
-    // タイムアウトを長めに設定（Cloudflareのチャレンジに対応するため）
-    // page.setDefaultNavigationTimeout(60000); の代わりに
     try {
-        // ページに移動し、ネットワークがアイドル状態になるまで待機
-        await page.goto(url, {
-            waitUntil: 'networkidle2',
-            timeout: 60000 // タイムアウトを60秒に設定
+
+        // ブラウザの起動オプションを設定
+        const browser = await puppeteerExtra.launch({
+            headless: true,
+            // ignoreHTTPSErrors: true,  // SSL証明書エラーを無視
+            args,
+        }); // ヘッドレスブラウザを起動
+
+        console.log(`puppeteer ${proxyUrl ? 'proxy' : 'direct'} url=${url}`);
+        const page = await browser.newPage();
+
+        // ユーザーエージェントを設定（より実際のブラウザに近いものを使用）
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+
+        // 追加の対策: WebDriverフラグを削除
+        await page.evaluateOnNewDocument(() => {
+            // WebDriverプロパティを削除
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+
+            // 追加のブラウザ指紋対策
+            // プラグインを模倣
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+
+            // 言語設定を一般的なものに
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
         });
 
-        // Cloudflareの「お待ちください」画面に対応するための追加の待機
-        const cloudflareDetected = await page.evaluate(() => {
-            try {
-                return document.body.innerText.includes('Checking your browser') ||
-                    document.body.innerText.includes('Please wait') ||
-                    document.body.innerText.includes('Just a moment') ||
-                    document.body.innerText.includes('あなたが人間であることを確認');
-            } catch (error) {
-                return false;
-            }
-        });
+        // タイムアウトを長めに設定（Cloudflareのチャレンジに対応するため）
+        // page.setDefaultNavigationTimeout(60000); の代わりに
+        try {
+            // ページに移動し、ネットワークがアイドル状態になるまで待機
+            await page.goto(url, {
+                waitUntil: 'networkidle2',
+                timeout: 30000 // タイムアウトを30秒に設定
+            });
 
-        if (cloudflareDetected) {
-            console.log('Cloudflare challenge detected, waiting...');
-            // waitForTimeoutの代わりにdelayを使用
-            await delay(10000);
-
-            // 追加：ページが完全に読み込まれるまで待機
-            await page.waitForFunction(() => {
+            // Cloudflareの「お待ちください」画面に対応するための追加の待機
+            const cloudflareDetected = await page.evaluate(() => {
                 try {
-                    return !document.body.innerText.includes('Checking your browser') &&
-                        !document.body.innerText.includes('Please wait') &&
-                        !document.body.innerText.includes('Just a moment') &&
-                        !document.body.innerText.includes('あなたが人間であることを確認');
+                    return document.body.innerText.includes('Checking your browser') ||
+                        document.body.innerText.includes('Please wait') ||
+                        document.body.innerText.includes('Just a moment') ||
+                        document.body.innerText.includes('あなたが人間であることを確認');
                 } catch (error) {
                     return false;
                 }
-            }, { timeout: 30000 }).catch(e => {
-                console.log('Still on Cloudflare page after waiting, continuing anyway...');
             });
-        }
 
-        // ページのテキストを取得
-        let result: string;
+            if (cloudflareDetected) {
+                console.log('Cloudflare challenge detected, waiting...');
+                // waitForTimeoutの代わりにdelayを使用
+                await delay(10000);
 
-        // コンテンツの読み込みタイプを設定（デフォルトは'TEXT'）
-        ['TEXT', 'HTML', 'MARKDOWN'].includes((loadContentType || '').toUpperCase()) ? (loadContentType = loadContentType.toUpperCase() as any) : (loadContentType = 'TEXT');
-        if (loadContentType.toUpperCase() === 'TEXT') {
-            result = await page.evaluate(() => {
-                try {
-                    return document.body.innerText;
-                } catch (error) {
-                    console.error('Error while extracting text content:', error);
-                    return '';
-                }
-            });
-            result = result.trim();
-        } else {
-            const html = await page.evaluate(() => {
-                try {
-                    return document.documentElement.outerHTML;
-                } catch (error) {
-                    console.error('Error while extracting HTML content:', error);
-                    return '';
-                }
-            });
-            if (loadContentType.toUpperCase() === 'HTML') {
-                result = html;
-            } else {
-                result = turndownService.turndown(html);
+                // 追加：ページが完全に読み込まれるまで待機
+                await page.waitForFunction(() => {
+                    try {
+                        return !document.body.innerText.includes('Checking your browser') &&
+                            !document.body.innerText.includes('Please wait') &&
+                            !document.body.innerText.includes('Just a moment') &&
+                            !document.body.innerText.includes('あなたが人間であることを確認');
+                    } catch (error) {
+                        return false;
+                    }
+                }, { timeout: 30000 }).catch(e => {
+                    console.log('Still on Cloudflare page after waiting, continuing anyway...');
+                });
             }
-        }
 
-        await browser.close();
-        return result;
+            // ページのテキストを取得
+            let result: { title: string, body: string };
+
+            // コンテンツの読み込みタイプを設定（デフォルトは'TEXT'）
+            ['TEXT', 'HTML', 'MARKDOWN'].includes((loadContentType || '').toUpperCase()) ? (loadContentType = loadContentType.toUpperCase() as any) : (loadContentType = 'TEXT');
+            if (loadContentType.toUpperCase() === 'TEXT') {
+                result = await page.evaluate(() => {
+                    try {
+                        return { title: document.title, body: document.body.innerText };
+                    } catch (error) {
+                        console.error('Error while extracting text content:', error);
+                        return { title: '', body: '' };
+                    }
+                });
+            } else {
+                const html = await page.evaluate(() => {
+                    try {
+                        return { title: document.title, body: document.documentElement.outerHTML };
+                    } catch (error) {
+                        console.error('Error while extracting HTML content:', error);
+                        return { title: '', body: '' };
+                    }
+                });
+                if (loadContentType.toUpperCase() === 'HTML') {
+                    result = { title: html.title, body: html.body };
+                } else {
+                    result = {
+                        title: html.title,
+                        body: turndownService.turndown(html.body),
+                    };
+                }
+            }
+
+            await browser.close();
+            return result;
+        } catch (error) {
+            console.error('Error during page navigation or processing:', error);
+            await browser.close();
+            throw error;
+        }
     } catch (error) {
-        console.error('Error during page navigation or processing:', error);
-        await browser.close();
+        console.error('Error while fetching rendered text:', error);
         throw error;
     }
 }
@@ -242,16 +250,16 @@ export function commonFunctionDefinitions(
                 allItems = allItems.slice(0, num);
 
                 if (loadContentType === 'NONE' || loadContentType.toUpperCase() === 'NONE') {
-                    return allItems.map(item => ({ title: item.title, snippet: item.snippet, link: item.link }));
+                    return allItems.map(item => ({ title: item.title, snippet: item.snippet, link: item.link, }));
                 } else {
                     const res = await Promise.all(allItems.map(async item => {
                         try {
                             const text = await fetchRenderedText(item.link, loadContentType);
-                            return { title: item.title, link: item.link, body: text };
-                        } catch (e) {
+                            return { title: item.title, snippet: item.snippet, link: item.link, body: text.body };
+                        } catch (error) {
                             console.log('fetchRenderedTextError');
-                            console.error(e);
-                            return { title: item.title, link: item.link, body: "コンテンツの取得に失敗しました" };
+                            console.error(error);
+                            return { title: item.title, snippet: item.snippet, link: item.link, body: Utils.errorFormat(error) };
                         }
                     }));
                     return res;
@@ -274,15 +282,18 @@ export function commonFunctionDefinitions(
                     }
                 }
             },
-            handler: async (args: { urls: string[], loadContentType: 'HTML' | 'MARKDOWN' | 'TEXT' }): Promise<any> => {
+            handler: async (args: { urls: string[], loadContentType: 'HTML' | 'MARKDOWN' | 'TEXT' }): Promise<{ title: string, url: string, body: string }[]> => {
                 const { urls, loadContentType = 'TEXT' } = args;
-                const promises = urls.map(async url => {
-                    // const response = await axios.get(url);
-                    // return response.data;
-                    const text = await fetchRenderedText(url, loadContentType)
-                    return text;
-                });
-                return Promise.all(promises);
+                return Promise.all(urls.map(async url => {
+                    try {
+                        const html = await fetchRenderedText(url, loadContentType);
+                        return { title: html.title, url, body: html.body };
+                    } catch (error) {
+                        console.log('fetchRenderedTextError');
+                        console.error(error);
+                        return { title: 'error', url, body: Utils.errorFormat(error) };
+                    }
+                }));
             },
         },
         {
