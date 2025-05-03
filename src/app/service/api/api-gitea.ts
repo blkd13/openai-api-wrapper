@@ -28,7 +28,7 @@ export const fetchCommit = [
                 refType?: 'branches' | 'tags' | 'commits';
             };
             const { projectId } = req.body as { projectId: string; };
-            const provider = `gitlab-${providerName}`;
+            const provider = `gitea-${providerName}`;
 
             // refId は省略可能なので route 定義上 [0] に入る部分を取り出す想定
             const refId = req.params[0] as string | undefined;

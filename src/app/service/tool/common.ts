@@ -8,9 +8,6 @@ import { randomUUID } from 'crypto';
 import { map, toArray } from 'rxjs';
 import TurndownService from 'turndown';
 // import * as cheerio from 'cheerio';
-import puppeteer from 'puppeteer';
-import { PuppeteerExtra } from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { AxiosInstance } from 'axios';
 
 import { MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
@@ -21,51 +18,23 @@ import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
 import { OAuthAccountEntity } from '../entity/auth.entity.js';
-import { getAxios, getProxyUrl } from '../../common/http-client.js';
+import { getAxios, getPuppeteer } from '../../common/http-client.js';
+import { Browser } from 'puppeteer';
 
 
 const turndownService = new TurndownService();
 turndownService.remove(['script', 'style']); // 特定のHTML要素を削除
 
-// puppeteer-extraをインスタンス化
-const puppeteerExtra = new PuppeteerExtra(puppeteer);
-// StealthPluginを登録
-puppeteerExtra.use(StealthPlugin());
-
 // 待機用のヘルパー関数
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML'): Promise<{ title: string, favicon: string, body: string }> {
-    // headless: "new"
-    const args = ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors'];
-    let proxyUrl = '';
+async function fetchRenderedText(browser: Browser, url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML'): Promise<{ title: string, favicon: string, body: string }> {
     try {
-        proxyUrl = await getProxyUrl(url);
-        if (proxyUrl) {
-            args.push(`--proxy-server=${proxyUrl}`);
-        } else {
-            args.push(`--no-proxy-server`);
-        }
-    } catch (err) {
-        args.push('--no-proxy-server');
-        console.error('getProxyUrlError');
-        console.error(err);
-    }
-
-    try {
-
-        // ブラウザの起動オプションを設定
-        const browser = await puppeteerExtra.launch({
-            headless: true,
-            // ignoreHTTPSErrors: true,  // SSL証明書エラーを無視
-            args,
-        }); // ヘッドレスブラウザを起動
-
-        console.log(`puppeteer ${proxyUrl ? 'proxy' : 'direct'} url=${url}`);
+        console.log(`puppeteer url=${url}`);
         const page = await browser.newPage();
 
         // ユーザーエージェントを設定（より実際のブラウザに近いものを使用）
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36');
 
         // 追加の対策: WebDriverフラグを削除
         await page.evaluateOnNewDocument(() => {
@@ -92,7 +61,7 @@ async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOW
             // ページに移動し、ネットワークがアイドル状態になるまで待機
             await page.goto(url, {
                 waitUntil: 'networkidle2',
-                timeout: 30000 // タイムアウトを30秒に設定
+                timeout: 60000 // タイムアウトを60秒に設定
             });
 
             // Cloudflareの「お待ちください」画面に対応するための追加の待機
@@ -163,11 +132,9 @@ async function fetchRenderedText(url: string, loadContentType: 'TEXT' | 'MARKDOW
                 }
             }
 
-            await browser.close();
             return result;
         } catch (error) {
             console.error('Error during page navigation or processing:', error);
-            await browser.close();
             throw error;
         }
     } catch (error) {
@@ -255,9 +222,10 @@ export function commonFunctionDefinitions(
                 if (loadContentType === 'NONE' || loadContentType.toUpperCase() === 'NONE') {
                     return allItems.map(item => ({ title: item.title, snippet: item.snippet, link: item.link, }));
                 } else {
+                    const browser = await getPuppeteer();
                     const res = await Promise.all(allItems.map(async item => {
                         try {
-                            const html = await fetchRenderedText(item.link, loadContentType);
+                            const html = await fetchRenderedText(browser, item.link, loadContentType);
                             return { title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: html.body };
                         } catch (error) {
                             console.log('fetchRenderedTextError');
@@ -265,6 +233,7 @@ export function commonFunctionDefinitions(
                             return { title: item.title, snippet: item.snippet, link: item.link, favicon: '', body: Utils.errorFormat(error) };
                         }
                     }));
+                    await browser.close();
                     return res;
                 }
             },
@@ -287,9 +256,11 @@ export function commonFunctionDefinitions(
             },
             handler: async (args: { urls: string[], loadContentType: 'HTML' | 'MARKDOWN' | 'TEXT' }): Promise<{ title: string, url: string, body: string, favicon: string }[]> => {
                 const { urls, loadContentType = 'TEXT' } = args;
-                return Promise.all(urls.map(async url => {
+
+                const browser = await getPuppeteer();
+                const res = await Promise.all(urls.map(async url => {
                     try {
-                        const html = await fetchRenderedText(url, loadContentType);
+                        const html = await fetchRenderedText(browser, url, loadContentType);
                         return { title: html.title, url, body: html.body, favicon: html.favicon };
                     } catch (error) {
                         console.log('fetchRenderedTextError');
@@ -297,6 +268,8 @@ export function commonFunctionDefinitions(
                         return { title: 'error', url, body: Utils.errorFormat(error), favicon: '' };
                     }
                 }));
+                await browser.close();
+                return res;
             },
         },
         {

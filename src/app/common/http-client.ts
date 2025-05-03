@@ -6,6 +6,10 @@ import axios, { AxiosHeaders, AxiosInstance, HeadersDefaults, RawAxiosRequestHea
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { Agent } from 'http';
 
+import puppeteer, { Browser } from 'puppeteer';
+import { PuppeteerExtra } from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+
 const { PROXY_TYPE = '', PROXY_FIXED_URL = '', PROXY_PAC_URL = '' } = process.env as { PROXY_TYPE: string, PROXY_FIXED_URL: string, PROXY_PAC_URL: string };
 
 const proxyMap = new Map<string, string>();
@@ -68,4 +72,29 @@ export async function getAxios(targetUrl: string, headers?: RawAxiosRequestHeade
     } else {
         return axios.create({ headers, httpAgent: false, httpsAgent: false, proxy: false, });
     }
+}
+
+
+// puppeteer-extraをインスタンス化
+const puppeteerExtra = new PuppeteerExtra(puppeteer);
+// StealthPluginを登録
+puppeteerExtra.use(StealthPlugin());
+
+export async function getPuppeteer(): Promise<Browser> {
+    const browserArgs = ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors'];
+    if (PROXY_TYPE === 'FIXED') {
+        browserArgs.push(`--proxy-server=${PROXY_FIXED_URL}`);
+    } else if (PROXY_TYPE === 'PAC') {
+        browserArgs.push(`--proxy-pac-url=${PROXY_PAC_URL}`);
+    } else {
+        browserArgs.push(`--no-proxy-server`);
+    }
+
+    // ブラウザの起動オプションを設定
+    const browser = await puppeteerExtra.launch({
+        headless: true,
+        // ignoreHTTPSErrors: true,  // SSL証明書エラーを無視
+        args: browserArgs,
+    }); // ヘッドレスブラウザを起動
+    return browser;
 }
