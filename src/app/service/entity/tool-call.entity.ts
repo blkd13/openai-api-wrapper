@@ -3,6 +3,7 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMan
 import { MyBaseEntity } from './base.js';
 import { ChatCompletionChunk, ChatCompletionToolMessageParam } from 'openai/resources/index.js';
 import { MyToolInfo } from '../../common/openai-api-wrapper.js';
+import { CountTokensResponse } from '@google/generative-ai/dist/generative-ai.js';
 
 export enum ToolCallPartType {
     INFO = 'info',
@@ -55,6 +56,9 @@ export class ToolCallPartEntity extends MyBaseEntity {
 
     @Column({ type: 'jsonb' })
     body!: ToolCallPartBody; // JSON型を保存
+
+    @Column({ nullable: true, type: 'jsonb' })
+    tokenCount?: { [modelId: string]: CountTokensResponse }; // JSON型を保存
 
     @Column({ type: 'enum', enum: ToolCallPartStatus, default: ToolCallPartStatus.Normal })
     status!: ToolCallPartStatus;

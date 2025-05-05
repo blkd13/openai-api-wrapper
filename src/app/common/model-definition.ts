@@ -8,11 +8,20 @@ export const VISION_MODELS = [
     'gemini-flash-experimental', 'gemini-pro-experimental', 'gemini-1.0-pro-vision',
     'claude-3-haiku-20240307', 'claude-3-5-sonnet-20240229', 'claude-3-opus-20240229',
     'claude-3-5-sonnet-20240620', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet@20240620', 'claude-3-5-sonnet-v2@20241022',
-    'o1-preview', 'o1', 'o1-pro', 'o3-mini', 'o4-mini', 'o3',
+    'o1-preview', 'o1', 'o1-pro', 'o3-mini', 'o4-mini', 'o3', 'chatgpt-4o-latest',
     'gemini-2.0-flash-001', 'gemini-2.0-pro-exp-02-05', 'gemini-2.0-flash-lite-preview-02-05', 'gemini-2.0-flash-lite-001',
     'claude-3-7-sonnet', 'claude-3-7-sonnet@20250219', 'claude-3-7-sonnet-thinking@20250219',
     'command-a-03-2025', 'command-r', 'command-r-plus', 'c4ai-aya-expanse-32b', 'c4ai-aya-expanse-8b', 'c4ai-aya-vision-32b', 'c4ai-aya-vision-8b',
-    'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4.5-preview',
+    'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4.5-preview', 'chatgpt-4o-latest',
+    'deepseek-reasoner', 'deepseek-chat',
+    // groq
+    'qwen-qwq-32b',
+    // 'gemma2-9b-it', 'compound-beta', 'compound-beta-mini', /*'mistral-saba-24b',*/
+    // 'deepseek-r1-distill-llama-70b', 'deepseek-r1-distill-qwen-32b',
+    // 'llama-3.1-8b-instant', 'llama-3.3-70b-specdec', 'llama-3.3-70b-versatile',
+    // 'meta-llama/llama-4-maverick-17b-128e-instruct', 'meta-llama/llama-4-scout-17b-16e-instruct',
+    // cerebras
+    // 'llama-3.3-8b', 'llama-3.3-70b', 'llama3.1-8b', 'llama-4-scout-17b-16e-instruct',
 ];
 export const JSON_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'];
 export const GPT4_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview'];
@@ -47,7 +56,7 @@ export type GPTModels = TiktokenModel
     | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-5-sonnet-20240229' | 'claude-3-opus-20240229' | 'claude-3-5-sonnet-20240620' | 'claude-3-5-sonnet-20241022' | 'claude-3-5-sonnet@20240620' | 'claude-3-5-sonnet-v2@20241022' | 'claude-3-7-sonnet-20250219' | 'claude-3-7-sonnet-thinking-20250219' | 'claude-3-7-sonnet' | 'claude-3-7-sonnet-thinking@20250219'
     | 'deepseek-coder' | 'deepseek-chat'
     | 'command-a-03-2025' | 'command-r' | 'command-r-plus' | 'c4ai-aya-expanse-32b' | 'c4ai-aya-expanse-8b' | 'c4ai-aya-vision-32b' | 'c4ai-aya-vision-8b'
-    | 'o4-mini' | 'o3' | 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-4.1-nano' | 'gpt-4.5-preview'
+    | 'o4-mini' | 'o3' | 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-4.1-nano' | 'gpt-4.5-preview' | 'chatgpt-4o-latest'
     ;
 
 export type AiProvider = 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai' | 'anthropic_vertexai' | 'openapi_vertexai' | 'cerebras' | 'cohere' | 'gemini';
@@ -172,6 +181,7 @@ export const SHORT_NAME: { [key: string]: string } = {
     'gpt-4-vision-preview': 'gpt4-vis',
     'gpt-4o': 'gpt4-o  ',
     'gpt-4.5-preview': 'gpt45p  ',
+    'chatgpt-4o-latest': 'gpt4-o  ',
     'o1': 'o1      ',
     'o1-preview': 'o1-pre  ',
     'o3-mini': 'o3-mini ',
@@ -256,13 +266,23 @@ export const SHORT_NAME: { [key: string]: string } = {
     'c4ai-aya-vision-32b': 'aya-v32 ',
     'c4ai-aya-vision-8b': 'aya-v8  ',
     // groq
+    'qwen-qwq-32b': 'g-qwq-32',
+    'gemma2-9b-it': 'g-g2-9bi',
+    'compound-beta': 'g-cmpd-b',
+    'compound-beta-mini': 'g-cmpd-m',
+    'llama-3.1-8b-instant': 'g-l31i8 ',
     'llama-3.3-70b-specdec': 'g-l70-sd',
     'llama-3.3-70b-versatile': 'g-l70-vs',
     'deepseek-r1-distill-llama-70b': 'g-r1-l70',
     'deepseek-r1-distill-qwen-32b': 'g-r1-q32',
+    'meta-llama/llama-4-maverick-17b-128e-instruct': 'g-l4m17i',
+    'meta-llama/llama-4-scout-17b-16e-instruct': 'g-l4s17i',
+    'mistral-saba-24b': 'g-msl-sb',
     // cerebras
     'llama-3.3-8b': 'c-l33l8 ',
     'llama-3.3-70b': 'c-l33l70',
+    'llama3.1-8b': 'c-l31l8 ',
+    'llama-4-scout-17b-16e-instruct': 'c-l4s17i',
 };
 
 // レートリミット情報
@@ -293,9 +313,21 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
     'g-l70-vs': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     'g-r1-l70': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     'g-r1-q32': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+
+    'g-qwq-32': { maxTokens: 128_000, limitRequests: 10000, limitTokens: 800000, remainingRequests: 30, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+    'g-g2-9bi': { maxTokens: 8192, limitRequests: 10000, limitTokens: 800000, remainingRequests: 30, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+    'g-cmpd-b': { maxTokens: 8192, limitRequests: 10000, limitTokens: 800000, remainingRequests: 30, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+    'g-cmpd-m': { maxTokens: 8192, limitRequests: 10000, limitTokens: 800000, remainingRequests: 30, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+    'g-l31i8 ': { maxTokens: 8192, limitRequests: 10000, limitTokens: 800000, remainingRequests: 30, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+    'g-l4m17i': { maxTokens: 8192, limitRequests: 10000, limitTokens: 800000, remainingRequests: 30, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+    'g-l4s17i': { maxTokens: 8192, limitRequests: 10000, limitTokens: 800000, remainingRequests: 30, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+    'g-msl-sb': { maxTokens: 32_000, limitRequests: 10000, limitTokens: 800000, remainingRequests: 30, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+
     // cerebras
     'c-l31l8 ': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     'c-l33l70': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+    'c-l4s17i': { maxTokens: 8192, limitRequests: 30, limitTokens: 100000, remainingRequests: 30, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+
     // mistral
     'msl-7b  ': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
     'msl-87b ': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },

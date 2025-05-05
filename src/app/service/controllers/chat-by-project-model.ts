@@ -1,3 +1,4 @@
+import path from 'path';
 import { promises as fs } from 'fs';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";
@@ -5,7 +6,7 @@ import axios from 'axios';
 import { concat, concatMap, from, map, Observable, of, tap, toArray } from 'rxjs';
 import { ChatCompletionAssistantMessageParam, ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionContentPartText, ChatCompletionCreateParams, ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam, ChatCompletionMessageToolCall, ChatCompletionTool, ChatCompletionToolMessageParam, FileContent } from "openai/resources";
 
-import { MyToolType, aiApi, invalidMimeList, my_vertexai, normalizeMessage, providerPrediction, vertex_ai } from '../../common/openai-api-wrapper.js';
+import { MyToolType, aiApi, calculateTokenCost, getTiktokenEncoder, invalidMimeList, my_vertexai, normalizeMessage, providerPrediction, vertex_ai } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ds } from '../db.js';
@@ -38,7 +39,8 @@ import { functionDefinitions } from '../tool/_index.js';
 import { ToolCallPart, ToolCallPartBody, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallGroupEntity, ToolCallPartInfo, ToolCallPartInfoBody, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
 import { appendToolCallPart } from './tool-call.js';
 
-export const COUNT_TOKEN_MODEL = 'gemini-1.5-flash';
+export const COUNT_TOKEN_MODEL = 'gemini-1.5-flash' as const;
+export const COUNT_TOKEN_OPENAI_MODEL = 'gpt-4o' as const;
 
 export const tokenCountRequestLimitation = new EnhancedRequestLimiter(300);
 
@@ -84,9 +86,10 @@ async function buildFileGroupBodyMap(
                 fileAry.push(await fs.readFile(`${basename}pdf`));
                 // 2個目はメタ情報jsonを読み込む
                 fileAry.push(await fs.readFile(`${basename}json`));
-                // 3個目以降は各ページの画像を読み込む
+                // 3個目以降は各ページの画像と抽出したテキストを読み込む
                 for (let iPage = 1; iPage <= numPages; iPage++) {
                     fileAry.push(await fs.readFile(`${basename}${iPage}.png`));
+                    fileAry.push(await fs.readFile(`${basename}${iPage}.txt`));
                 }
                 return fileAry;
             } else {
@@ -398,37 +401,26 @@ async function buildArgs(
 
         if (mode === 'countOnly') {
             // TODO カウントのみの場合はトークン数だけ返す。超絶無理矢理なので何とかしたい。
-            const textContentList = contentPartList.filter(contentPart => contentPart.type === 'text');
-            const textTokenCountSum = textContentList.reduce((prev, curr) => {
-                if (curr.tokenCount) {
-                    prev.totalTokens += curr.tokenCount[COUNT_TOKEN_MODEL].totalTokens || 0;
-                    prev.totalBillableCharacters += curr.tokenCount[COUNT_TOKEN_MODEL].totalBillableCharacters || 0;
-                } else {
-                    console.log(`text tokenCount is not found in contentPartId=${curr.id}`);
-                }
-                return prev;
-            }, { totalTokens: 0, totalBillableCharacters: 0 });
+            const textContentList = contentPartList.filter(contentPart => contentPart.type === 'text').filter(contentPart => contentPart.tokenCount).map(contentPart => contentPart.tokenCount) as { [model: string]: CountTokensResponse }[];
+            const fileGroupIdList = contentPartList.filter(contentPart => contentPart.type === 'file').map(contentPart => contentPart.linkId).filter(Boolean) as string[];
+            const toolGroupIdList = contentPartList.filter(contentPart => contentPart.type === 'tool').map(contentPart => contentPart.linkId).filter(Boolean) as string[];
 
-            const fileGroupIdList = contentPartList.map(contentPart => contentPart.linkId).filter(Boolean) as string[];
-            // console.log(qb.getSql());
             const fileTokenCountList = await getCountTokenListByFileGroupIdList(tenantKey, fileGroupIdList);
-            const fileTokenCountSum = fileTokenCountList.reduce((prev, curr) => {
-                if (curr.tokenCount) {
-                    if (curr.tokenCount[COUNT_TOKEN_MODEL].totalTokens === undefined) {
-                        console.log(`totalTokens undefined ${curr.fileType} innerPath=${curr.innerPath}`);
+            const toolTokenCountList = await getCountTokenListByToolGroupIdList(tenantKey, toolGroupIdList);
+            const tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters: number } } = {};
+            for (const tokenCount of textContentList.concat(fileTokenCountList).concat(toolTokenCountList)) {
+                for (const model of Object.keys(tokenCount)) {
+                    if (tokenCountSummary[model]) {
+                        tokenCountSummary[model].totalTokens += tokenCount[model].totalTokens;
+                        tokenCountSummary[model].totalBillableCharacters += tokenCount[model].totalBillableCharacters || 0;
+                    } else {
+                        tokenCountSummary[model] = { totalTokens: tokenCount[model].totalTokens, totalBillableCharacters: tokenCount[model].totalBillableCharacters || 0 };
                     }
-                    prev.totalTokens += curr.tokenCount[COUNT_TOKEN_MODEL].totalTokens || 0;
-                    prev.totalBillableCharacters += curr.tokenCount[COUNT_TOKEN_MODEL].totalBillableCharacters || 0;
-                } else {
-                    console.log(`file tokenCount is not found in ${curr.fileType} innerPath=${curr.innerPath}`);
                 }
-                return prev;
-            }, { totalTokens: 0, totalBillableCharacters: 0 });
-
+            }
             messageArgsSetList.push({
                 ...messageSet,
-                totalTokens: textTokenCountSum.totalTokens + fileTokenCountSum.totalTokens,
-                totalBillableCharacters: textTokenCountSum.totalBillableCharacters + fileTokenCountSum.totalBillableCharacters,
+                tokenCountSummary,
             } as any); // 面倒なので無理矢理トークン数だけ返す
             continue;
         } else { }
@@ -458,12 +450,14 @@ async function buildArgs(
                     fileGroupIdChatCompletionContentPartImageMap[content.linkId].forEach(imageAry => {
                         const image = imageAry[0];
                         const mime = image.image_url.url.substring(5, image.image_url.url.indexOf(';'));
-                        if (['application/pdf', ...convertToPdfMimeList
-
-                        ].includes(mime)) {
+                        if (['application/pdf', ...convertToPdfMimeList].includes(mime)) {
+                            const provider = providerPrediction(inDto.args.model)
                             if (inDto.args.model.startsWith('gemini-')) {
                                 // gemini系はPDFのまま突っ込むだけ
                                 message.content.push(image);
+                            } else if (provider === 'openai') {
+                                // gpt系はPDFを画像化して突っ込む。
+                                message.content.push({ type: 'file', file: { file_data: image.image_url.url, filename: content.text } } as ChatCompletionContentPart.File);
                             } else {
                                 // gemini系以外は画像化したものとテキスト抽出したものを組合せる。
                                 const jsonString = Utils.dataUrlToData(imageAry[1].image_url.url);
@@ -663,6 +657,9 @@ export const chatCompletionByProjectModel = [
             toolMaster: { [tool_call_id: string]: { toolCallGroupId: string } },
         }[] = [];
         try {
+            const model = 'gemini-1.5-flash';
+            const generativeModel = vertex_ai.preview.getGenerativeModel({ model, safetySettings: [], });
+
             const idList = id.split('|');
             const { messageArgsSetList } = await buildArgs(req.info.user.tenantKey, req.info.user.id, type, idList);
             // console.dir(messageArgsSetList[0].args.messages, { depth: null });
@@ -1091,6 +1088,25 @@ export const chatCompletionByProjectModel = [
                             toolCallEntity.updatedBy = req.info.user.id;
                             toolCallEntity.createdIp = req.info.ip;
                             toolCallEntity.updatedIp = req.info.ip;
+                            if ([ToolCallPartType.CALL, ToolCallPartType.COMMAND, ToolCallPartType.RESULT].includes(toolTransaction.type)) {
+                                const contentParts = { contents: [{ role: 'model', parts: [{ text: '' }] }] };
+                                if (toolTransaction.type === ToolCallPartType.CALL) {
+                                    contentParts.contents[0].parts[0].text = JSON.stringify(toolTransaction.body.function.arguments);
+                                } else if (toolTransaction.type === ToolCallPartType.COMMAND) {
+                                    contentParts.contents[0].parts[0].text = JSON.stringify(toolTransaction.body.command);
+                                } else if (toolTransaction.type === ToolCallPartType.RESULT) {
+                                    contentParts.contents[0].role = 'tool';
+                                    contentParts.contents[0].parts[0].text = toolTransaction.body.content;
+                                }
+                                const tokenResPromise = generativeModel.countTokens(contentParts);
+
+                                toolCallEntity.tokenCount = toolCallEntity.tokenCount || {};
+
+                                const openaiTokenCount = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(contentParts.contents[0].parts[0].text).length, totalBillableCharacters: 0 };
+                                toolCallEntity.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiTokenCount;
+
+                                toolCallEntity.tokenCount[model] = await tokenResPromise;
+                            } else { }
                             await transactionalEntityManager.save(ToolCallPartEntity, toolCallEntity);
                         }
 
@@ -1398,7 +1414,7 @@ export const chatCompletionByProjectModel = [
     }
 ];
 
-async function getCountTokenListByFileGroupIdList(tenantKey: string, fileGroupIdList: string[]): Promise<FileBodyEntity[]> {
+async function getCountTokenListByFileGroupIdList(tenantKey: string, fileGroupIdList: string[]): Promise<{ [modelId: string]: CountTokensResponse }[]> {
     // 0件の場合は0件で返す
     if (fileGroupIdList.length === 0) { return Promise.resolve([]) }
     // TODO subqueryじゃなくてJOINにすべきと思う。
@@ -1412,7 +1428,7 @@ async function getCountTokenListByFileGroupIdList(tenantKey: string, fileGroupId
                 .where('file.fileGroupId IN (:...fileGroupIds) AND file.isActive = true')
                 .getQuery();
             return 'cast(fileBody.id AS text) IN ' + subQuery +
-                ' AND fileBody.file_type NOT IN (:...invalidMimeList) AND fileBody.tenantKey = :tenantKey';
+                ' AND fileBody.fileType NOT IN (:...invalidMimeList) AND fileBody.tenantKey = :tenantKey';
         })
         .setParameter('tenantKey', tenantKey)
         .setParameter('fileGroupIds', fileGroupIdList)
@@ -1420,7 +1436,25 @@ async function getCountTokenListByFileGroupIdList(tenantKey: string, fileGroupId
 
     // console.log(qb.getSql());
     const fileTokenCountList = await qb.getMany();
-    return fileTokenCountList;
+    return fileTokenCountList.map(fileTokenCount => {
+        return fileTokenCount.tokenCount;
+    }).filter(tokenCount => tokenCount && tokenCount[COUNT_TOKEN_MODEL]) as { [modelId: string]: CountTokensResponse }[];
+}
+
+async function getCountTokenListByToolGroupIdList(tenantKey: string, toolGroupIdList: string[]): Promise<{ [modelId: string]: CountTokensResponse }[]> {
+    // 0件の場合は0件で返す
+    if (toolGroupIdList.length === 0) { return Promise.resolve([]) }
+    // console.log(qb.getSql());
+    const toolTokenCountList = await ds.getRepository(ToolCallPartEntity).find({
+        select: ['tokenCount'],
+        where: {
+            tenantKey: tenantKey,
+            toolCallGroupId: In(toolGroupIdList),
+        },
+    });
+    return toolTokenCountList.map(toolTokenCount => {
+        return toolTokenCount.tokenCount;
+    }).filter(tokenCount => tokenCount && tokenCount[COUNT_TOKEN_MODEL]) as { [modelId: string]: CountTokensResponse }[];
 }
 
 export interface ChatInputArea {
@@ -1450,21 +1484,30 @@ export const geminiCountTokensByProjectModel = [
             // カウントしたいだけだからパラメータは適当でOK。
             const args = { messages: [], model: COUNT_TOKEN_MODEL, temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, } as ChatCompletionCreateParamsStreaming;
 
-            const preTokenCount = { totalTokens: 0, totalBillableCharacters: 0 };
+            // const preTokenCount = { totalTokens: 0, totalBillableCharacters: 0 };
+            const tokenCountSummaryList: { [model: string]: { totalTokens: number, totalBillableCharacters: number } }[] = [];
             if (id) {
                 // メッセージIDが指定されていたらまずそれらを読み込む
                 const { messageArgsSetList } = await buildArgs(req.info.user.tenantKey, req.info.user.id, type, [id], 'countOnly');
+
+                // const tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters: number } } = {};
                 // 実体はトークン数だけが返ってくる
-                (messageArgsSetList as any as { totalTokens: number, totalBillableCharacters: number }[]).forEach(messageArgsSet => {
-                    preTokenCount.totalTokens += messageArgsSet.totalTokens;
-                    preTokenCount.totalBillableCharacters += messageArgsSet.totalBillableCharacters;
+                (messageArgsSetList as any as { tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters: number } } }[]).forEach(messageArgsSet => {
+                    tokenCountSummaryList.push(messageArgsSet.tokenCountSummary);
                 });
-            } else { }
+            } else {
+                // メッセージIDが指定されていない場合は、トークン数を取得するための空のオブジェクトを作成
+                tokenCountSummaryList.push({
+                    [COUNT_TOKEN_MODEL]: { totalTokens: 0, totalBillableCharacters: 0 },
+                    [COUNT_TOKEN_OPENAI_MODEL]: { totalTokens: 0, totalBillableCharacters: 0 }
+                });
+            }
 
             // DB未登録のメッセージ部分の組み立てをする。
             const messageList = req.body as { role: 'user', content: ContentPartEntity[] }[];
 
             const fileGroupIdList: string[] = [];
+            const toolGroupIdList: string[] = [];
             let inputCounter = 0; // トークン計測をする必要があるものが何個あるのか。
             // argsを組み立てる
             args.messages = messageList.map(message => {
@@ -1482,31 +1525,35 @@ export const geminiCountTokensByProjectModel = [
                         inputCounter += (content.text || '').length;
                     } else if (content.type === 'file' && content.linkId) {
                         fileGroupIdList.push(content.linkId);
-                        // fileGroupIdChatCompletionContentPartImageMap[content.fileGroupId].forEach(image => {
-                        //     _message.content.push(image);
-                        // });
+                    } else if (content.type === 'tool' && content.linkId) {
+                        toolGroupIdList.push(content.linkId);
                     }
                 });
                 return _message;
             }).filter(bit => bit && bit.content && bit.content.length > 0) as ChatCompletionMessageParam[];
 
             // ファイルのトークン数を取得
-            if (fileGroupIdList.length > 0) {
-                // console.log(qb.getSql());
-                const fileTokenCountList = await getCountTokenListByFileGroupIdList(req.info.user.tenantKey, fileGroupIdList);
-                fileTokenCountList.reduce((prev, curr, index) => {
-                    if (curr.tokenCount) {
-                        if (curr.tokenCount[COUNT_TOKEN_MODEL].totalTokens === undefined) {
-                            console.log('token undefied', curr.id, curr.fileType, curr.innerPath);
-                        } else { }
-                        prev.totalTokens += curr.tokenCount[COUNT_TOKEN_MODEL].totalTokens || 0;
-                        prev.totalBillableCharacters += curr.tokenCount[COUNT_TOKEN_MODEL].totalBillableCharacters || 0;
-                    } else {
-                        console.log('tokenCount is not found');
-                    }
-                    return prev;
-                }, preTokenCount);
-            } else { }
+            const fileTokenCountList = await getCountTokenListByFileGroupIdList(req.info.user.tenantKey, fileGroupIdList);
+            // ツールのトークン数を取得
+            const toolTokenCountList = await getCountTokenListByToolGroupIdList(req.info.user.tenantKey, toolGroupIdList);
+
+            // 取得したトークン数をまとめる
+            tokenCountSummaryList.forEach(tokenCountSummary => {
+                [...fileTokenCountList, ...toolTokenCountList].forEach(tokenCount => {
+                    Object.keys(tokenCount).forEach(modelId => {
+                        if (tokenCountSummary[modelId]) {
+                            tokenCountSummary[modelId].totalTokens += tokenCount[modelId].totalTokens || 0;
+                            tokenCountSummary[modelId].totalBillableCharacters += tokenCount[modelId].totalBillableCharacters || 0;
+                        } else {
+                            tokenCountSummary[modelId] = {
+                                totalTokens: tokenCount[modelId].totalTokens || 0,
+                                totalBillableCharacters: tokenCount[modelId].totalBillableCharacters || 0,
+                            };
+                        }
+                    });
+                });
+            });
+            // console.dir(tokenCountSummaryList, { depth: null });
 
             if (inputCounter > 0) {
                 // console.dir(args, { depth: null });
@@ -1523,13 +1570,42 @@ export const geminiCountTokensByProjectModel = [
                             });
                             // console.dir(req, { depth: null });
                             generativeModel.countTokens(req).then(tokenObject => {
-                                // console.dir(req, { depth: null });
-                                // console.dir(tokenObject, { depth: null });
-                                tokenObject = tokenObject || { totalTokens: 0, totalBillableCharacters: 0 };
-                                tokenObject.totalTokens = (tokenObject.totalTokens || 0) + preTokenCount.totalTokens;
-                                tokenObject.totalBillableCharacters = (tokenObject.totalBillableCharacters || 0) + preTokenCount.totalBillableCharacters;
-                                countCharsObj.text = (countCharsObj.text || 0) + tokenObject.totalBillableCharacters;
-                                res.end(JSON.stringify(Object.assign(countCharsObj, tokenObject)));
+                                // // console.dir(req, { depth: null });
+                                // // console.dir(tokenObject, { depth: null });
+                                // tokenObject = tokenObject || { totalTokens: 0, totalBillableCharacters: 0 };
+                                // tokenObject.totalTokens = (tokenObject.totalTokens || 0) + preTokenCount.totalTokens;
+                                // tokenObject.totalBillableCharacters = (tokenObject.totalBillableCharacters || 0) + preTokenCount.totalBillableCharacters;
+                                // countCharsObj.text = (countCharsObj.text || 0) + tokenObject.totalBillableCharacters || 0;
+
+                                const prompt = `${args.messages.map(message => ((message.content || []) as ChatCompletionContentPart[]).map(content => content.type === 'text' ? content.text : '').join('\n')).join('\n')}`;
+                                const openaiTokenCount = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(prompt).length, totalBillableCharacters: 0 };
+
+                                const tokenObjMap = {
+                                    [COUNT_TOKEN_MODEL]: {
+                                        totalTokens: tokenObject.totalTokens || 0,
+                                        totalBillableCharacters: tokenObject.totalBillableCharacters || 0,
+                                    },
+                                    [COUNT_TOKEN_OPENAI_MODEL]: {
+                                        totalTokens: openaiTokenCount.totalTokens || 0,
+                                        totalBillableCharacters: openaiTokenCount.totalBillableCharacters || 0,
+                                    },
+                                };
+                                // console.dir(tokenObjMap, { depth: null });
+                                tokenCountSummaryList.forEach(tokenCountSummary => {
+                                    ([COUNT_TOKEN_OPENAI_MODEL, COUNT_TOKEN_MODEL]).forEach(modelId => {
+                                        if (tokenCountSummary[modelId]) {
+                                            tokenCountSummary[modelId].totalTokens += tokenObjMap[modelId].totalTokens || 0;
+                                            tokenCountSummary[modelId].totalBillableCharacters += tokenObjMap[modelId].totalBillableCharacters || 0;
+                                        } else {
+                                            tokenCountSummary[modelId] = {
+                                                totalTokens: tokenObjMap[modelId].totalTokens || 0,
+                                                totalBillableCharacters: tokenObjMap[modelId].totalBillableCharacters || 0,
+                                            };
+                                        }
+                                    });
+                                });
+                                // console.dir(tokenCountSummaryList, { depth: null });
+                                res.end(JSON.stringify(tokenCountSummaryList));
                             }).catch(error => {
                                 res.status(503).end(Utils.errorFormat(error));
                             });
@@ -1540,7 +1616,7 @@ export const geminiCountTokensByProjectModel = [
                 });
             } else {
                 // inputCounterが0の場合は元々計算済みのものを返却するだけ
-                res.end(JSON.stringify(preTokenCount));
+                res.end(JSON.stringify(tokenCountSummaryList));
             }
         } catch (error) {
             res.status(503).end(Utils.errorFormat(error));
@@ -1570,6 +1646,7 @@ export const geminiCountTokensByThread = [
                 // 実体はトークン数だけが返ってくる
                 messageArgsSetListSorted.map(messageArgsSet => {
                     result.push({
+                        ...messageArgsSet,
                         id: messageArgsSet.thread.id,
                         totalTokens: messageArgsSet.totalTokens || 0,
                         totalBillableCharacters: messageArgsSet.totalBillableCharacters || 0,
@@ -1601,9 +1678,17 @@ export async function geminiCountTokensByContentPart(transactionalEntityManager:
                         // console.log(`countTokens: ${content.text.substring(0, 10).replace(/\n/g, '')}`);
                         // const time = new Date().getTime();
                         // console.log(`index=${index} :      countTokens: ${content.text.substring(0, 10000).replace(/\n/g, '')}`);
-                        const tokenRes = await generativeModel.countTokens({ contents: [{ role: 'user', parts: [{ text: content.text }] }] });
+                        const tokenResPromise = generativeModel.countTokens({ contents: [{ role: 'user', parts: [{ text: content.text }] }] });
+
+                        // GPT-4oでのトークン数を計算する
+                        // const prompt = `<im_start>user\n${content.text}<im_end>`;
+                        const prompt = `${content.text}`;
+                        content.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(prompt).length };
+
+                        const tokenRes = await tokenResPromise;
                         // console.log(`index=${index} : ${new Date().getTime() - time}ms : countTokens: ${content.text.substring(0, 10).replace(/\n/g, '')} : ${tokenRes.totalTokens}`);
-                        content.tokenCount[model] = { totalTokens: tokenRes.totalTokens, totalBillableCharacters: tokenRes.totalBillableCharacters };
+                        // content.tokenCount[model] = { totalTokens: tokenRes.totalTokens, totalBillableCharacters: tokenRes.totalBillableCharacters };
+                        content.tokenCount[model] = tokenRes;
                     } else {
                         // 何もしない
                         content.tokenCount[model] = { totalTokens: 0 };
@@ -1660,8 +1745,8 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
         model, safetySettings: [],
     });
     const requests = fileList.map(async file =>
-        tokenCountRequestLimitation.executeWithRetry(async () =>
-            await generativeModel.countTokens({
+        tokenCountRequestLimitation.executeWithRetry(async () => {
+            const countTokensPromise = generativeModel.countTokens({
                 contents: [{
                     role: 'user', parts: [
                         file.buffer
@@ -1676,8 +1761,53 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
                                 { text: '' }, // これはありえない。エラー。
                     ]
                 }]
-            })
-        )
+            });
+
+            const openaiTokenCount = { totalTokens: 0, totalBillableCharacters: 0 };
+            if (file.fileBodyEntity.fileType.startsWith('image/') && file.base64Data) {
+                const metaJson = file.fileBodyEntity.metaJson || {};
+                const imageTokens = calculateTokenCost(metaJson.width || 0, metaJson.height || 0);
+                openaiTokenCount.totalTokens = imageTokens;
+                openaiTokenCount.totalBillableCharacters = 0;
+            } else if (file.buffer) {
+                openaiTokenCount.totalTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(file.buffer.toString()).length;
+            } else if (file.fileBodyEntity.fileType.startsWith('application/pdf')) {
+                fs.readFile(file.fileBodyEntity.innerPath);
+                const pdfPath = file.fileBodyEntity.innerPath;
+                const numPages = file.fileBodyEntity.metaJson?.numPages || 0;
+                if (numPages) {
+                    const textList = await Promise.all([...Array(numPages).keys()].map(async (index) => {
+                        try {
+                            return fs.readFile(path.dirname(pdfPath) + '/' + path.basename(pdfPath, '.pdf') + '.' + (index + 1) + '.txt', 'utf-8');
+                        } catch (err) {
+                            console.error(`Error reading text file for page ${index + 1}:`, err);
+                            return '';
+                        }
+                    }));
+                    // https://platform.openai.com/docs/guides/images-vision?api-mode=chat#calculating-costs
+                    // OpenAIのトークン数計算式 
+                    // imageTokens = 85 + 170 * numPages * 4; 
+                    const imageTokens = 85 + 170 * numPages * 2 * 2;
+                    const textTokens = textList.reduce((acc, text) => acc + getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(text).length, 0);
+                    openaiTokenCount.totalTokens = imageTokens + textTokens;
+                    (openaiTokenCount as any).prompt_tokens_details = { image_tokens: imageTokens, text_tokens: textTokens, };
+                    openaiTokenCount.totalBillableCharacters = 0;
+                } else {
+                    // TODO 何も無い場合はどうするか？
+                    console.error(`Error: PDF file has no pages: ${file.fileBodyEntity.fileType} ${file.fileBodyEntity.innerPath} ${JSON.stringify(file.fileBodyEntity.metaJson)}`);
+                    // 何も無い場合はトークン数を0にする
+                    openaiTokenCount.totalTokens = 0;
+                    openaiTokenCount.totalBillableCharacters = 0;
+                }
+            } else {
+                // 何もしない
+                console.error(`Error: fileType is not supported: ${file.fileBodyEntity.fileType} ${file.fileBodyEntity.innerPath}`);
+            }
+
+            const countTokensGemini = await countTokensPromise;
+
+            return { [model]: countTokensGemini, [COUNT_TOKEN_OPENAI_MODEL]: openaiTokenCount } as { [model: string]: CountTokensResponse };
+        })
     );
 
     try {
@@ -1691,7 +1821,7 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
             }
             // console.log(r);
             if (r.status === 'fulfilled') {
-                fileList[index].fileBodyEntity.tokenCount[model] = r.value as CountTokensResponse;
+                fileList[index].fileBodyEntity.tokenCount = r.value as { [model: string]: CountTokensResponse };
                 return fileList[index].fileBodyEntity;
             } else {
                 console.error(r.reason);

@@ -314,13 +314,7 @@ export const geminiCountTokens = [
         const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
         const args = inDto.args;
         const generativeModel = vertex_ai.preview.getGenerativeModel({
-            // model: args.model,
             model: 'gemini-1.5-flash',
-            generationConfig: {
-                maxOutputTokens: args.max_tokens || 8192,
-                temperature: args.top_p || 0.1,
-                topP: args.temperature || 0,
-            },
             safetySettings: [
                 // { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
                 // { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },

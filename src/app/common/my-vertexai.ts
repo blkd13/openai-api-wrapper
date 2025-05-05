@@ -117,7 +117,39 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
                 // systemはsystemInstructionに入れる
                 req.systemInstruction = { role, parts: [{ text: message.content }] };
             } else {
-                req.contents.push({ role, parts: [{ text: message.content }] });
+                if (message.role === 'assistant' && message.tool_calls) {
+                    // console.dir(message, { depth: null });
+                    const content = { role, parts: [] } as Content;
+                    req.contents.push(content);
+                    if (message.content) {
+                        content.parts.push({ text: message.content });
+                    } else {
+                        // contentが無ければ入れない
+                    }
+                    message.tool_calls.forEach(toolCall => {
+                        content.parts.push({
+                            functionCall: {
+                                name: toolCall.function.name,
+                                args: JSON.parse(toolCall.function.arguments),
+                            }
+                        });
+                    });
+                } else if (message.role === 'tool' && message.tool_call_id) {
+                    // tool_call_idがある場合は、functionResponseに変換する。
+                    const remappedContent = { role, parts: [{ text: message.content }] } as Content;
+                    remappedContent.role = 'function';
+                    remappedContent.parts = [{
+                        functionResponse: {
+                            name: message.tool_call_id,
+                            response: {
+                                content: JSON.parse(remappedContent.parts[0].text || '{}'),
+                            }
+                        }
+                    }];
+                    req.contents.push(remappedContent);
+                } else {
+                    req.contents.push({ role, parts: [{ text: message.content }] });
+                }
             }
         } else if (Array.isArray(message.content)) {
             const remappedContent = {
@@ -156,6 +188,7 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
                     }).filter(is => is) as Part[],
             };
 
+            // arrayになることはないと思うので要らないかも。。
             if (message.role === 'assistant' && message.tool_calls) {
                 message.tool_calls.forEach(toolCall => {
                     remappedContent.parts.push({
@@ -166,6 +199,7 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
                     });
                 });
             } else { }
+            // arrayになることはないと思うので要らないかも。。
             if (message.role === 'tool' && message.tool_call_id) {
                 remappedContent.role = 'function';
                 remappedContent.parts = [{

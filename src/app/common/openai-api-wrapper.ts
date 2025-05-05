@@ -32,7 +32,7 @@ import { V2 } from 'cohere-ai/api/resources/v2/client/Client';
 import { APIPromise, RequestOptions } from 'openai/core';
 import { ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { Stream } from 'openai/streaming';
-import { Tiktoken, TiktokenModel, encoding_for_model } from 'tiktoken';
+import { Tiktoken, TiktokenEncoding, TiktokenModel, encoding_for_model } from 'tiktoken';
 
 import fss from './fss.js';
 import { Utils } from "./utils.js";
@@ -128,18 +128,29 @@ export const anthropicVertex = new AnthropicVertex({ projectId: GCP_PROJECT_ID |
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
  */
-const encoderMap: Record<TiktokenModel, Tiktoken> = {} as any;
-function getEncoder(model: TiktokenModel): Tiktoken {
-    if (encoderMap[model]) {
+const encoderMap: Record<TiktokenEncoding, Tiktoken> = {} as Record<TiktokenEncoding, Tiktoken>;
+const encoderModelMap: Record<TiktokenModel, TiktokenEncoding> = {} as Record<TiktokenModel, TiktokenEncoding>;
+export function getTiktokenEncoder(model: TiktokenModel): Tiktoken {
+    if (encoderModelMap[model]) {
+        return encoderMap[encoderModelMap[model]];
     } else {
         try {
-            encoderMap[model] = encoding_for_model(model);
+            const tiktoken = encoding_for_model(model);
+            encoderModelMap[model] = tiktoken.name as TiktokenEncoding;
+            // console.log('getEncoder1', model, tiktoken.name);
+            encoderMap[tiktoken.name as TiktokenEncoding] = tiktoken;
         } catch (ex) {
-            // 登録されていないトークナイザの場合はとりあえずgpt-4のトークナイザを当てておく
-            encoderMap[model] = encoding_for_model('gpt-4');
+            // 登録されていないトークナイザの場合はとりあえずgpt-4oのトークナイザを当てておく
+            // console.error('getEncoder', model, ex);
+            model = 'gpt-4o' as TiktokenModel;
+            const tiktoken = encoding_for_model(model);
+            encoderModelMap[model] = tiktoken.name as TiktokenEncoding;
+            encoderMap[tiktoken.name as TiktokenEncoding] = tiktoken;
+            // console.log('getEncoder2', model, tiktoken.name);
         }
     }
-    return encoderMap[model];
+    // console.log('getEncoder3', model, Object.keys(encoderModelMap), Object.keys(encoderMap));
+    return encoderMap[encoderModelMap[model]];
 }
 
 export function providerPrediction(model: string, provider?: AiProvider): AiProvider {
@@ -155,10 +166,10 @@ export function providerPrediction(model: string, provider?: AiProvider): AiProv
     } else if (model.startsWith('claude-')) {
         return 'anthropic';
         return 'anthropic_vertexai';
-    } else if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4')) {
+    } else if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4') || model.startsWith('chatgpt-')) {
         return 'openai';
         return 'azure';
-    } else if (model.startsWith('deepseek-r1-distill-') || model.startsWith('llama-3.3-70b-')) {
+    } else if (model.startsWith('deepseek-r1-distill-') || model.startsWith('llama-3.3-70b-') || model === 'qwen-qwq-32b' || model === 'mistral-saba-24b' || model.startsWith('meta-llama/llama-4-')) {
         return 'groq';
     } else if (model.startsWith('llama-3.3-70b')) {
         return 'cerebras';
@@ -809,8 +820,12 @@ class RunBit {
                                             }
 
                                             if (candidate.groundingMetadata) {
-                                                (choice as any).groundingMetadata = candidate.groundingMetadata;
-                                            }
+                                                if (Object.keys(candidate.groundingMetadata).length > 0) {
+                                                    (choice as any).groundingMetadata = candidate.groundingMetadata;
+                                                } else {
+                                                    delete (choice as any).groundingMetadata;
+                                                }
+                                            } else { }
 
                                             remaped.push({
                                                 id: (content as any).responseId,
@@ -1012,8 +1027,12 @@ class RunBit {
                                             }
 
                                             if (candidate.groundingMetadata) {
-                                                (choice as any).groundingMetadata = candidate.groundingMetadata;
-                                            }
+                                                if (Object.keys(candidate.groundingMetadata).length > 0) {
+                                                    (choice as any).groundingMetadata = candidate.groundingMetadata;
+                                                } else {
+                                                    delete (choice as any).groundingMetadata;
+                                                }
+                                            } else { }
 
                                             remaped.push({
                                                 id: (content as any).responseId,
@@ -1473,9 +1492,13 @@ class RunBit {
                     _that.openApiWrapper.fire();
                 });
             } else {
+
                 // Gemini用プロパティを消しておく
-                const keys = ['messages', 'model', 'audio', 'frequency_penalty', 'function_call', 'functions', 'logit_bias', 'logprobs', 'max_completion_tokens', 'max_tokens', 'metadata', 'modalities', 'n', 'parallel_tool_calls', 'prediction', 'presence_penalty', 'reasoning_effort', 'response_format', 'seed', 'service_tier', 'stop', 'store', 'stream', 'stream_options', 'temperature', 'tool_choice', 'tools', 'top_logprobs', 'top_p', 'user'];
-                Object.keys(args).forEach(key => { if (!keys.includes(key)) { delete (args as any)[key]; } });
+                for (const key of ['safetySettings', 'cachedContent', 'gcpProjectId',]) delete (args as any)[key]; // Gemini用プロパティを消しておく
+                // 'isGoogleSearch'
+                // const keys = ['messages', 'model', 'audio', 'frequency_penalty', 'function_call', 'functions', 'logit_bias', 'logprobs', 'max_completion_tokens', 'max_tokens', 'metadata', 'modalities', 'n', 'parallel_tool_calls', 'prediction', 'presence_penalty', 'reasoning_effort', 'response_format', 'seed', 'service_tier', 'stop', 'store', 'stream', 'stream_options', 'temperature', 'tool_choice', 'tools', 'top_logprobs', 'top_p', 'user'];
+                // Object.keys(args).forEach(key => { if (!keys.includes(key)) { delete (args as any)[key]; } });
+                // ---- ここから下はOpenAIのAPIに渡すパラメータを指定する。 ---
                 // messages: Array<ChatCompletionMessageParam>;
                 // model: (string & {}) | ChatAPI.ChatModel;
                 // audio?: ChatCompletionAudioParam | null;
@@ -1522,6 +1545,13 @@ class RunBit {
                     });
                 } else { }
 
+                if ((args as any).isGoogleSearch) {
+                    args.model = `${args.model}-search-preview`;
+                    args.web_search_options = {};
+                    delete args.temperature;
+                } else { }
+                delete (args as any).isGoogleSearch;
+
                 if (args.model.startsWith('o1') || args.model.startsWith('o3')) {
                     // o1用にパラメータを調整
                     delete (args as any)['max_completion_tokens'];
@@ -1553,6 +1583,7 @@ class RunBit {
                         const reader = response.data.toReadableStream().getReader();
 
                         let tokenBuilder: string = '';
+                        let isThinking = false;
 
                         const _that = this;
 
@@ -1584,9 +1615,33 @@ class RunBit {
                                 // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
                                 const obj: ChatCompletionChunk = JSON.parse(content);
 
-                                tokenBuilder += obj.choices.map(choice => choice.delta).filter(delta => delta).map(delta => delta.content || '').join('');
-                                tokenCount.tokenBuilder = tokenBuilder;
+                                // deepseekのreasoning用
+                                obj.choices.forEach(choice => {
+                                    if ((choice.delta as any).reasoning_content) {
+                                        (choice as any).thinking = (choice.delta as any).reasoning_content;
+                                    } else { }
+                                });
 
+                                const text = obj.choices.map(choice => choice.delta).filter(delta => delta).map(delta => delta.content || '').join('');
+
+                                // <think></think> タグを処理する。
+                                if (!tokenBuilder && text.trim() === '<think>') {
+                                    isThinking = true;
+                                    obj.choices.forEach(choice => delete choice.delta.content);
+                                } else if (isThinking) {
+                                    if (text.trim() === '</think>') {
+                                        isThinking = false;
+                                    } else {
+                                        obj.choices.forEach(choice => {
+                                            delete choice.delta.content;
+                                            (choice as any).thinking = text;
+                                        });
+                                    }
+                                } else {
+                                    // 通常処理
+                                    tokenBuilder += text;
+                                    tokenCount.tokenBuilder = tokenBuilder;
+                                }
                                 if (obj.usage) {
                                     tokenCount.prompt_tokens = obj.usage.prompt_tokens || tokenCount.prompt_tokens;
                                     tokenCount.completion_tokens = obj.usage.completion_tokens || 0;
@@ -1796,12 +1851,12 @@ export class OpenAIApiWrapper {
                 // gpt-4-1106-preview に未対応のため、gpt-4に置き換え。プロンプトのトークンを数えるだけなのでモデルはどれにしてもしても同じだと思われるが。。。
                 if (args.model.startsWith('claude-')) {
                     // 本当はAPIの戻りでトークン数を出したいけど、API投げる前にトークン数表示するログにしてしまったので、やむなくtiktokenのトークン数を表示する。APIで入力トークン数がわかったらそれを上書きするようにした。
-                    tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                    tokenCount.prompt_tokens = getTiktokenEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4o' : tokenCount.modelTikToken).encode(prompt).length;
                 } else if (args.model.startsWith('gemini-')) {
                     // 本当はAPIの戻りでトークン数を出したいけど、API投げる前にトークン数表示するログにしてしまったので、やむなくtiktokenのトークン数を表示する。APIで入力トークン数がわかったらそれを上書きするようにした。
-                    tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                    tokenCount.prompt_tokens = getTiktokenEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4o' : tokenCount.modelTikToken).encode(prompt).length;
                 } else {
-                    tokenCount.prompt_tokens = getEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
+                    tokenCount.prompt_tokens = getTiktokenEncoder((GPT4_MODELS.indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4o' : tokenCount.modelTikToken).encode(prompt).length;
                 }
                 // tokenCount.prompt_tokens = encoding_for_model((['gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-4-vision-preview'].indexOf((tokenCount.modelTikToken as any)) !== -1) ? 'gpt-4' : tokenCount.modelTikToken).encode(prompt).length;
                 tokenCount.prompt_tokens += obj.countObject.image;
@@ -2470,6 +2525,8 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                         } else if (content.type === 'image_url') {
                             // 画像の場合はURLがあるかチェックする。
                             return content.image_url.url.trim().length > 0;
+                        } else if (content.type === 'file') {
+                            return true;
                         } else if (content.type === 'tool_result' as any) {
                             // tool_resultは生かす。なんでanyなのか、、、
                             return true;
@@ -2535,6 +2592,9 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                             } else if (obj.type === 'image_url' && obj.image_url && obj.image_url.url) {
                                 // 中身があれば追加
                                 prevContentArray.push(obj);
+                            } else if (obj.type === 'file' && obj.file) {
+                                // 中身があれば追加
+                                prevContentArray.push(obj);
                             } else {
                                 // 中身がないので追加しない。
                             }
@@ -2581,7 +2641,7 @@ export class TokenCount {
         public tokenBuilder: string = '',
     ) {
         this.modelShort = 'all     ';
-        this.modelTikToken = 'gpt-3.5-turbo';
+        this.modelTikToken = 'gpt-4o';
         this.modelShort = TokenCount.SHORT_NAME[model] || model;
         this.modelTikToken = model as TiktokenModel;
     }
@@ -2621,7 +2681,7 @@ export class TokenCount {
  * @param detail 
  * @returns 
  */
-function calculateTokenCost(width: number, height: number, detail: 'low' | 'high' | 'auto' = 'high'): number {
+export function calculateTokenCost(width: number, height: number, detail: 'low' | 'high' | 'auto' = 'high'): number {
     if (detail === 'low') {
         return 85;
     } else {
