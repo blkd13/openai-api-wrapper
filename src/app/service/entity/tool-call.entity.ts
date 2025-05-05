@@ -1,6 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity, Generated, UpdateDateColumn, PrimaryColumn, Index, ViewEntity, ViewColumn, EntityManager } from 'typeorm';
 
-import { MyBaseEntity } from './base.js';
+import { MyBaseEntity, MyBaseEntityNoUpdateTimestamp } from './base.js';
 import { ChatCompletionChunk, ChatCompletionToolMessageParam } from 'openai/resources/index.js';
 import { MyToolInfo } from '../../common/openai-api-wrapper.js';
 import { CountTokensResponse } from '@google/generative-ai/dist/generative-ai.js';
@@ -87,7 +87,7 @@ export interface ToolCallPartCallBody {
         arguments: any;
         name: string;
     };
-    type: string;
+    type: 'function';
 }
 
 // 入力用のinterface

@@ -14,6 +14,12 @@ import { detect } from 'jschardet/index.js';
 import { convertPptxToPdf } from '../../common/media-funcs.js';
 import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
 
+import { ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartResultBody } from '../../service/entity/tool-call.entity.js';
+import { ToolCallPartType } from '../../service/entity/tool-call.entity.js';
+import { getTiktokenEncoder, vertex_ai } from '../../common/openai-api-wrapper.js';
+import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL } from '../../service/controllers/chat-by-project-model.js';
+
+
 // CREATE TABLE message_group_entity_bk AS SELECT * FROM message_group_entity;
 // CREATE TABLE message_entity_bk AS SELECT * FROM message_entity;
 // CREATE TABLE thread_entity_bk AS SELECT * FROM thread_entity;
@@ -38,26 +44,25 @@ import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
 //   WHERE message_group_entity.thread_id = thread_entity.thread_group_id
 // );
 
-/**
- * 必ず main() という関数を定義する。
- * promiseチェーンで順次実行させる。
- * 
- * 1. newでオブジェクトを作る。
- * 2. initPromptでプロンプトをファイルに出力。
- * 3. run()で実行
- * 
- * 途中まで行ってたらコメントアウトして再ランする。
- * 例えば、promptを手修正したかったらinitPromptだけコメントアウトすれば手修正したファイルがそのまま飛ぶ。
- */
-export async function main() {
+
+async function fileEntity() {
     await ds.transaction(async transactionalEntityManager => {
 
         // テキスト
-        const contents = await ds.getRepository(ContentPartEntity).find({
-            where: { type: In([ContentPartType.TEXT, ContentPartType.ERROR]), tokenCount: IsNull() },
+        let contents = await ds.getRepository(ContentPartEntity).find({
+            where: { type: In([ContentPartType.TEXT, ContentPartType.ERROR]) },
         });
         console.log(`text time ${new Date()} texts ${contents.length}`);
         // await geminiCountTokensByContentPart(contents);
+        contents = contents.filter(content => content
+            && (
+                !content.tokenCount
+                || !content.tokenCount[COUNT_TOKEN_MODEL]
+                || !(content.tokenCount[COUNT_TOKEN_MODEL].totalTokens >= 0)
+                || !content.tokenCount[COUNT_TOKEN_OPENAI_MODEL]
+                || !(content.tokenCount[COUNT_TOKEN_OPENAI_MODEL].totalTokens >= 0)
+            )
+        );
         for (const chunkData of _.chunk(contents, 500)) {
             console.log(`text time ${new Date()} chunk ${chunkData.length}`);
             // console.dir(chunkData.map(content => ({ id: content.id, type: content.type, text: content.text?.substring(0, 20) })));
@@ -72,7 +77,15 @@ export async function main() {
         console.log(`file time ${new Date()} files ${files.length}`);
         const bufferMap: { [sha256: string]: Buffer } = {};
         console.log(files[0].tokenCount);
-        files = files.filter(file => file && (!file.tokenCount || !file.tokenCount['gemini-1.5-flash'] || !(file.tokenCount['gemini-1.5-flash'].totalTokens >= 0)));
+        files = files.filter(file => file
+            && (
+                !file.tokenCount
+                || !file.tokenCount[COUNT_TOKEN_MODEL]
+                || !(file.tokenCount[COUNT_TOKEN_MODEL].totalTokens >= 0)
+                || !file.tokenCount[COUNT_TOKEN_OPENAI_MODEL]
+                || !(file.tokenCount[COUNT_TOKEN_OPENAI_MODEL].totalTokens >= 0)
+            )
+        );
         for (const chunkData of _.chunk(files, 500)) {
             console.log(`file time ${new Date()} chunk ${chunkData.length}`);
             const fileEntityRebuildList = chunkData.map(async file => {
@@ -167,8 +180,76 @@ export async function main() {
             }).filter(Boolean) as ({ buffer: Buffer; fileBodyEntity: FileBodyEntity; base64Data?: undefined; } | { base64Data: string; fileBodyEntity: FileBodyEntity; buffer?: undefined; })[];
             const tokenCountedFileBodyList = await geminiCountTokensByFile(transactionalEntityManager, tokenCountFileList);
         }
-    });
 
+
+        // tool
+        // toolCallPartListの取得
+        const generativeModel = vertex_ai.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
+        let toolCallPartList = await ds.getRepository(ToolCallPartEntity).findBy({
+            type: In([ToolCallPartType.CALL, ToolCallPartType.COMMAND, ToolCallPartType.RESULT]),
+        }) as ToolCallPartEntity[];
+        toolCallPartList = toolCallPartList.filter(toolTransaction => toolTransaction
+            && (
+                !toolTransaction.tokenCount
+                || !toolTransaction.tokenCount[COUNT_TOKEN_MODEL]
+                || !(toolTransaction.tokenCount[COUNT_TOKEN_MODEL].totalTokens >= 0)
+                || !toolTransaction.tokenCount[COUNT_TOKEN_OPENAI_MODEL]
+                || !(toolTransaction.tokenCount[COUNT_TOKEN_OPENAI_MODEL].totalTokens >= 0)
+            )
+        );
+        console.log(`tool time ${new Date()} toolCallPartList ${toolCallPartList.length}`);
+        for (const toolTransaction of toolCallPartList.filter(toolTransaction => !toolTransaction.tokenCount || !toolTransaction.tokenCount[COUNT_TOKEN_MODEL] || !(toolTransaction.tokenCount[COUNT_TOKEN_OPENAI_MODEL]))) {
+            const toolCallEntity = toolTransaction;
+
+            if (toolTransaction.tokenCount) {
+                console.log(`toolTransaction.id: ${toolTransaction.id} already has tokenCount`);
+                continue;
+            }
+            console.log(`toolTransaction.id: ${toolTransaction.id} tokenCount not found`);
+
+            const contentParts = { contents: [{ role: 'model', parts: [{ text: '' }] }] };
+            if (toolTransaction.type === ToolCallPartType.CALL) {
+                contentParts.contents[0].parts[0].text = JSON.stringify((toolTransaction.body as ToolCallPartCallBody).function.arguments);
+            } else if (toolTransaction.type === ToolCallPartType.COMMAND) {
+                contentParts.contents[0].parts[0].text = JSON.stringify((toolTransaction.body as ToolCallPartCommandBody).command);
+            } else if (toolTransaction.type === ToolCallPartType.RESULT) {
+                contentParts.contents[0].role = 'tool';
+                contentParts.contents[0].parts[0].text = (toolTransaction.body as ToolCallPartResultBody).content;
+            }
+            const tokenResPromise = generativeModel.countTokens(contentParts);
+
+            toolCallEntity.tokenCount = toolCallEntity.tokenCount || {};
+
+            const openaiTokenCount = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(contentParts.contents[0].parts[0].text).length, totalBillableCharacters: 0 };
+            toolCallEntity.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiTokenCount;
+
+            const vertexTokenCount = await tokenResPromise;
+            toolCallEntity.tokenCount[COUNT_TOKEN_MODEL] = vertexTokenCount;
+            console.log(`toolTransaction.id: ${toolTransaction.id} tokenCount: ${JSON.stringify(toolCallEntity.tokenCount)}`);
+            await ds.getRepository(ToolCallPartEntity).save(toolCallEntity);
+            console.log(`toolTransaction.id: ${toolTransaction.id} tokenCount saved`);
+        }
+
+    });
+}
+
+/**
+ * 必ず main() という関数を定義する。
+ * promiseチェーンで順次実行させる。
+ * 
+ * 1. newでオブジェクトを作る。
+ * 2. initPromptでプロンプトをファイルに出力。
+ * 3. run()で実行
+ * 
+ * 途中まで行ってたらコメントアウトして再ランする。
+ * 例えば、promptを手修正したかったらinitPromptだけコメントアウトすれば手修正したファイルがそのまま飛ぶ。
+ */
+export async function main() {
+    // await ds.transaction(async transactionalEntityManager => {
+    //     await fileEntity();
+    // });
+    await fileEntity();
+    console.log('done');
 }
 
 

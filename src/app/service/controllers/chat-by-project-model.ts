@@ -407,12 +407,12 @@ async function buildArgs(
 
             const fileTokenCountList = await getCountTokenListByFileGroupIdList(tenantKey, fileGroupIdList);
             const toolTokenCountList = await getCountTokenListByToolGroupIdList(tenantKey, toolGroupIdList);
-            const tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters: number } } = {};
+            const tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters?: number } } = {};
             for (const tokenCount of textContentList.concat(fileTokenCountList).concat(toolTokenCountList)) {
                 for (const model of Object.keys(tokenCount)) {
                     if (tokenCountSummary[model]) {
                         tokenCountSummary[model].totalTokens += tokenCount[model].totalTokens;
-                        tokenCountSummary[model].totalBillableCharacters += tokenCount[model].totalBillableCharacters || 0;
+                        tokenCountSummary[model].totalBillableCharacters = (tokenCountSummary[model].totalBillableCharacters || 0) + (tokenCount[model].totalBillableCharacters || 0);
                     } else {
                         tokenCountSummary[model] = { totalTokens: tokenCount[model].totalTokens, totalBillableCharacters: tokenCount[model].totalBillableCharacters || 0 };
                     }
@@ -657,8 +657,8 @@ export const chatCompletionByProjectModel = [
             toolMaster: { [tool_call_id: string]: { toolCallGroupId: string } },
         }[] = [];
         try {
-            const model = 'gemini-1.5-flash';
-            const generativeModel = vertex_ai.preview.getGenerativeModel({ model, safetySettings: [], });
+
+            const generativeModel = vertex_ai.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
             const idList = id.split('|');
             const { messageArgsSetList } = await buildArgs(req.info.user.tenantKey, req.info.user.id, type, idList);
@@ -1091,21 +1091,27 @@ export const chatCompletionByProjectModel = [
                             if ([ToolCallPartType.CALL, ToolCallPartType.COMMAND, ToolCallPartType.RESULT].includes(toolTransaction.type)) {
                                 const contentParts = { contents: [{ role: 'model', parts: [{ text: '' }] }] };
                                 if (toolTransaction.type === ToolCallPartType.CALL) {
-                                    contentParts.contents[0].parts[0].text = JSON.stringify(toolTransaction.body.function.arguments);
+                                    contentParts.contents[0].parts[0].text = toolTransaction.body.function.arguments;
                                 } else if (toolTransaction.type === ToolCallPartType.COMMAND) {
-                                    contentParts.contents[0].parts[0].text = JSON.stringify(toolTransaction.body.command);
+                                    contentParts.contents[0].parts[0].text = toolTransaction.body.command;
                                 } else if (toolTransaction.type === ToolCallPartType.RESULT) {
                                     contentParts.contents[0].role = 'tool';
                                     contentParts.contents[0].parts[0].text = toolTransaction.body.content;
+                                }
+                                if (typeof contentParts.contents[0].parts[0].text === 'string') {
+                                    // 何もしない
+                                } else {
+                                    // stringじゃない場合はJSON.stringifyしておく。
+                                    contentParts.contents[0].parts[0].text = JSON.stringify(contentParts.contents[0].parts[0].text);
                                 }
                                 const tokenResPromise = generativeModel.countTokens(contentParts);
 
                                 toolCallEntity.tokenCount = toolCallEntity.tokenCount || {};
 
-                                const openaiTokenCount = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(contentParts.contents[0].parts[0].text).length, totalBillableCharacters: 0 };
+                                const openaiTokenCount = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(contentParts.contents[0].parts[0].text).length };
                                 toolCallEntity.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiTokenCount;
 
-                                toolCallEntity.tokenCount[model] = await tokenResPromise;
+                                toolCallEntity.tokenCount[COUNT_TOKEN_MODEL] = await tokenResPromise;
                             } else { }
                             await transactionalEntityManager.save(ToolCallPartEntity, toolCallEntity);
                         }
@@ -1485,21 +1491,21 @@ export const geminiCountTokensByProjectModel = [
             const args = { messages: [], model: COUNT_TOKEN_MODEL, temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, } as ChatCompletionCreateParamsStreaming;
 
             // const preTokenCount = { totalTokens: 0, totalBillableCharacters: 0 };
-            const tokenCountSummaryList: { [model: string]: { totalTokens: number, totalBillableCharacters: number } }[] = [];
+            const tokenCountSummaryList: { [model: string]: { totalTokens: number, totalBillableCharacters?: number } }[] = [];
             if (id) {
                 // メッセージIDが指定されていたらまずそれらを読み込む
                 const { messageArgsSetList } = await buildArgs(req.info.user.tenantKey, req.info.user.id, type, [id], 'countOnly');
 
                 // const tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters: number } } = {};
                 // 実体はトークン数だけが返ってくる
-                (messageArgsSetList as any as { tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters: number } } }[]).forEach(messageArgsSet => {
+                (messageArgsSetList as any as { tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters?: number } } }[]).forEach(messageArgsSet => {
                     tokenCountSummaryList.push(messageArgsSet.tokenCountSummary);
                 });
             } else {
                 // メッセージIDが指定されていない場合は、トークン数を取得するための空のオブジェクトを作成
                 tokenCountSummaryList.push({
                     [COUNT_TOKEN_MODEL]: { totalTokens: 0, totalBillableCharacters: 0 },
-                    [COUNT_TOKEN_OPENAI_MODEL]: { totalTokens: 0, totalBillableCharacters: 0 }
+                    [COUNT_TOKEN_OPENAI_MODEL]: { totalTokens: 0 }
                 });
             }
 
@@ -1543,12 +1549,16 @@ export const geminiCountTokensByProjectModel = [
                     Object.keys(tokenCount).forEach(modelId => {
                         if (tokenCountSummary[modelId]) {
                             tokenCountSummary[modelId].totalTokens += tokenCount[modelId].totalTokens || 0;
-                            tokenCountSummary[modelId].totalBillableCharacters += tokenCount[modelId].totalBillableCharacters || 0;
+                            if (tokenCount[modelId].totalBillableCharacters) {
+                                tokenCountSummary[modelId].totalBillableCharacters = (tokenCountSummary[modelId].totalBillableCharacters || 0) + (tokenCount[modelId].totalBillableCharacters || 0);
+                            } else { }
                         } else {
                             tokenCountSummary[modelId] = {
                                 totalTokens: tokenCount[modelId].totalTokens || 0,
-                                totalBillableCharacters: tokenCount[modelId].totalBillableCharacters || 0,
                             };
+                            if (tokenCount[modelId].totalBillableCharacters) {
+                                tokenCountSummary[modelId].totalBillableCharacters = tokenCount[modelId].totalBillableCharacters || 0;
+                            } else { }
                         }
                     });
                 });
@@ -1595,12 +1605,16 @@ export const geminiCountTokensByProjectModel = [
                                     ([COUNT_TOKEN_OPENAI_MODEL, COUNT_TOKEN_MODEL]).forEach(modelId => {
                                         if (tokenCountSummary[modelId]) {
                                             tokenCountSummary[modelId].totalTokens += tokenObjMap[modelId].totalTokens || 0;
-                                            tokenCountSummary[modelId].totalBillableCharacters += tokenObjMap[modelId].totalBillableCharacters || 0;
+                                            if (tokenObjMap[modelId].totalBillableCharacters) {
+                                                tokenCountSummary[modelId].totalBillableCharacters = (tokenCountSummary[modelId].totalBillableCharacters || 0) + (tokenObjMap[modelId].totalBillableCharacters || 0);
+                                            } else { }
                                         } else {
                                             tokenCountSummary[modelId] = {
                                                 totalTokens: tokenObjMap[modelId].totalTokens || 0,
-                                                totalBillableCharacters: tokenObjMap[modelId].totalBillableCharacters || 0,
                                             };
+                                            if (tokenObjMap[modelId].totalBillableCharacters) {
+                                                tokenCountSummary[modelId].totalBillableCharacters = tokenObjMap[modelId].totalBillableCharacters || 0;
+                                            } else { }
                                         }
                                     });
                                 });
@@ -1691,7 +1705,8 @@ export async function geminiCountTokensByContentPart(transactionalEntityManager:
                         content.tokenCount[model] = tokenRes;
                     } else {
                         // 何もしない
-                        content.tokenCount[model] = { totalTokens: 0 };
+                        content.tokenCount[model] = { totalTokens: 0, totalBillableCharacters: 0 };
+                        content.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = { totalTokens: 0 };
                     }
                     break;
                 case ContentPartType.BASE64:
@@ -1763,13 +1778,12 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
                 }]
             });
 
-            const openaiTokenCount = { totalTokens: 0, totalBillableCharacters: 0 };
+            const openaiTokenCount = { totalTokens: 0 };
             if (file.fileBodyEntity.fileType.startsWith('image/') && file.base64Data) {
                 const metaJson = file.fileBodyEntity.metaJson || {};
                 const imageTokens = calculateTokenCost(metaJson.width || 0, metaJson.height || 0);
                 openaiTokenCount.totalTokens = imageTokens;
-                openaiTokenCount.totalBillableCharacters = 0;
-            } else if (file.buffer) {
+            } else if (file.buffer !== undefined) {
                 openaiTokenCount.totalTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(file.buffer.toString()).length;
             } else if (file.fileBodyEntity.fileType.startsWith('application/pdf')) {
                 fs.readFile(file.fileBodyEntity.innerPath);
@@ -1791,13 +1805,11 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
                     const textTokens = textList.reduce((acc, text) => acc + getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(text).length, 0);
                     openaiTokenCount.totalTokens = imageTokens + textTokens;
                     (openaiTokenCount as any).prompt_tokens_details = { image_tokens: imageTokens, text_tokens: textTokens, };
-                    openaiTokenCount.totalBillableCharacters = 0;
                 } else {
                     // TODO 何も無い場合はどうするか？
                     console.error(`Error: PDF file has no pages: ${file.fileBodyEntity.fileType} ${file.fileBodyEntity.innerPath} ${JSON.stringify(file.fileBodyEntity.metaJson)}`);
                     // 何も無い場合はトークン数を0にする
                     openaiTokenCount.totalTokens = 0;
-                    openaiTokenCount.totalBillableCharacters = 0;
                 }
             } else {
                 // 何もしない

@@ -41,6 +41,46 @@ export class MyBaseEntity extends BaseEntity {
     // }
 }
 
+// DBの中身をアップデートする際にupdatedByを変えたくないとき一時的に使う
+export class MyBaseEntityNoUpdateTimestamp extends BaseEntity {
+    @PrimaryGeneratedColumn('uuid')
+    id!: string;
+
+    @PrimaryColumn()
+    tenantKey!: string; // テナント単位の識別子
+
+    @Column({ nullable: false })
+    createdBy!: string;
+
+    @Column({ nullable: false })
+    updatedBy!: string;
+
+    @CreateDateColumn({ type: 'timestamptz' })
+    createdAt!: Date;
+
+    // @UpdateDateColumn({ type: 'timestamptz' })
+    @Column({ type: 'timestamptz' })
+    updatedAt!: Date;
+
+    // IPアドレスを保存するカラムを追加
+    @Column({ type: 'inet', nullable: true })  // PostgreSQLのINET型を使用
+    createdIp!: string;
+
+    @Column({ type: 'inet', nullable: true })  // PostgreSQLのINET型を使用
+    updatedIp!: string;
+
+    // @BeforeInsert()
+    // setCreatedAt() {
+    //     this.createdAt = new Date();
+    //     this.updatedAt = new Date();
+    // }
+
+    // @BeforeUpdate()
+    // setUpdatedAt() {
+    //     this.updatedAt = new Date();
+    // }
+}
+
 
 // SELECT table_name
 // FROM information_schema.columns

@@ -36,7 +36,7 @@ export interface PdfMetaData {
  * @param pdfPath PDF ファイルのパス
  * @returns PdfMetaData オブジェクト
  */
-async function extractPdfData(pdfPath: string): Promise<PdfMetaData> {
+export async function extractPdfData(pdfPath: string): Promise<PdfMetaData> {
     // 非同期で PDF ファイルを読み込む
     const fileBuffer = await fs.readFile(pdfPath);
     const data = new Uint8Array(fileBuffer);
@@ -193,7 +193,7 @@ export async function convertPdf(tm: EntityManager, fileBody: FileBodyEntity): P
     // const innerPath = file.innerPath;
     // const basename = path.basename(innerPath);
     const pdfPath = fileBody.innerPath.replaceAll(/\.[^.]*$/g, '') + '.pdf';
-    console.log(pdfPath);
+    console.log(`Processing PDF: ${pdfPath}`);
     try {
         const pdfData = await extractPdfData(pdfPath);
         console.log("----- PDF ドキュメント情報 -----");
