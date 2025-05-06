@@ -1,5 +1,4 @@
 import _ from 'lodash';
-import os from 'os';
 import { promises as fs } from "fs";
 // import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
 import { fromPath } from "pdf2pic";
@@ -213,25 +212,10 @@ export async function convertPdf(tm: EntityManager, fileBody: FileBodyEntity): P
         const isEnable = pdfData.pdfDocument.numPages <= 1000;
         fileBody.metaJson = { isEnable, numPages: pdfData.pdfDocument.numPages };
 
-        if (isEnable) {
-            // 1000ページ以下のドキュメントはテキストを抽出して保存する
-            pdfData.textPages.forEach((text, index) => {
-                const pagePath = path.dirname(pdfPath) + '/' + path.basename(pdfPath, '.pdf') + '.' + (index + 1) + '.txt';
-                console.log(`----- Page ${index + 1} Chars ${text.length} -----`);
-                // console.log(text);
-                fs.writeFile(pagePath, text, 'utf-8').catch((err) => {
-                    console.error(`Error writing text file for page ${index + 1}:`, err);
-                });
-            });
-        } else {
-            // 1000ページ以上のドキュメントは無視する
-        }
-
         const pdfDocument = pdfData.pdfDocument;
 
         // json出力する前にpdfDocumentは落としておく
         delete (pdfData as any).pdfDocument;
-        delete (pdfData as any).textPages;
         pdfData.metadata = pdfData.metadata || {};
         pdfData.metadata.numPages = numPages;
         pdfData.metadata.isEnable = isEnable;
