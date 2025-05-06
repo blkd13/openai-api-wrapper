@@ -89,7 +89,6 @@ async function buildFileGroupBodyMap(
                 // 3個目以降は各ページの画像と抽出したテキストを読み込む
                 for (let iPage = 1; iPage <= numPages; iPage++) {
                     fileAry.push(await fs.readFile(`${basename}${iPage}.png`));
-                    fileAry.push(await fs.readFile(`${basename}${iPage}.txt`));
                 }
                 return fileAry;
             } else {
@@ -1786,23 +1785,27 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
             } else if (file.buffer !== undefined) {
                 openaiTokenCount.totalTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(file.buffer.toString()).length;
             } else if (file.fileBodyEntity.fileType.startsWith('application/pdf')) {
-                fs.readFile(file.fileBodyEntity.innerPath);
                 const pdfPath = file.fileBodyEntity.innerPath;
                 const numPages = file.fileBodyEntity.metaJson?.numPages || 0;
                 if (numPages) {
-                    const textList = await Promise.all([...Array(numPages).keys()].map(async (index) => {
-                        try {
-                            return fs.readFile(path.dirname(pdfPath) + '/' + path.basename(pdfPath, '.pdf') + '.' + (index + 1) + '.txt', 'utf-8');
-                        } catch (err) {
-                            console.error(`Error reading text file for page ${index + 1}:`, err);
-                            return '';
-                        }
-                    }));
+                    // gemini系以外は画像化したものとテキスト抽出したものを組合せる。
+                    const jsonString = await fs.readFile(path.dirname(pdfPath) + '/' + path.basename(pdfPath, '.pdf') + '.json', 'utf-8');
+                    const pdfMetaData = JSON.parse(jsonString) as PdfMetaData;
+                    let metaText = '';
+                    // `---\n${(image.image_url as any).label} start\n\n`;
+                    if (pdfMetaData.info) {
+                        metaText += `## Info\n\n`;
+                        metaText += ['CreationDate', 'ModDate', 'Title', 'Creator', 'Author'].map(tag => `- ${tag}: ${pdfMetaData.info[tag]}\n`);
+                    } else { }
+                    if (pdfMetaData.outline) {
+                        metaText += `## Outline\n\n ${JSON.stringify(pdfMetaData.outline)}\n`;
+                    } else { }
+                    const textTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(metaText + pdfMetaData.textPages.join('')).length;
+
                     // https://platform.openai.com/docs/guides/images-vision?api-mode=chat#calculating-costs
                     // OpenAIのトークン数計算式 
                     // imageTokens = 85 + 170 * numPages * 4; 
                     const imageTokens = 85 + 170 * numPages * 2 * 2;
-                    const textTokens = textList.reduce((acc, text) => acc + getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(text).length, 0);
                     openaiTokenCount.totalTokens = imageTokens + textTokens;
                     (openaiTokenCount as any).prompt_tokens_details = { image_tokens: imageTokens, text_tokens: textTokens, };
                 } else {
