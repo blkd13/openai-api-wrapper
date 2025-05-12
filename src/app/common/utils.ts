@@ -1055,30 +1055,72 @@ class RequestLimiter {
     }
 }
 
-// エラーハンドリングを含むより実践的な使用例
-export class EnhancedRequestLimiter extends RequestLimiter {
-    private retryCount: number;
-    private retryDelay: number;
+// エラー判定用の関数型を定義
+export type RequestLimiterErrorHandler = (error: Error) => Promise<{
+    shouldRetry: boolean;
+    retryCount?: number;
+    retryDelay?: number;
+}> | {
+    shouldRetry: boolean;
+    retryCount?: number;
+    retryDelay?: number;
+};
 
-    constructor(maxConcurrent: number = 10, retryCount: number = 3, retryDelay: number = 1000) {
+// エラータイプによる振り分けを実現した拡張クラス
+export class EnhancedRequestLimiter extends RequestLimiter {
+    private defaultRetryCount: number;
+    private defaultRetryDelay: number;
+
+    private errorHandler: RequestLimiterErrorHandler;
+
+    constructor(
+        maxConcurrent: number = 10,
+        defaultRetryCount: number = 3,
+        defaultRetryDelay: number = 1000,
+        errorHandler?: RequestLimiterErrorHandler
+    ) {
         super(maxConcurrent);
-        this.retryCount = retryCount;
-        this.retryDelay = retryDelay;
+        this.defaultRetryCount = defaultRetryCount;
+        this.defaultRetryDelay = defaultRetryDelay;
+
+        // デフォルトのエラーハンドラーを設定
+        this.errorHandler = errorHandler || ((error: Error) => {
+            // デフォルトでは全てのエラーをリトライする
+            return { shouldRetry: true };
+        });
+    }
+
+    // エラーハンドラーを設定するメソッド
+    setErrorHandler(handler: RequestLimiterErrorHandler): void {
+        this.errorHandler = handler;
     }
 
     async executeWithRetry<T>(request: () => Promise<T>): Promise<T> {
         let lastError: Error | null = null;
+        let attempt = 0;
 
-        for (let attempt = 0; attempt <= this.retryCount; attempt++) {
+        while (attempt <= this.defaultRetryCount) {
             try {
                 return await this.execute(request);
             } catch (error) {
                 lastError = error as Error;
-                if (attempt < this.retryCount) {
-                    // リトライ前に待機
-                    await new Promise(resolve => setTimeout(resolve, this.retryDelay * (attempt + 1)));
-                    continue;
+                // console.error(`Request failed (attempt ${attempt + 1}):`, error);
+
+                // エラーハンドラーで判定（非同期関数の場合にはawaitで待機）
+                const decisionResult = this.errorHandler(lastError);
+                const decision = decisionResult instanceof Promise
+                    ? await decisionResult
+                    : decisionResult;
+
+                if (!decision.shouldRetry || attempt >= (decision.retryCount ?? this.defaultRetryCount)) {
+                    break;
                 }
+
+                // リトライ前に待機
+                const delay = decision.retryDelay ?? (this.defaultRetryDelay * (attempt + 1));
+                await new Promise(resolve => setTimeout(resolve, delay));
+
+                attempt++;
             }
         }
 

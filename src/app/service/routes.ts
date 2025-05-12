@@ -38,7 +38,7 @@ import {
 
 // import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
 import { deleteFile, downloadFile, getFileGroup, getFileList, updateFileAccess, fileActivate, updateFileMetadata, uploadFiles } from './controllers/file-manager.js';
-import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
+import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCountTokensByThread, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
 import { UserRoleType } from './entity/auth.entity.js';
 import { getOAuthApiProxy } from './api/api-proxy.js';
 import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
@@ -47,6 +47,7 @@ import * as gitlab from './api/api-gitlab.js';
 import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
 import { registApiKey, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId } from './controllers/tool-call.js';
+import { deleteBaseModel, deleteModelPricing, getBaseModels, getModelPricings, upsertBaseModel, upsertModelPricing } from './controllers/model-manager.js';
 
 // routers/index.ts
 
@@ -248,6 +249,15 @@ authAdminRouter.get(`/ext-api-provider-templates`, getApiProviderTemplates); //
 authMaintainerRouter.post('/ext-api-provider-template', upsertApiProviderTemplate); //
 authMaintainerRouter.put('/ext-api-provider-template/:id', upsertApiProviderTemplate); //
 authMaintainerRouter.delete('/ext-api-provider-template/:id', deleteApiProviderTemplate); //
+
+         authUserRouter.get('/ai-models', getBaseModels);
+  authMaintainerRouter.post('/ai-model', upsertBaseModel);
+   authMaintainerRouter.put('/ai-model/:modelId', upsertBaseModel);
+authMaintainerRouter.delete('/ai-model/:modelId', deleteBaseModel);
+         authUserRouter.get('/ai-model/:modelId/pricing', getModelPricings);
+  authMaintainerRouter.post('/ai-model/:modelId/pricing', upsertModelPricing);
+   authMaintainerRouter.put('/ai-model/:modelId/pricing/:id?', upsertModelPricing);
+authMaintainerRouter.delete('/ai-model/:modelId/pricing/:id', deleteModelPricing);
 
 authMaintainerRouter.get('/tenants', getTenants); // テナント一覧取得
 authMaintainerRouter.post('/tenants', upsertTenant); // テナント登録・更新

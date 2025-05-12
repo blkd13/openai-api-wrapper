@@ -1,4 +1,4 @@
-import { Column, CreateDateColumn, Entity, Generated, In, Index, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Generated, In, Index, ManyToOne, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
 import { MyBaseEntity } from './base.js';
 export enum UserStatus {
     // アクティブ系
@@ -379,4 +379,282 @@ export class TenantEntity extends MyBaseEntity {
     isActive!: boolean;
 }
 
+// 各Enumは適宜定義してください
+export enum PlanType { FREE = 'free', PRO = 'pro', ENTERPRISE = 'enterprise' }
 
+@Entity()
+export class OrganizationEntity extends MyBaseEntity {
+    @Column()
+    name!: string;
+
+    @Column({ type: 'enum', enum: PlanType })
+    plan!: PlanType;
+}
+
+@Entity()
+export class OrganizationMembershipEntity extends MyBaseEntity {
+    @Column()
+    organizationId!: string;
+
+    @Column()
+    userId!: string;
+
+    @Column({ type: 'enum', enum: UserRoleType })
+    role!: UserRoleType;
+
+    @Column({ type: 'timestamptz' })
+    joinedAt!: Date;
+}
+
+export interface AzureOpenAIMetadata {
+    resource_name: string; // Azure上のリソース名
+    deployments: {
+        [modelAlias: string]: {
+            deployment_id: string;
+            api_version: string;
+        };
+    };
+    default_deployment?: string; // オプション：省略時のデフォルト
+}
+
+export interface VertexAIMetadata {
+    project_id: string;               // GCP プロジェクトID
+    location: string;                 // リージョン（例：us-central1）
+    model_ids?: {
+        [modelAlias: string]: string; // 任意のモデルエイリアスとVertexモデル名の対応
+    };
+    service_account_email?: string;   // サービスアカウントEmail（あれば）
+}
+
+export type CredentialMetadata =
+    | AzureOpenAIMetadata
+    | VertexAIMetadata
+    | Record<string, any>; // その他（未定義プロバイダやローカルLLM）
+
+export function isAzureMetadata(meta: CredentialMetadata): meta is AzureOpenAIMetadata {
+    return (meta as AzureOpenAIMetadata).resource_name !== undefined;
+}
+
+export function isVertexMetadata(meta: CredentialMetadata): meta is VertexAIMetadata {
+    return (meta as VertexAIMetadata).project_id !== undefined;
+}
+export enum CredentialType { API_KEY = 'api_key', SERVICE_ACCOUNT = 'service_account', OAUTH_TOKEN = 'oauth_token' }
+export enum AIProviderType {
+    OPENAI = 'openai',
+    AZURE_OPENAI = 'azure_openai',
+    // AZURE = 'azure',
+    GROQ = 'groq',
+    MISTRAL = 'mistral',
+    ANTHROPIC = 'anthropic',
+    DEEPSEEK = 'deepseek',
+    LOCAL = 'local',
+    VERTEXAI = 'vertexai',
+    ANTHROPIC_VERTEXAI = 'anthropic_vertexai',
+    OPENAPI_VERTEXAI = 'openapi_vertexai',
+    CEREBRAS = 'cerebras',
+    COHERE = 'cohere',
+    GEMINI = 'gemini',
+}
+
+export enum ScopeType { USER = 'user', DIVISION = 'division', ORGANIZATION = 'organization' }
+export class ScopeInfo {
+    @Column({ type: 'enum', enum: ScopeType })
+    scopeType!: ScopeType;
+
+    @Column({ type: 'uuid' })
+    scopeId!: string;
+}
+@Entity()
+@Index(['tenantKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
+export class CredentialEntity extends MyBaseEntity {
+    @Column({ type: 'enum', enum: CredentialType })
+    credentialType!: CredentialType;
+
+    @Column({ type: 'text' })
+    keyValue!: string; // 暗号化はアプリケーション層で実施
+
+    @Column(type => ScopeInfo)
+    scopeInfo!: ScopeInfo;
+
+    @Column()
+    label!: string;
+
+    @Column({ type: 'timestamptz', nullable: true })
+    expiresAt?: Date;
+
+    @Column({ type: 'jsonb', nullable: true })
+    metadata?: CredentialMetadata;
+
+    @Column({ default: true })
+    isActive!: boolean;
+}
+
+export enum AIModelStatus {
+    ACTIVE = 'active',
+    DEPRECATED = 'deprecated',
+    EXPERIMENTAL = 'experimental',
+}
+
+export enum Modality {
+    TEXT = 'text',
+    PDF = 'pdf',
+    IMAGE = 'image',
+    AUDIO = 'audio',
+    VIDEO = 'video',
+}
+
+export enum AIModelPricingUnit {
+    USD_1M_TOKENS = 'USD/1Mtokens', // 1Mトークンあたりの価格
+    USD_1M_CHARS = 'USD/1MCHARS', // 1M文字あたりの価格
+    USD_1M_TOKENS_PER_SECOND = 'USD/1Mtokens/sec', // 1Mトークンあたりの価格
+    USD_1M_CHARS_PER_SECOND = 'USD/1MCHARS/sec', // 1M文字あたりの価格
+}
+@Entity()
+@Index(['tenantKey', 'modelId'])
+export class AIModelPricingEntity extends MyBaseEntity {
+    @Column({ type: 'uuid' })
+    modelId!: string; // ModelのIDを参照する
+
+    @Column('decimal', { precision: 10, scale: 6 })
+    inputPricePerUnit!: number;
+
+    @Column('decimal', { precision: 10, scale: 6 })
+    outputPricePerUnit!: number;
+
+    @Column({ type: 'varchar', default: 'USD/1Mtokens' })
+    unit!: string;
+
+    @Column({ type: 'timestamptz' })
+    validFrom!: Date;
+}
+
+@Entity()
+@Index(['tenantKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
+@Index(['tenantKey', 'modelId', 'scopeInfo.scopeType', 'scopeInfo.scopeId']) // モデル検索に備える
+export class AIModelOverrideEntity extends MyBaseEntity {
+
+    @Column({ type: 'uuid' })
+    modelId!: string;
+
+    @Column({ type: 'uuid' })
+    credentialId!: string;
+
+    @Column(type => ScopeInfo)
+    scopeInfo!: ScopeInfo;
+
+    @Column()
+    alias!: string;
+
+    @Column({ nullable: true })
+    endpointOverride?: string;
+
+    @Column('jsonb', { nullable: true })
+    metadata?: Record<string, any>;
+
+    @Column({ default: true })
+    isActive!: boolean;
+}
+
+
+
+
+@Entity()
+@Index(['provider', 'providerModelId'], { unique: true })
+export class AIModelEntity extends MyBaseEntity {
+
+    @Column({ type: 'enum', enum: AIProviderType })
+    provider!: AIProviderType;
+
+    @Column()
+    providerModelId!: string;
+
+    @Column()
+    name!: string;
+
+    @Column({ nullable: true, length: 8, })
+    shortName!: string;
+
+    @Column({ nullable: true })
+    throttleKey!: string;
+
+    // @Column()
+    // version!: string;
+
+    @Column({ type: 'enum', enum: AIModelStatus, default: AIModelStatus.ACTIVE })
+    status!: AIModelStatus;
+
+    @Column({ type: 'text', nullable: true })
+    description?: string;
+
+    @Column('text', { array: true, nullable: true })
+    details?: string[];
+
+    @Column('text', { array: true, default: '{}' })
+    modalities!: Modality[];
+
+    @Column('int')
+    maxContextTokens!: number;
+
+    @Column('int')
+    maxOutputTokens!: number;
+
+    @Column({ default: true })
+    isStream!: boolean;
+
+    // @Column('text', { array: true, nullable: true })
+    // inputFormats!: Modality[];
+
+    @Column('text', { array: true, nullable: true })
+    outputFormats!: Modality[];
+
+    @Column('jsonb', { nullable: true })
+    defaultParameters?: Record<string, any>;
+
+    @Column('jsonb', { nullable: true })
+    capabilities?: Record<string, any>;
+
+    @Column('jsonb', { nullable: true })
+    metadata?: Record<string, any>;
+
+    @Column({ nullable: true })
+    endpointTemplate?: string;
+
+    @Column({ nullable: true })
+    documentationUrl?: string;
+
+    @Column({ nullable: true })
+    licenseType?: string;
+
+    @Column({ type: 'date', nullable: true })
+    knowledgeCutoff?: Date;
+
+    @Column({ type: 'date', nullable: true })
+    releaseDate?: Date;
+
+    @Column({ type: 'date', nullable: true })
+    deprecationDate?: Date;
+
+    @Column('text', { array: true, nullable: true })
+    tags?: string[];
+
+    @Column({ type: 'int', nullable: true })
+    uiOrder?: number;
+
+    @Column({ default: true })
+    isActive!: boolean;
+}
+
+@Entity()
+@Index(['provider', 'alias'], { unique: true })
+export class AIModelAlias extends MyBaseEntity {
+
+    @Column({ type: 'uuid' })
+    @Index()
+    modelId!: string;
+
+    @Column({ type: 'enum', enum: AIProviderType })
+    provider!: AIProviderType;
+
+    @Column({ type: 'text' })
+    alias!: string;
+}

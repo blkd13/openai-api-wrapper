@@ -8,7 +8,7 @@ export const VISION_MODELS = [
     'gemini-flash-experimental', 'gemini-pro-experimental', 'gemini-1.0-pro-vision',
     'claude-3-haiku-20240307', 'claude-3-5-sonnet-20240229', 'claude-3-opus-20240229',
     'claude-3-5-sonnet-20240620', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet@20240620', 'claude-3-5-sonnet-v2@20241022',
-    'o1-preview', 'o1', 'o1-pro', 'o3-mini', 'o4-mini', 'o3', 'chatgpt-4o-latest',
+    'o1-preview', 'o1', 'o1-pro', 'o3-mini', 'o3', 'o3-high', 'o4-mini', 'o4-mini-high', 'chatgpt-4o-latest',
     'gemini-2.0-flash-001', 'gemini-2.0-pro-exp-02-05', 'gemini-2.0-flash-lite-preview-02-05', 'gemini-2.0-flash-lite-001',
     'claude-3-7-sonnet', 'claude-3-7-sonnet@20250219', 'claude-3-7-sonnet-thinking@20250219',
     'command-a-03-2025', 'command-r', 'command-r-plus', 'c4ai-aya-expanse-32b', 'c4ai-aya-expanse-8b', 'c4ai-aya-vision-32b', 'c4ai-aya-vision-8b',
@@ -22,25 +22,12 @@ export const VISION_MODELS = [
     // 'meta-llama/llama-4-maverick-17b-128e-instruct', 'meta-llama/llama-4-scout-17b-16e-instruct',
     // cerebras
     // 'llama-3.3-8b', 'llama-3.3-70b', 'llama3.1-8b', 'llama-4-scout-17b-16e-instruct',
+    // local
+    'Qwen3-14B-Q4_K_M', 'Qwen3-14B-Q5_0', 'Qwen3-14B-Q5_K_M', 'Qwen3-14B-Q6_K', 'Qwen3-14B-Q8_0',
+    'gemma-3-12b-it-q4_0',
 ];
 export const JSON_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview', 'gpt-3.5-turbo', 'gpt-3.5-turbo-1106'];
 export const GPT4_MODELS = ['gpt-4o-mini', 'gpt-4o-2024-07-18', 'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview', 'gpt-4-1106-preview', 'gpt-4-0125-preview'];
-const azureDeployNameMap: Record<string, string> = {
-    'gpt-3.5-turbo': 'gpt35',
-    'gpt-4-vision-preview': 'gpt4',
-    'gpt-4o': 'gpt4o',
-    'o1-preview': 'o1-preview',
-    'o1': 'o1',
-    'o3-mini': 'o3-mini',
-};
-const azureDeployTpmMap: Record<string, number> = {
-    'gpt-3.5-turbo': 60000,
-    'gpt-4-vision-preview': 10000,
-    'gpt-4o': 100000,
-    'o1-preview': 500,
-    'o1': 500,
-    'o3-mini': 500,
-};
 
 // TiktokenModelが新モデルに追いつくまでは自己定義で対応する。
 // export type GPTModels = 'gpt-4' | 'gpt-4-0314' | 'gpt-4-0613' | 'gpt-4-32k' | 'gpt-4-32k-0314' | 'gpt-4-32k-0613' | 'gpt-4-turbo-preview' | 'gpt-4-1106-preview' | 'gpt-4-0125-preview' | 'gpt-4-vision-preview' | 'gpt-3.5-turbo' | 'gpt-3.5-turbo-0301' | 'gpt-3.5-turbo-0613' | 'gpt-3.5-turbo-16k' | 'gpt-3.5-turbo-16k-0613';
@@ -56,7 +43,7 @@ export type GPTModels = TiktokenModel
     | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-5-sonnet-20240229' | 'claude-3-opus-20240229' | 'claude-3-5-sonnet-20240620' | 'claude-3-5-sonnet-20241022' | 'claude-3-5-sonnet@20240620' | 'claude-3-5-sonnet-v2@20241022' | 'claude-3-7-sonnet-20250219' | 'claude-3-7-sonnet-thinking-20250219' | 'claude-3-7-sonnet' | 'claude-3-7-sonnet-thinking@20250219'
     | 'deepseek-coder' | 'deepseek-chat'
     | 'command-a-03-2025' | 'command-r' | 'command-r-plus' | 'c4ai-aya-expanse-32b' | 'c4ai-aya-expanse-8b' | 'c4ai-aya-vision-32b' | 'c4ai-aya-vision-8b'
-    | 'o4-mini' | 'o3' | 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-4.1-nano' | 'gpt-4.5-preview' | 'chatgpt-4o-latest'
+    | 'o4-mini' | 'o3' | 'o3-high' | 'o4-mini-high' | 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-4.1-nano' | 'gpt-4.5-preview' | 'chatgpt-4o-latest'
     ;
 
 export type AiProvider = 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai' | 'anthropic_vertexai' | 'openapi_vertexai' | 'cerebras' | 'cohere' | 'gemini';
@@ -131,6 +118,8 @@ export const COST_TABLE: { [key: string]: { prompt: number, completion: number }
     'aya-e8  ': { prompt: 0.00000000, completion: 0.000000, },
     'aya-v32 ': { prompt: 0.00000000, completion: 0.000000, },
     'aya-v8  ': { prompt: 0.00000000, completion: 0.000000, },
+    'l-q3-14q': { prompt: 0.00000000, completion: 0.000000, },
+    'l-g3-12q': { prompt: 0.00000000, completion: 0.000000, },
 };
 
 export const SHORT_NAME: { [key: string]: string } = {
@@ -186,7 +175,9 @@ export const SHORT_NAME: { [key: string]: string } = {
     'o1-preview': 'o1-pre  ',
     'o3-mini': 'o3-mini ',
     'o3': 'o3      ',
+    'o3-high': 'o3      ',
     'o4-mini': 'o4-mini ',
+    'o4-mini-high': 'o4-mini ',
     'gpt-4o-2024-05-13': 'gpt4-o  ',
     'gpt-3.5-turbo': 'gpt3-16k',
     'gpt-3.5-turbo-0125': 'gpt3-16k',
@@ -283,6 +274,13 @@ export const SHORT_NAME: { [key: string]: string } = {
     'llama-3.3-70b': 'c-l33l70',
     'llama3.1-8b': 'c-l31l8 ',
     'llama-4-scout-17b-16e-instruct': 'c-l4s17i',
+    // local
+    'Qwen3-14B-Q4_K_M': 'l-q3-14q',
+    'Qwen3-14B-Q5_0': 'l-q3-14q',
+    'Qwen3-14B-Q5_K_M': 'l-q3-14q',
+    'Qwen3-14B-Q6_K': 'l-q3-14q',
+    'Qwen3-14B-Q8_0': 'l-q3-14q',
+    'gemma-3-12b-it-q4_0': 'l-g3-12q',
 };
 
 // レートリミット情報
@@ -298,8 +296,8 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
     'gpt4-32k': { maxTokens: 4096, limitRequests: 10000, limitTokens: 300000, remainingRequests: 10, remainingTokens: 32000, resetRequests: '0ms', resetTokens: '0s', },
     'gpt4-128': { maxTokens: 4096, limitRequests: 10000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
     'gpt4-vis': { maxTokens: 4096, limitRequests: 10000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
-    'gpt4-o  ': { maxTokens: 4096, limitRequests: 10000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
-    'gpt4-om ': { maxTokens: 4096, limitRequests: 10000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+    'gpt4-o  ': { maxTokens: 16_384, limitRequests: 10000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
+    'gpt4-om ': { maxTokens: 16_384, limitRequests: 10000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
     'o1-pre  ': { maxTokens: 32768, limitRequests: 500, limitTokens: 3000000, remainingRequests: 50, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
     'o1-pro  ': { maxTokens: 100000, limitRequests: 500, limitTokens: 3000000, remainingRequests: 50, remainingTokens: 128000, resetRequests: '0ms', resetTokens: '0s', },
     'o1      ': { maxTokens: 100000, limitRequests: 500, limitTokens: 3000000, remainingRequests: 50, remainingTokens: 2280000, resetRequests: '0ms', resetTokens: '0s', },
@@ -382,6 +380,10 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
 
     // vertex llama
     'vla31-40': { maxTokens: 4096, limitRequests: 5, limitTokens: 2000000, remainingRequests: 10, remainingTokens: 128000, resetRequests: '1000ms', resetTokens: '60s', },
+
+    // local
+    'l-q3-14q': { maxTokens: 8192, limitRequests: 1000000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
+    'l-g3-12q': { maxTokens: 8192, limitRequests: 1000000, limitTokens: 800000, remainingRequests: 10, remainingTokens: 5000000, resetRequests: '0ms', resetTokens: '0s', },
 };
 
 export interface Ratelimit {

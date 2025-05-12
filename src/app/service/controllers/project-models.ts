@@ -13,6 +13,8 @@ import { Utils } from '../../common/utils.js';
 import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
 import { geminiCountTokensByContentPart } from './chat-by-project-model.js';
 import { isActiveFile } from './file-manager.js';
+import { ToolCallGroupEntity, ToolCallPartEntity } from '../entity/tool-call.entity.js';
+import { UUID } from 'typeorm/driver/mongodb/bson.typings.js';
 
 /**
  * [user認証] チーム作成
@@ -2228,40 +2230,73 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
                     if (idRemapTable.contentPart[contentPart.linkId]) {
                         // ファイルコピー済み
                     } else {
-                        // ファイルコピー
-                        const fileGroup = await transactionalEntityManager.findOneOrFail(FileGroupEntity, { where: { tenantKey: req.info.user.tenantKey, id: contentPart.linkId } });
-                        const newFileGroup = new FileGroupEntity();
-                        newFileGroup.description = fileGroup.description;
-                        newFileGroup.label = fileGroup.label;
-                        newFileGroup.uploadedBy = fileGroup.uploadedBy;
-                        newFileGroup.type = fileGroup.type;
-                        newFileGroup.projectId = fileGroup.projectId;
-                        newFileGroup.tenantKey = req.info.user.tenantKey;
-                        newFileGroup.createdBy = req.info.user.id;
-                        newFileGroup.updatedBy = req.info.user.id;
-                        newFileGroup.createdIp = req.info.ip;
-                        newFileGroup.updatedIp = req.info.ip;
-                        const savedFileGroup = await transactionalEntityManager.save(FileGroupEntity, newFileGroup);
-                        idRemapTable.contentPart[fileGroup.id] = savedFileGroup.id;
-                        const fileList = await transactionalEntityManager.find(FileEntity, { where: { fileGroupId: fileGroup.id } });
-                        for (const file of fileList) {
-                            const fileBodyEntity = await transactionalEntityManager.findOneOrFail(FileBodyEntity, { where: { tenantKey: req.info.user.tenantKey, id: file.fileBodyId } });
+                        if (contentPart.type === ContentPartType.FILE) {
+                            // ファイルコピー
+                            const fileGroup = await transactionalEntityManager.findOneOrFail(FileGroupEntity, { where: { tenantKey: req.info.user.tenantKey, id: contentPart.linkId } });
+                            const newFileGroup = new FileGroupEntity();
+                            newFileGroup.description = fileGroup.description;
+                            newFileGroup.label = fileGroup.label;
+                            newFileGroup.uploadedBy = fileGroup.uploadedBy;
+                            newFileGroup.type = fileGroup.type;
+                            newFileGroup.projectId = fileGroup.projectId;
+                            newFileGroup.tenantKey = req.info.user.tenantKey;
+                            newFileGroup.createdBy = req.info.user.id;
+                            newFileGroup.updatedBy = req.info.user.id;
+                            newFileGroup.createdIp = req.info.ip;
+                            newFileGroup.updatedIp = req.info.ip;
+                            const savedFileGroup = await transactionalEntityManager.save(FileGroupEntity, newFileGroup);
+                            idRemapTable.contentPart[fileGroup.id] = savedFileGroup.id;
+                            const fileList = await transactionalEntityManager.find(FileEntity, { where: { fileGroupId: fileGroup.id } });
+                            for (const file of fileList) {
+                                const fileBodyEntity = await transactionalEntityManager.findOneOrFail(FileBodyEntity, { where: { tenantKey: req.info.user.tenantKey, id: file.fileBodyId } });
 
-                            const newFile = new FileEntity();
-                            newFile.fileGroupId = savedFileGroup.id;
-                            newFile.fileName = file.fileName;
-                            newFile.filePath = file.filePath;
-                            newFile.isActive = isActiveFile(fileBodyEntity.fileType, file.filePath, file.fileName);
-                            newFile.projectId = file.projectId;
-                            newFile.uploadedBy = file.uploadedBy;
-                            newFile.fileBodyId = file.fileBodyId;
-                            newFile.tenantKey = req.info.user.tenantKey;
-                            newFile.createdBy = req.info.user.id;
-                            newFile.updatedBy = req.info.user.id;
-                            newFile.createdIp = req.info.ip;
-                            newFile.updatedIp = req.info.ip;
-                            const savedFile = await transactionalEntityManager.save(FileEntity, newFile);
-                            idRemapTable.contentPart[file.id] = savedFile.id;
+                                const newFile = new FileEntity();
+                                newFile.fileGroupId = savedFileGroup.id;
+                                newFile.fileName = file.fileName;
+                                newFile.filePath = file.filePath;
+                                newFile.isActive = isActiveFile(fileBodyEntity.fileType, file.filePath, file.fileName);
+                                newFile.projectId = file.projectId;
+                                newFile.uploadedBy = file.uploadedBy;
+                                newFile.fileBodyId = file.fileBodyId;
+                                newFile.tenantKey = req.info.user.tenantKey;
+                                newFile.createdBy = req.info.user.id;
+                                newFile.updatedBy = req.info.user.id;
+                                newFile.createdIp = req.info.ip;
+                                newFile.updatedIp = req.info.ip;
+                                const savedFile = await transactionalEntityManager.save(FileEntity, newFile);
+                                idRemapTable.contentPart[file.id] = savedFile.id;
+                            }
+                        } else if (contentPart.type === ContentPartType.TOOL) {
+                            // ファイルコピー
+                            const toolCallGroup = await transactionalEntityManager.findOneOrFail(ToolCallGroupEntity, { where: { tenantKey: req.info.user.tenantKey, id: contentPart.linkId } });
+                            const newToolGroup = new ToolCallGroupEntity();
+                            // newToolGroup.seq = toolGroup.seq;
+                            newToolGroup.status = toolCallGroup.status;
+                            newToolGroup.projectId = toolCallGroup.projectId;
+                            newToolGroup.tenantKey = req.info.user.tenantKey;
+                            newToolGroup.createdBy = req.info.user.id;
+                            newToolGroup.updatedBy = req.info.user.id;
+                            newToolGroup.createdIp = req.info.ip;
+                            newToolGroup.updatedIp = req.info.ip;
+                            const savedToolGroup = await transactionalEntityManager.save(ToolCallGroupEntity, newToolGroup);
+                            idRemapTable.contentPart[toolCallGroup.id] = savedToolGroup.id;
+                            const toolCallPartList = await transactionalEntityManager.find(ToolCallPartEntity, { where: { tenantKey: req.info.user.tenantKey, toolCallGroupId: toolCallGroup.id } });
+                            for (const toolCallPart of toolCallPartList) {
+                                const newToolCallPart = new ToolCallPartEntity();
+                                newToolCallPart.toolCallGroupId = savedToolGroup.id;
+                                newToolCallPart.toolCallId = toolCallPart.toolCallId + '-copy';
+                                newToolCallPart.type = toolCallPart.type;
+                                newToolCallPart.body = toolCallPart.body;
+                                newToolCallPart.tokenCount = toolCallPart.tokenCount;
+                                newToolCallPart.status = toolCallPart.status;
+                                newToolCallPart.tenantKey = req.info.user.tenantKey;
+                                newToolCallPart.createdBy = req.info.user.id;
+                                newToolCallPart.updatedBy = req.info.user.id;
+                                newToolCallPart.createdIp = req.info.ip;
+                                newToolCallPart.updatedIp = req.info.ip;
+                                const savedFile = await transactionalEntityManager.save(ToolCallPartEntity, newToolCallPart);
+                                idRemapTable.contentPart[toolCallPart.id] = savedFile.id;
+                            }
                         }
                     }
                     newContentPart.linkId = idRemapTable.contentPart[contentPart.linkId];

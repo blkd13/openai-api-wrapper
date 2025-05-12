@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";
 import axios from 'axios';
-import { concat, concatMap, from, map, Observable, of, tap, toArray } from 'rxjs';
+import { concat, concatMap, from, map, Observable, of, retry, tap, toArray } from 'rxjs';
 import { ChatCompletionAssistantMessageParam, ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionContentPartText, ChatCompletionCreateParams, ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam, ChatCompletionMessageToolCall, ChatCompletionTool, ChatCompletionToolMessageParam, FileContent } from "openai/resources";
 
 import { MyToolType, aiApi, calculateTokenCost, getTiktokenEncoder, invalidMimeList, my_vertexai, normalizeMessage, providerPrediction, vertex_ai } from '../../common/openai-api-wrapper.js';
@@ -1758,9 +1758,28 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
     const generativeModel = vertex_ai.preview.getGenerativeModel({
         model, safetySettings: [],
     });
-    const requests = fileList.map(async file =>
-        tokenCountRequestLimitation.executeWithRetry(async () => {
-            const countTokensPromise = generativeModel.countTokens({
+
+    tokenCountRequestLimitation.setErrorHandler(async (error) => {
+        const errStr = Utils.errorFormat(error);
+        console.error('geminiCountTokensByFile error', error);
+        if (errStr.includes('got status: 400 Bad Request.')) {
+            return { shouldRetry: false };
+        } else if (errStr.includes('got status: 429 Too Many Requests.')) {
+            console.log('retry 429');
+            return { shouldRetry: true };
+        } else if (errStr.includes('got status: 401 Unauthorized.')) {
+            // 認証エラーは再認証してからretry
+            console.log('retry 401');
+            await my_vertexai.getAccessToken();
+            return { shouldRetry: true };
+        }
+        // その他のエラーは再試行しない
+        return { shouldRetry: false };
+    });
+
+    const vertexGemini = fileList.map(async file =>
+        tokenCountRequestLimitation.executeWithRetry(async () =>
+            generativeModel.countTokens({
                 contents: [{
                     role: 'user', parts: [
                         file.buffer
@@ -1775,73 +1794,83 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
                                 { text: '' }, // これはありえない。エラー。
                     ]
                 }]
-            });
-
-            const openaiTokenCount = { totalTokens: 0 };
-            if (file.fileBodyEntity.fileType.startsWith('image/') && file.base64Data) {
-                const metaJson = file.fileBodyEntity.metaJson || {};
-                const imageTokens = calculateTokenCost(metaJson.width || 0, metaJson.height || 0);
-                openaiTokenCount.totalTokens = imageTokens;
-            } else if (file.buffer !== undefined) {
-                openaiTokenCount.totalTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(file.buffer.toString()).length;
-            } else if (file.fileBodyEntity.fileType.startsWith('application/pdf')) {
-                const pdfPath = file.fileBodyEntity.innerPath;
-                const numPages = file.fileBodyEntity.metaJson?.numPages || 0;
-                if (numPages) {
-                    // gemini系以外は画像化したものとテキスト抽出したものを組合せる。
-                    const jsonString = await fs.readFile(path.dirname(pdfPath) + '/' + path.basename(pdfPath, '.pdf') + '.json', 'utf-8');
-                    const pdfMetaData = JSON.parse(jsonString) as PdfMetaData;
-                    let metaText = '';
-                    // `---\n${(image.image_url as any).label} start\n\n`;
-                    if (pdfMetaData.info) {
-                        metaText += `## Info\n\n`;
-                        metaText += ['CreationDate', 'ModDate', 'Title', 'Creator', 'Author'].map(tag => `- ${tag}: ${pdfMetaData.info[tag]}\n`);
-                    } else { }
-                    if (pdfMetaData.outline) {
-                        metaText += `## Outline\n\n ${JSON.stringify(pdfMetaData.outline)}\n`;
-                    } else { }
-                    const textTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(metaText + pdfMetaData.textPages.join('')).length;
-
-                    // https://platform.openai.com/docs/guides/images-vision?api-mode=chat#calculating-costs
-                    // OpenAIのトークン数計算式 
-                    // imageTokens = 85 + 170 * numPages * 4; 
-                    const imageTokens = 85 + 170 * numPages * 2 * 2;
-                    openaiTokenCount.totalTokens = imageTokens + textTokens;
-                    (openaiTokenCount as any).prompt_tokens_details = { image_tokens: imageTokens, text_tokens: textTokens, };
-                } else {
-                    // TODO 何も無い場合はどうするか？
-                    console.error(`Error: PDF file has no pages: ${file.fileBodyEntity.fileType} ${file.fileBodyEntity.innerPath} ${JSON.stringify(file.fileBodyEntity.metaJson)}`);
-                    // 何も無い場合はトークン数を0にする
-                    openaiTokenCount.totalTokens = 0;
-                }
-            } else {
-                // 何もしない
-                console.error(`Error: fileType is not supported: ${file.fileBodyEntity.fileType} ${file.fileBodyEntity.innerPath}`);
-            }
-
-            const countTokensGemini = await countTokensPromise;
-
-            return { [model]: countTokensGemini, [COUNT_TOKEN_OPENAI_MODEL]: openaiTokenCount } as { [model: string]: CountTokensResponse };
-        })
+            })
+        )
     );
 
+    const openaiTokenCountList = fileList.map(async file => {
+        const openaiTokenCount = { totalTokens: 0 } as CountTokensResponse;
+        if (file.fileBodyEntity.fileType.startsWith('image/') && file.base64Data) {
+            const metaJson = file.fileBodyEntity.metaJson || {};
+            const imageTokens = calculateTokenCost(metaJson.width || 0, metaJson.height || 0);
+            openaiTokenCount.totalTokens = imageTokens;
+        } else if (file.buffer !== undefined) {
+            openaiTokenCount.totalTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(file.buffer.toString()).length;
+        } else if ([...convertToPdfMimeList, 'application/pdf'].includes(file.fileBodyEntity.fileType)) {
+            const pdfPath = file.fileBodyEntity.innerPath;
+            const numPages = file.fileBodyEntity.metaJson?.numPages || 0;
+            // console.log(`numPages=${numPages}`);
+            if (numPages > 0) {
+                // gemini系以外は画像化したものとテキスト抽出したものを組合せる。
+                const jsonString = await fs.readFile(path.dirname(pdfPath) + '/' + path.basename(pdfPath, '.pdf') + '.json', 'utf-8').catch(() => {
+                    console.error(`Error: PDF file has no pages: ${file.fileBodyEntity.fileType} ${file.fileBodyEntity.innerPath} ${JSON.stringify(file.fileBodyEntity.metaJson)}`);
+                    return '{"pdfMetaData":{"textPages":""}}';
+                });
+                const pdfMetaData = JSON.parse(jsonString) as PdfMetaData;
+                let metaText = '';
+                // `---\n${(image.image_url as any).label} start\n\n`;
+                if (pdfMetaData.info) {
+                    metaText += `## Info\n\n`;
+                    metaText += ['CreationDate', 'ModDate', 'Title', 'Creator', 'Author'].map(tag => `- ${tag}: ${pdfMetaData.info[tag]}\n`).join('');
+                } else { }
+                if (pdfMetaData.outline) {
+                    metaText += `## Outline\n\n ${JSON.stringify(pdfMetaData.outline)}\n`;
+                } else { }
+                const textTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(metaText + pdfMetaData.textPages.join('')).length;
+
+                // https://platform.openai.com/docs/guides/images-vision?api-mode=chat#calculating-costs
+                // OpenAIのトークン数計算式 
+                // imageTokens = 85 + 170 * numPages * 4; 
+                const imageTokens = 85 + 170 * numPages * 2 * 2;
+                openaiTokenCount.totalTokens = imageTokens + textTokens;
+                (openaiTokenCount as any).prompt_tokens_details = { image_tokens: imageTokens, text_tokens: textTokens, };
+            } else {
+                // TODO 何も無い場合はどうするか？
+                console.error(`Error: PDF file has no pages: ${file.fileBodyEntity.fileType} ${file.fileBodyEntity.innerPath} ${JSON.stringify(file.fileBodyEntity.metaJson)}`);
+                // 何も無い場合はトークン数を0にする
+                openaiTokenCount.totalTokens = 0;
+            }
+        } else {
+            // 何もしない
+            console.error(`Error: fileType is not supported: ${file.fileBodyEntity.fileType} ${file.fileBodyEntity.innerPath}`);
+        }
+        return openaiTokenCount;
+    });
+
     try {
-        const results = await Promise.allSettled(requests);
+        const geminiResults = await Promise.allSettled(vertexGemini);
+        const openaiResults = await Promise.allSettled(openaiTokenCountList);
 
         // 整形
-        const mappedResults: FileBodyEntity[] = results.map((r, index) => {
+        const mappedResults: FileBodyEntity[] = geminiResults.map((r, index) => {
             if (fileList[index].fileBodyEntity.tokenCount) {
             } else {
                 fileList[index].fileBodyEntity.tokenCount = {};
             }
-            // console.log(r);
+            const tokenCount = fileList[index].fileBodyEntity.tokenCount;
             if (r.status === 'fulfilled') {
-                fileList[index].fileBodyEntity.tokenCount = r.value as { [model: string]: CountTokensResponse };
-                return fileList[index].fileBodyEntity;
+                tokenCount[COUNT_TOKEN_MODEL] = r.value;;
             } else {
-                console.error(r.reason);
-                return { error: r.reason } as any;
+                // console.error(r.reason);
+                tokenCount[COUNT_TOKEN_MODEL] = { totalTokens: 0, totalBillableCharacters: 0 };
             }
+            if (openaiResults[index].status === 'fulfilled') {
+                tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiResults[index].value;
+            } else {
+                // console.error(openaiResults[index].reason);
+                tokenCount[COUNT_TOKEN_OPENAI_MODEL] = { totalTokens: 0 };
+            }
+            return fileList[index].fileBodyEntity;
         });
 
         // 保存
@@ -1849,8 +1878,8 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
         // console.dir(forSave, { depth: null });
         await transactionalEntityManager.getRepository(FileBodyEntity).save(forSaveList);
         // 成功・失敗の結果を集計
-        const successful = results.filter(r => r.status === 'fulfilled').length;
-        const failed = results.filter(r => r.status === 'rejected').length;
+        const successful = geminiResults.filter(r => r.status === 'fulfilled').length;
+        const failed = geminiResults.filter(r => r.status === 'rejected').length;
 
         console.log(`Count tokens by files completed: ${successful}, Failed: ${failed}`);
 
@@ -2161,3 +2190,4 @@ export const geminiGetContextCache = [
         }
     }
 ];
+

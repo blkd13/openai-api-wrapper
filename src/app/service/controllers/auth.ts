@@ -529,6 +529,7 @@ export async function tryRefreshCore(tm: EntityManager, xRealIp: string, tokenTy
     // user.dataValuesはそのままだとゴミがたくさん付くので、項目ごとにUserModelにマッピングする。
     // TODO ここはもっとスマートに書けるはず。マッパーを用意するべきか？
     const userEntity = new UserEntity();
+    userEntity.tenantKey = user.tenantKey;
     userEntity.id = user.id;
     userEntity.name = user.name;
     userEntity.email = user.email;
