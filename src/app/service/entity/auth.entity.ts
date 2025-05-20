@@ -601,8 +601,8 @@ export class AIModelEntity extends MyBaseEntity {
     @Column({ default: true })
     isStream!: boolean;
 
-    // @Column('text', { array: true, nullable: true })
-    // inputFormats!: Modality[];
+    @Column('text', { array: true, nullable: true })
+    inputFormats!: Modality[];
 
     @Column('text', { array: true, nullable: true })
     outputFormats!: Modality[];

@@ -83,6 +83,7 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                     // アクセストークン検証
                     const userToken = await verifyJwt<UserToken>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user');
                     const userEntity = { id: userToken.id, role: userToken.role, name: userToken.name, email: userToken.email, tenantKey: userToken.tenantKey } as UserToken;
+                    // console.log(`acc:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
 
                     (req as UserRequest).info = { user: userToken, ip: xRealIp, cookie: req.cookies, };
                     return { isAuth: true, obj: userEntity };
@@ -103,6 +104,7 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                     });
 
                     const userToken = { id: userEntity.id, role: userEntity.role, name: userEntity.name, email: userEntity.email, tenantKey: userEntity.tenantKey } as UserToken;
+                    // console.log(`ref:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
                     (req as UserRequest).info = { user: userToken, ip: xRealIp, cookie: req.cookies };
                     return { isAuth: true, obj: userEntity };
                 } catch (err) {
@@ -115,6 +117,7 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                     const { userEntity, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'api', req.headers.authorization?.split(' ')[1] || '', roleType));
 
                     const userToken = { id: userEntity.id, role: userEntity.role, name: userEntity.name, email: userEntity.email, tenantKey: userEntity.tenantKey } as UserToken;
+                    // console.log(`api:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
                     (req as UserRequest).info = { user: userToken, ip: xRealIp, cookie: req.cookies };
                     return { isAuth: true, obj: userEntity };
                 } catch (err) {

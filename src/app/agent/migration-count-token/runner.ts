@@ -71,9 +71,10 @@ export async function main() {
                 fileBody.metaJson = { isEnable, numPages: pdfData.pdfDocument.numPages };
 
                 if (isEnable) {
+                    const basePath = pdfPath.substring(0, pdfPath.lastIndexOf('.'));
                     // 1000ページ以下のドキュメントはテキストを抽出して保存する
                     pdfData.textPages.forEach((text, index) => {
-                        const pagePath = path.dirname(pdfPath) + '/' + path.basename(pdfPath, '.pdf') + '.' + (index + 1) + '.txt';
+                        const pagePath = `${basePath}.${index + 1}.txt`;
                         console.log(`----- Page ${index + 1} Chars ${text.length} -----`);
                         // console.log(text);
                         fs.writeFile(pagePath, text, 'utf-8').catch((err) => {

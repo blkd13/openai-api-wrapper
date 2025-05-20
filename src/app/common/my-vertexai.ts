@@ -127,6 +127,8 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
                         // contentが無ければ入れない
                     }
                     message.tool_calls.forEach(toolCall => {
+                        // console.dir(toolCall, { depth: null });
+                        // console.log(`tool_call_id:${toolCall.id} function name:${toolCall.function.name} arguments:${toolCall.function.arguments}`);
                         content.parts.push({
                             functionCall: {
                                 name: toolCall.function.name,
@@ -295,7 +297,7 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
 export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: GenerateContentRequest): GenerateContentRequestExtended {
     const req: GenerateContentRequestExtended = (_req || mapForGemini(args)) as GenerateContentRequestExtended;
     req.generationConfig = {
-        maxOutputTokens: args.max_tokens || 8192,
+        maxOutputTokens: args.max_tokens || undefined,
         temperature: args.temperature || 0.1,
         topP: args.top_p || 0.95,
     };

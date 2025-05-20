@@ -126,11 +126,12 @@ async function convertPdfPagesDynamically(pdfPath: string, pdfDocument: PDFDocum
         // 各ページごとに出力サイズを計算
         const { targetWidth, targetHeight } = calculateTargetDimensions(origWidth, origHeight, maxDim);
         console.log(`Page ${i}: origWidth=${origWidth.toFixed(2)}, origHeight=${origHeight.toFixed(2)} => targetWidth=${targetWidth}, targetHeight=${targetHeight}`);
+        const basePath = pdfPath.substring(0, pdfPath.lastIndexOf('.'));
 
         // pdf2pic のオプションを動的に設定（**height** は指定せず、width のみ）
         const options = {
             density: 150,               // 解像度（調整可能）
-            saveFilename: path.basename(pdfPath, '.pdf'),   // 出力ファイル名のプレフィックス
+            saveFilename: path.basename(basePath),   // 出力ファイル名のプレフィックス
             savePath: path.dirname(pdfPath),       // 出力先ディレクトリ（事前に作成しておくこと）
             format: 'png',              // 画像フォーマット
             height: targetHeight,
@@ -162,10 +163,11 @@ async function convertPdfPagesDynamicallyParallel(pdfPath: string, pdfDocument: 
                 const viewport = page.getViewport({ scale: 1 });
                 const { width: origWidth, height: origHeight } = viewport;
                 const { targetWidth, targetHeight } = calculateTargetDimensions(origWidth, origHeight, maxDim);
+                const basePath = pdfPath.substring(0, pdfPath.lastIndexOf('.'));
 
                 const options = {
                     density: 150,
-                    saveFilename: path.basename(pdfPath, '.pdf'),
+                    saveFilename: path.basename(basePath),
                     savePath: path.dirname(pdfPath),
                     format: 'png',
                     width: targetWidth,
@@ -188,10 +190,11 @@ async function convertPdfPagesDynamicallyParallel(pdfPath: string, pdfDocument: 
 }
 export async function convertPdf(tm: EntityManager, fileBody: FileBodyEntity): Promise<FileBodyEntity> {
     fileBody.innerPath = fileBody.innerPath.replaceAll(/\\/g, '/');
+    const basePath = fileBody.innerPath.substring(0, fileBody.innerPath.lastIndexOf('.'));
     // const pathBase = file.innerPath.split('-')[0];
     // const innerPath = file.innerPath;
     // const basename = path.basename(innerPath);
-    const pdfPath = fileBody.innerPath.replaceAll(/\.[^.]*$/g, '') + '.pdf';
+    const pdfPath = `${basePath}.pdf`;
     console.log(`Processing PDF: ${pdfPath}`);
     try {
         const pdfData = await extractPdfData(pdfPath);
@@ -219,7 +222,7 @@ export async function convertPdf(tm: EntityManager, fileBody: FileBodyEntity): P
         pdfData.metadata = pdfData.metadata || {};
         pdfData.metadata.numPages = numPages;
         pdfData.metadata.isEnable = isEnable;
-        await fs.writeFile(path.dirname(pdfPath) + '/' + path.basename(pdfPath, '.pdf') + '.json', JSON.stringify(pdfData, null, 2), 'utf-8');
+        await fs.writeFile(`${basePath}.json`, JSON.stringify(pdfData, null, 2), 'utf-8');
 
         if (isEnable) {
             // 画像化

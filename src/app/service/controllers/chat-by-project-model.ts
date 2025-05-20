@@ -1328,13 +1328,61 @@ export const chatCompletionByProjectModel = [
                             resolve({ messageSet });
                         },
                     });
+                }).catch(async error => {
+                    await saveStock();
+                    // // DB側の更新を待つ必要は無い。
+                    // endResponse(undefined as any, error);
+                    await ds.transaction(async transactionalEntityManager => {
+                        await Promise.all(stockList.map(async stock => {
+                            if (stock.savedMessageId) {
+                                const savedMessage = await transactionalEntityManager.findOne(MessageEntity, {
+                                    where: { id: stock.savedMessageId }
+                                });
+                                if (savedMessage) {
+                                    const savedMessageGroup = await transactionalEntityManager.findOne(MessageGroupEntity, {
+                                        where: { id: savedMessage.messageGroupId }
+                                    });
+                                    const contentPart = await transactionalEntityManager.findOne(ContentPartEntity, {
+                                        where: { messageId: stock.savedMessageId }
+                                    });
+                                    if (savedMessageGroup && contentPart) {
+                                        contentPart.text = stock.text;
+                                        await transactionalEntityManager.save(ContentPartEntity, contentPart);
+
+                                        // ラベルを更新（ラベルはコンテンツの最初の方だけ）
+                                        savedMessage.label = stock.text.substring(0, 250);
+                                        await transactionalEntityManager.save(MessageGroupEntity, savedMessageGroup);
+                                        await transactionalEntityManager.save(MessageEntity, savedMessage);
+                                        // console.error('error', error);
+                                        // 新しいContentPartを作成
+                                        const newContentPart = new ContentPartEntity();
+                                        newContentPart.messageId = savedMessage.id;
+                                        newContentPart.type = ContentPartType.ERROR;
+                                        newContentPart.text = Utils.errorFormat(error, false);
+                                        newContentPart.seq = 1;
+                                        newContentPart.tenantKey = req.info.user.tenantKey;
+                                        newContentPart.createdBy = req.info.user.id;
+                                        newContentPart.updatedBy = req.info.user.id;
+                                        newContentPart.createdIp = req.info.ip;
+                                        newContentPart.updatedIp = req.info.ip;
+                                        const savedContentPart = await transactionalEntityManager.save(ContentPartEntity, newContentPart);
+
+                                        // トークンカウントを更新
+                                        await geminiCountTokensByContentPart(transactionalEntityManager, [savedContentPart]);
+                                    } else { }
+                                }
+                            } else { }
+                        }));
+                    });
+                    return null;
                 }).then(async (res: {
                     messageSet: {
                         messageGroup: MessageGroupEntity,
                         message: MessageEntity,
                         contentParts: ContentPartEntity[],
                     },
-                }) => {
+                } | null) => {
+                    if (!res) { return; }
                     // // メッセージ完了
                     // res.messageSet.contentParts[0].text = res.text;
                     // await transactionalEntityManager.save(ContentPartEntity, res.messageSet.contentParts[0]);
@@ -1808,11 +1856,12 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
             openaiTokenCount.totalTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(file.buffer.toString()).length;
         } else if ([...convertToPdfMimeList, 'application/pdf'].includes(file.fileBodyEntity.fileType)) {
             const pdfPath = file.fileBodyEntity.innerPath;
+            const basePath = pdfPath.substring(0, pdfPath.lastIndexOf('.'));
             const numPages = file.fileBodyEntity.metaJson?.numPages || 0;
             // console.log(`numPages=${numPages}`);
             if (numPages > 0) {
                 // gemini系以外は画像化したものとテキスト抽出したものを組合せる。
-                const jsonString = await fs.readFile(path.dirname(pdfPath) + '/' + path.basename(pdfPath, '.pdf') + '.json', 'utf-8').catch(() => {
+                const jsonString = await fs.readFile(`${basePath}.json`, 'utf-8').catch(() => {
                     console.error(`Error: PDF file has no pages: ${file.fileBodyEntity.fileType} ${file.fileBodyEntity.innerPath} ${JSON.stringify(file.fileBodyEntity.metaJson)}`);
                     return '{"pdfMetaData":{"textPages":""}}';
                 });

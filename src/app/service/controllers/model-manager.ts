@@ -85,7 +85,7 @@ export const upsertBaseModel = [
     body('description').optional({ nullable: true }).isString(),
     body('details').optional({ nullable: true }).isArray(),
     body('details.*').isString(),
-    // body('inputFormats').optional({ nullable: true }).isArray(),
+    body('inputFormats').optional({ nullable: true }).isArray(),
     body('outputFormats').optional({ nullable: true }).isArray(),
     body('outputFormats.*').isString(),
     body('defaultParameters').optional({ nullable: true }),
@@ -192,7 +192,7 @@ export const upsertBaseModel = [
             if ('throttleKey' in bodyData) entity!.throttleKey = bodyData.throttleKey;
             if ('description' in bodyData) entity!.description = bodyData.description;
             if ('details' in bodyData) entity!.details = bodyData.details;
-            // if ('inputFormats' in bodyData) entity!.inputFormats = bodyData.inputFormats;
+            if ('inputFormats' in bodyData) entity!.inputFormats = bodyData.inputFormats;
             if ('outputFormats' in bodyData) entity!.outputFormats = bodyData.outputFormats || [];
             if ('defaultParameters' in bodyData) entity!.defaultParameters = bodyData.defaultParameters;
             if ('capabilities' in bodyData) entity!.capabilities = bodyData.capabilities;

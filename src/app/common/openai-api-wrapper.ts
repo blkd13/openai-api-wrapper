@@ -510,6 +510,12 @@ class RunBit {
                         }) as ChatCompletionContentPart[];
                     } else { }
                 });
+
+                if (args.model.endsWith('-high')) {
+                    args.model = args.model.replace('-high', '');
+                    args.reasoning_effort = 'high';
+                } else { }
+
                 if (args.model.startsWith('o1') || args.model.startsWith('o3') || args.model.startsWith('o4')) {
                     // o1用にパラメータを調整
                     delete (args as any)['max_completion_tokens'];
@@ -517,11 +523,6 @@ class RunBit {
                     args.temperature = 1;
                     delete args.stream;
                     delete args.stream_options;
-
-                    if (args.model.endsWith('-high')) {
-                        args.model = args.model.replace('-high', '');
-                        args.reasoning_effort = 'high';
-                    } else { }
 
                     let tokenBuilder = '';
                     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options: _options }, Utils.genJsonSafer()), {}, (err) => { });
@@ -1538,6 +1539,7 @@ class RunBit {
                 const clientMap: { [key: string]: OpenAI } = {
                     groq, mistral, deepseek, cerebras, local, openai,
                 };
+                // console.dir(args, { depth: null });
                 const client = clientMap[this.provider] || openai;
                 if (this.provider !== 'openai' && this.provider !== 'local') {
                     // userプロンプト以外は文字列にしておく。
