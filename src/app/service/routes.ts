@@ -42,7 +42,7 @@ import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCo
 import { UserRoleType } from './entity/auth.entity.js';
 import { getOAuthApiProxy } from './api/api-proxy.js';
 import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
-import { getUserSetting, upsertUserSetting, deleteUserSetting, getApiProviders, upsertApiProvider, deleteApiProvider, getApiProviderTemplates, upsertApiProviderTemplate, deleteApiProviderTemplate, getTenants, upsertTenant, deactivateTenant } from './controllers/user.js';
+import { getUserSetting, upsertUserSetting, deleteUserSetting, getApiProviders, upsertApiProvider, deleteApiProvider, getApiProviderTemplates, upsertApiProviderTemplate, deleteApiProviderTemplate, getOrganizations, upsertOrganization, deactivateOrganization } from './controllers/user.js';
 import * as gitlab from './api/api-gitlab.js';
 import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
@@ -68,10 +68,10 @@ authInviteRouter.use(authenticateInviteToken);
 
 // 個別コントローラーの設定
 // authNoneRouter.post('/login', userLogin);
-authNoneRouter.post('/:tenantKey/login', userLogin);
+authNoneRouter.post('/:orgKey/login', userLogin);
 authNoneRouter.get('/logout', logout);
-authNoneRouter.post('/:tenantKey/onetime', onetimeLogin);
-authNoneRouter.post('/:tenantKey/request-for-password-reset', requestForPasswordReset);
+authNoneRouter.post('/:orgKey/onetime', onetimeLogin);
+authNoneRouter.post('/:orgKey/request-for-password-reset', requestForPasswordReset);
 // authNoneRouter.post('/onetime', onetimeLogin);
 // authNoneRouter.post('/rwequest-for-password-reset', requestForPasswordReset);
 // authNoneRouter.post('/guest', guestLogin);
@@ -79,7 +79,7 @@ authInviteRouter.post('/password-reset', passwordReset);
 authInviteRouter.post('/oauth-emailauth', oAuthEmailAuth);
 
 // OAuth2
-authNoneRouter.get('/oauth/:tenantKey/:provider/login', userLoginOAuth2);
+authNoneRouter.get('/oauth/:orgKey/:provider/login', userLoginOAuth2);
 authNoneRouter.get('/oauth/callback', userLoginOAuth2Callback); // 認証があっても無くても動くようにしておく
 
 // ユーザー認証系
@@ -239,7 +239,7 @@ authOAuthRouter.post(`/custom-api/box/:providerName/2.0/files/content`, boxUploa
 authOAuthRouter.get(`/custom-api/box/:providerName/2.0/files/:fileId/content`, boxDownload);
 authOAuthRouter.post(`/custom-api/box/:providerName/2.0/files/:fileId/content`, boxUpload);
 
-authNoneRouter.get('/:tenantKey/ext-api-providers', getApiProviders);
+authNoneRouter.get('/:orgKey/ext-api-providers', getApiProviders);
 authUserRouter.get('/ext-api-providers', getApiProviders);
 authAdminRouter.post('/ext-api-provider', upsertApiProvider);
 authAdminRouter.put('/ext-api-provider/:id', upsertApiProvider);
@@ -250,16 +250,16 @@ authMaintainerRouter.post('/ext-api-provider-template', upsertApiProviderTemplat
 authMaintainerRouter.put('/ext-api-provider-template/:id', upsertApiProviderTemplate); //
 authMaintainerRouter.delete('/ext-api-provider-template/:id', deleteApiProviderTemplate); //
 
-         authUserRouter.get('/ai-models', getBaseModels);
-  authMaintainerRouter.post('/ai-model', upsertBaseModel);
-   authMaintainerRouter.put('/ai-model/:modelId', upsertBaseModel);
+authUserRouter.get('/ai-models', getBaseModels);
+authMaintainerRouter.post('/ai-model', upsertBaseModel);
+authMaintainerRouter.put('/ai-model/:modelId', upsertBaseModel);
 authMaintainerRouter.delete('/ai-model/:modelId', deleteBaseModel);
-         authUserRouter.get('/ai-model/:modelId/pricing', getModelPricings);
-  authMaintainerRouter.post('/ai-model/:modelId/pricing', upsertModelPricing);
-   authMaintainerRouter.put('/ai-model/:modelId/pricing/:id?', upsertModelPricing);
+authUserRouter.get('/ai-model/:modelId/pricing', getModelPricings);
+authMaintainerRouter.post('/ai-model/:modelId/pricing', upsertModelPricing);
+authMaintainerRouter.put('/ai-model/:modelId/pricing/:id?', upsertModelPricing);
 authMaintainerRouter.delete('/ai-model/:modelId/pricing/:id', deleteModelPricing);
 
-authMaintainerRouter.get('/tenants', getTenants); // テナント一覧取得
-authMaintainerRouter.post('/tenants', upsertTenant); // テナント登録・更新
-authMaintainerRouter.put('/tenants/:tenantKey', upsertTenant); // テナント登録・更新
-authMaintainerRouter.delete('/tenants/:tenantKey', deactivateTenant); // テナント無効化
+authMaintainerRouter.get('/organizations', getOrganizations); // テナント一覧取得
+authMaintainerRouter.post('/organizations', upsertOrganization); // テナント登録・更新
+authMaintainerRouter.put('/organizations/:orgKey', upsertOrganization); // テナント登録・更新
+authMaintainerRouter.delete('/organizations/:orgKey', deactivateOrganization); // テナント無効化

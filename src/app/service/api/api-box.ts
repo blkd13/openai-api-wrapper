@@ -41,7 +41,7 @@ export const boxApiItem = [
             if (fromcache) {
                 // fromcache=trueの場合はキャッシュを返す
                 try {
-                    let itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id, itemId, offset, limit });
+                    let itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ orgKey: req.info.user.orgKey, userId: req.info.user.id, itemId, offset, limit });
                     // キャッシュがあればそれを先に返しておく。APIの結果が返ってきたらそれでキャッシュを上書きしておく。
                     res.json(itemEntity.data);
                     return;
@@ -53,7 +53,7 @@ export const boxApiItem = [
                 // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
                 const e = {} as ExtApiClient;
                 try {
-                    Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+                    Object.assign(e, await getExtApiClient(req.info.user.orgKey, provider));
                 } catch (error) {
                     res.status(401).json({ error: `${provider}は認証されていません。` });
                     return;
@@ -69,11 +69,11 @@ export const boxApiItem = [
                 const total_count = (folder as any).total_count >= 0 ? (folder as any).total_count : folder.item_collection.total_count;
                 // console.log(`Retrieved ${entries.length} items. Total count: ${total_count}`);
                 const savedFolder = await ds.transaction(async (tm) => {
-                    let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id, type, itemId, offset, limit });
+                    let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ orgKey: req.info.user.orgKey, userId: req.info.user.id, type, itemId, offset, limit });
                     if (itemEntity) {
                     } else {
                         itemEntity = new BoxItemEntity();
-                        itemEntity.tenantKey = req.info.user.tenantKey;
+                        itemEntity.orgKey = req.info.user.orgKey;
                         itemEntity.userId = req.info.user.id;
                         itemEntity.itemId = itemId;
                         itemEntity.type = type;
@@ -238,7 +238,7 @@ export const upsertBoxApiCollection = [
             // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
             const e = {} as ExtApiClient;
             try {
-                Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+                Object.assign(e, await getExtApiClient(req.info.user.orgKey, provider));
             } catch (error) {
                 res.status(401).json({ error: `${provider}は認証されていません。` });
                 return;
@@ -253,11 +253,11 @@ export const upsertBoxApiCollection = [
             const collectionItem = responseItem.data;
 
             const savedCollection = await ds.transaction(async (tm) => {
-                let collectionEntity = await tm.getRepository(BoxCollectionEntity).findOneBy({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id, collectionId });
+                let collectionEntity = await tm.getRepository(BoxCollectionEntity).findOneBy({ orgKey: req.info.user.orgKey, userId: req.info.user.id, collectionId });
                 if (collectionEntity) {
                 } else {
                     collectionEntity = new BoxCollectionEntity();
-                    collectionEntity.tenantKey = req.info.user.tenantKey;
+                    collectionEntity.orgKey = req.info.user.orgKey;
                     collectionEntity.userId = req.info.user.id;
 
                     collectionEntity.collectionId = collection.id;
@@ -296,7 +296,7 @@ export const boxApiCollection = [
             // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
             const e = {} as ExtApiClient;
             try {
-                Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+                Object.assign(e, await getExtApiClient(req.info.user.orgKey, provider));
             } catch (error) {
                 res.status(401).json({ error: `${provider}は認証されていません。` });
                 return;
@@ -307,7 +307,7 @@ export const boxApiCollection = [
             const collection = response.data;
 
             // 登録済みのコレクションを取得
-            const collectionEntityList = await ds.getRepository(BoxCollectionEntity).findBy({ tenantKey: req.info.user.tenantKey, userId: req.info.user.id });
+            const collectionEntityList = await ds.getRepository(BoxCollectionEntity).findBy({ orgKey: req.info.user.orgKey, userId: req.info.user.id });
             collectionEntityList.forEach(c => {
                 collection.entries.push({
                     type: c.type,
@@ -354,7 +354,7 @@ export const boxUpload = [
         // fromcache=falseの場合はAPIを叩いてキャッシュを更新する
         const e = {} as ExtApiClient;
         try {
-            Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+            Object.assign(e, await getExtApiClient(req.info.user.orgKey, provider));
         } catch (error) {
             res.status(401).json({ error: `${provider}は認証されていません。` });
             return;
@@ -447,7 +447,7 @@ export const boxDownload = [
         const format = req.query.format || 'binary';
         const e = {} as ExtApiClient;
         try {
-            Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+            Object.assign(e, await getExtApiClient(req.info.user.orgKey, provider));
         } catch (error) {
             res.status(401).json({ error: `${provider}は認証されていません。` });
             return;
@@ -504,7 +504,7 @@ export const boxBatchDownload = [
         // APIを呼び出してデータを取得
         const e = {} as ExtApiClient;
         try {
-            Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+            Object.assign(e, await getExtApiClient(req.info.user.orgKey, provider));
         } catch (error) {
             res.status(401).json({ error: `${provider}は認証されていません。` });
             return;
@@ -541,7 +541,7 @@ export async function boxApiItemCore(
         // キャッシュからデータを取得するオプションが指定されている場合
         if (fromCache) {
             try {
-                const itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ tenantKey: e.tenantKey, userId, itemId });
+                const itemEntity = await ds.getRepository(BoxItemEntity).findOneByOrFail({ orgKey: e.orgKey, userId, itemId });
                 console.log(`Get from cache: ${itemId} ${itemEntity.data.name}`);
                 return itemEntity;
             } catch (e) {
@@ -575,14 +575,14 @@ export async function boxApiItemCore(
 
         // データをキャッシュに保存
         const itemEntity = await ds.transaction(async (tm) => {
-            let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ tenantKey: e.tenantKey, userId, type, itemId });
+            let itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({ orgKey: e.orgKey, userId, type, itemId });
             if (!itemEntity) {
                 itemEntity = new BoxItemEntity();
-                itemEntity.tenantKey = e.tenantKey;
+                itemEntity.orgKey = e.orgKey;
                 itemEntity.userId = userId;
                 itemEntity.itemId = itemId;
                 itemEntity.type = type;
-                itemEntity.tenantKey = e.tenantKey;
+                itemEntity.orgKey = e.orgKey;
                 itemEntity.createdBy = userId;
                 itemEntity.createdIp = ip;
             }
@@ -688,7 +688,7 @@ export async function downloadAllFilesInFolder(
     // 処理の最後に、このフォルダのchildrenCacheCompletedAtを更新
     await ds.transaction(async (tm) => {
         const itemEntity = await tm.getRepository(BoxItemEntity).findOneBy({
-            tenantKey: e.tenantKey, userId, type: BoxItemType.FOLDER, itemId: folderId
+            orgKey: e.orgKey, userId, type: BoxItemType.FOLDER, itemId: folderId
         });
 
         if (itemEntity) {
@@ -738,7 +738,7 @@ export async function boxDownloadCoreOnline(e: ExtApiClient, fileId: string, use
 
         // 2. fileId + versionIdの組み合わせでデータベースをチェック
         const existingBoxFile = await ds.getRepository(BoxFileEntity).findOne({
-            where: { tenantKey: e.tenantKey, fileId: boxFileId, versionId: versionId }
+            where: { orgKey: e.orgKey, fileId: boxFileId, versionId: versionId }
         });
 
         if (metaData.entries && metaData.entries.length > 0) {
@@ -747,7 +747,7 @@ export async function boxDownloadCoreOnline(e: ExtApiClient, fileId: string, use
                 boxFile = existingBoxFile;
             } else {
                 boxFile = new BoxFileEntity();
-                boxFile.tenantKey = e.tenantKey;
+                boxFile.orgKey = e.orgKey;
                 boxFile.fileId = boxFileId;
                 boxFile.versionId = versionId;
                 boxFile.versionSha1 = infodata.file_version?.sha1;
@@ -798,7 +798,7 @@ export async function boxDownloadCoreOnline(e: ExtApiClient, fileId: string, use
 
             // ファイル内容は既存のものを再利用し、BoxFileEntityだけ新規作成
             const newBoxFile = new BoxFileEntity();
-            newBoxFile.tenantKey = e.tenantKey;
+            newBoxFile.orgKey = e.orgKey;
             newBoxFile.fileId = boxFileId;
             newBoxFile.versionId = versionId;
             newBoxFile.versionSha1 = sha1FromMeta;
@@ -870,7 +870,7 @@ export async function boxDownloadCoreOnline(e: ExtApiClient, fileId: string, use
 
         // 8. データベースエンティティを保存
         const fileBodyEntity = new BoxFileBodyEntity();
-        fileBodyEntity.tenantKey = e.tenantKey;
+        fileBodyEntity.orgKey = e.orgKey;
         fileBodyEntity.fileType = fileType;
         fileBodyEntity.fileSize = fileSize;
         fileBodyEntity.innerPath = innerPath; // カラム名が「innerPath」であることを前提
@@ -884,7 +884,7 @@ export async function boxDownloadCoreOnline(e: ExtApiClient, fileId: string, use
         await ds.getRepository(BoxFileBodyEntity).save(fileBodyEntity);
 
         const boxFile = new BoxFileEntity();
-        boxFile.tenantKey = e.tenantKey;
+        boxFile.orgKey = e.orgKey;
         boxFile.fileId = boxFileId;
         boxFile.versionId = versionId;
         boxFile.versionSha1 = sha1Digest;
@@ -917,7 +917,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
     // 2. fileId + versionIdの組み合わせでデータベースをチェック
     const existingBoxFileVersionless = await ds.getRepository(BoxFileEntity).findOne({
-        where: { tenantKey: e.tenantKey, fileId: fileId }
+        where: { orgKey: e.orgKey, fileId: fileId }
     });
 
     if (existingBoxFileVersionless) {
@@ -993,7 +993,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
         if (metaData.entries && metaData.entries.length > 0) {
             const boxFile = new BoxFileEntity();
-            boxFile.tenantKey = e.tenantKey;
+            boxFile.orgKey = e.orgKey;
             boxFile.fileId = boxFileId;
             boxFile.versionId = versionId;
             boxFile.versionSha1 = infodata.file_version?.sha1;
@@ -1028,7 +1028,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
         // 2. fileId + versionIdの組み合わせでデータベースをチェック
         const existingBoxFile = await ds.getRepository(BoxFileEntity).findOne({
-            where: { tenantKey: e.tenantKey, fileId: boxFileId, versionId: versionId }
+            where: { orgKey: e.orgKey, fileId: boxFileId, versionId: versionId }
         });
 
         if (existingBoxFile) {
@@ -1067,7 +1067,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
             // ファイル内容は既存のものを再利用し、BoxFileEntityだけ新規作成
             const newBoxFile = new BoxFileEntity();
-            newBoxFile.tenantKey = e.tenantKey;
+            newBoxFile.orgKey = e.orgKey;
             newBoxFile.fileId = boxFileId;
             newBoxFile.versionId = versionId;
             newBoxFile.versionSha1 = sha1FromMeta;
@@ -1092,7 +1092,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
         if (infodata.size > 2_147_483_648) {
             const boxFile = new BoxFileEntity();
-            boxFile.tenantKey = e.tenantKey;
+            boxFile.orgKey = e.orgKey;
             boxFile.fileId = boxFileId;
             boxFile.versionId = versionId;
             boxFile.versionSha1 = sha1FromMeta;
@@ -1157,7 +1157,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
         // 8. データベースエンティティを保存
         const fileBodyEntity = new BoxFileBodyEntity();
-        fileBodyEntity.tenantKey = e.tenantKey;
+        fileBodyEntity.orgKey = e.orgKey;
         fileBodyEntity.fileType = fileType;
         fileBodyEntity.fileSize = fileSize;
         fileBodyEntity.innerPath = innerPath; // カラム名が「innerPath」であることを前提
@@ -1171,7 +1171,7 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
         await ds.getRepository(BoxFileBodyEntity).save(fileBodyEntity);
 
         const boxFile = new BoxFileEntity();
-        boxFile.tenantKey = e.tenantKey;
+        boxFile.orgKey = e.orgKey;
         boxFile.fileId = boxFileId;
         boxFile.versionId = versionId;
         boxFile.versionSha1 = sha1Digest;

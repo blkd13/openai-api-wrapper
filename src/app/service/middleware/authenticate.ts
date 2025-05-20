@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 
 import { NextFunction, Request, Response } from 'express';
 
-import { InviteEntity, OAuthAccountEntity, OAuthAccountStatus, SessionEntity, UserEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
+import { OAuthAccountEntity, UserRole, UserRoleEntity, UserEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
 
 import { InviteRequest, OAuthUserRequest, UserRequest } from '../models/info.js';
 import { Utils } from '../../common/utils.js';
@@ -18,28 +18,28 @@ import { decrypt } from '../controllers/tool-call.js';
 // export const JWT_SECRET: string = process.env['JWT_SECRET'] || randomBytes(64).toString('hex').substring(0, 64);
 
 export const { ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_JWT_SECRET, REFRESH_TOKEN_EXPIRES_IN, API_TOKEN_JWT_SECRET, API_TOKEN_EXPIRES_IN, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN } = process.env as { ACCESS_TOKEN_JWT_SECRET: string, ACCESS_TOKEN_EXPIRES_IN: string, REFRESH_TOKEN_JWT_SECRET: string, REFRESH_TOKEN_EXPIRES_IN: string, API_TOKEN_JWT_SECRET: string, API_TOKEN_EXPIRES_IN: string, ONETIME_TOKEN_JWT_SECRET: string, ONETIME_TOKEN_EXPIRES_IN: string };
-export interface Token {
-    tenantKey: string;
-    type: string;
+export interface TokenPayload {
+    orgKey: string;
+    type: 'user' | 'invite' | 'refresh' | 'api';
 }
 
 /**
  * JWTのユーザー認証情報
  */
-export interface UserToken extends Token {
+export interface UserTokenPayload extends TokenPayload {
     type: 'user';
     id: string;
     // seq: number;
     email: string;
     name?: string;
-    role: UserRoleType;
+    roleList: UserRole[]
     authGeneration: number;
 }
 
 /**
  * JWTの招待トークン情報
  */
-export interface InviteToken extends Token {
+export interface InviteTokenPayload extends TokenPayload {
     type: 'invite';
     id: string;
     // seq: number;
@@ -49,7 +49,7 @@ export interface InviteToken extends Token {
 /**
  * JWTのリフレッシュトークン情報
  */
-export interface RefreshToken extends Token {
+export interface RefreshTokenPayload extends TokenPayload {
     type: 'refresh' | 'api';
     userId: string;
     sessionId: string;
@@ -57,9 +57,10 @@ export interface RefreshToken extends Token {
     authGeneration: number;
     email: string;
     name?: string;
-    role: UserRoleType;
+    roleList: UserRole[]
+    orgKey: string;
 }
-type IsAuthDto = { isAuth: boolean, obj: any };
+type IsAuthDto = { isAuth: true, obj: UserTokenPayload } | { isAuth: false, obj: Error };
 
 /**
  * ユーザー認証の検証
@@ -81,19 +82,18 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
 
                 try {
                     // アクセストークン検証
-                    const userToken = await verifyJwt<UserToken>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user');
-                    const userEntity = { id: userToken.id, role: userToken.role, name: userToken.name, email: userToken.email, tenantKey: userToken.tenantKey } as UserToken;
+                    const userTokenPayload = await verifyJwt<UserTokenPayload>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user');
                     // console.log(`acc:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
 
-                    (req as UserRequest).info = { user: userToken, ip: xRealIp, cookie: req.cookies, };
-                    return { isAuth: true, obj: userEntity };
+                    (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies, };
+                    return { isAuth: true, obj: userTokenPayload };
                 } catch (err) {
                     // アクセストークン無し
                 }
 
                 try {
                     // リフレッシュトークン検証
-                    const { userEntity, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'refresh', req.cookies.refresh_token, roleType));
+                    const { userTokenPayload, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'refresh', req.cookies.refresh_token, roleType));
 
                     // クッキーをセット
                     res.cookie('access_token', accessToken, {
@@ -103,10 +103,9 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                         sameSite: false, // CSRF保護のためのオプション
                     });
 
-                    const userToken = { id: userEntity.id, role: userEntity.role, name: userEntity.name, email: userEntity.email, tenantKey: userEntity.tenantKey } as UserToken;
                     // console.log(`ref:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
-                    (req as UserRequest).info = { user: userToken, ip: xRealIp, cookie: req.cookies };
-                    return { isAuth: true, obj: userEntity };
+                    (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
+                    return { isAuth: true, obj: userTokenPayload };
                 } catch (err) {
                     // リフレッシュトークン無し
                 }
@@ -114,12 +113,11 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
 
                 try {
                     // API用トークンの検証
-                    const { userEntity, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'api', req.headers.authorization?.split(' ')[1] || '', roleType));
+                    const { userTokenPayload, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'api', req.headers.authorization?.split(' ')[1] || '', roleType));
 
-                    const userToken = { id: userEntity.id, role: userEntity.role, name: userEntity.name, email: userEntity.email, tenantKey: userEntity.tenantKey } as UserToken;
                     // console.log(`api:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
-                    (req as UserRequest).info = { user: userToken, ip: xRealIp, cookie: req.cookies };
-                    return { isAuth: true, obj: userEntity };
+                    (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
+                    return { isAuth: true, obj: userTokenPayload };
                 } catch (err) {
                     // API用トークン無し
                     // console.log(err);
@@ -140,7 +138,7 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                 } else {
                     // DryRunなので何もしない。
                 }
-                return isAuthDto;
+                return isAuthDto as IsAuthDto;
             });
         } catch (e) {
             res.cookie('access_token', '', { maxAge: 0, path: '/' });
@@ -161,7 +159,7 @@ export const authenticateOAuthUser = async (_req: Request, res: Response, next: 
     const provider = `${providerType}-${providerName}`;
     try {
         // console.log(`provider=${provider}`);
-        const { accessToken, providerUserId, providerEmail, tokenExpiresAt, userInfo } = await getAccessToken(req.info.user.tenantKey, req.info.user.id, provider);
+        const { accessToken, providerUserId, providerEmail, tokenExpiresAt, userInfo } = await getAccessToken(req.info.user.orgKey, req.info.user.id, provider);
         // console.log(`accessToken=${accessToken}`);
         // なんとなく使いそうな項目だけに絞っておく。
         req.info.oAuth = { accessToken, providerUserId, providerEmail, tokenExpiresAt, userInfo, provider } as OAuthAccountEntity;
@@ -299,23 +297,20 @@ export const authenticateUserTokenWsMiddleGenerator = (roleType?: UserRoleType) 
                 }
                 const token = parsedCookies.access_token;
                 // console.log(`token=` + parsedCookies.access_token);
-                jwt.verify(token, ACCESS_TOKEN_JWT_SECRET, (err: any, _token: any) => {
-                    const userToken = _token as UserToken;
+                jwt.verify(token, ACCESS_TOKEN_JWT_SECRET, (err: any, _payload: any) => {
+                    const userTokenPayload = _payload as UserTokenPayload;
                     if (err) {
                         reject(err);
                         return;
                     }
-                    if (userToken.type === 'user' && userToken.id) {
+                    if (userTokenPayload.type === 'user' && userTokenPayload.id) {
                         const where = {
-                            id: userToken.id,                     // JWTのユーザーIDと一致すること
-                            authGeneration: userToken.authGeneration, // JWTの認証世代と一致すること
+                            orgKey: userTokenPayload.orgKey, // JWTの組織キーと一致すること
+                            id: userTokenPayload.id,                     // JWTのユーザーIDと一致すること
+                            authGeneration: userTokenPayload.authGeneration, // JWTの認証世代と一致すること
                             status: UserStatus.Active, // activeユーザーじゃないと使えない
                         } as Record<string, any>;
 
-                        if (roleType === UserRoleType.Admin) {
-                            // 管理者用の認証チェック
-                            where['role'] = In([UserRoleType.Admin, UserRoleType.Maintainer]);
-                        } else { }
                         // ユーザーの存在確認 ※こんなことやってるからjwtにした意味はなくなってしまうが即時停止をやりたいのでやむなく。
                         ds.getRepository(UserEntity).findOne({ where }).then((user: UserEntity | null) => {
                             if (user == null) {
@@ -323,20 +318,29 @@ export const authenticateUserTokenWsMiddleGenerator = (roleType?: UserRoleType) 
                                 reject(new Error('user not found'));
                                 return;
                             } else {
-                                // 認証OK。リクエストにユーザーIDを付与して次の処理へ
-                                // user.dataValuesはそのままだとゴミがたくさん付くので、項目ごとにUserModelにマッピングする。
-                                // TODO ここはもっとスマートに書けるはず。マッパーを用意するべきか？
-                                const userToken = {
-                                    tenantKey: user.tenantKey,
-                                    type: 'user',
-                                    id: user.id,
-                                    name: user.name,
-                                    email: user.email,
-                                    role: user.role,
-                                } as UserToken;
-                                (req as UserRequest).info = { user: userToken, ip: req.headers['x-real-ip'] as string || '0.0.0.0', cookie: req.cookies };
-                                resolve(userToken);
-                                return;
+                                ds.getRepository(UserRoleEntity).find({ where: { orgKey: user.orgKey, userId: user.id, status: UserStatus.Active } }).then(roleList => {
+                                    // 認証OK。リクエストにユーザーIDを付与して次の処理へ
+                                    // user.dataValuesはそのままだとゴミがたくさん付くので、項目ごとにUserModelにマッピングする。
+                                    // TODO ここはもっとスマートに書けるはず。マッパーを用意するべきか？
+
+                                    if (roleType === UserRoleType.Admin) {
+                                        // 管理者用の認証チェック
+                                        where['role'] = In([UserRoleType.Admin, UserRoleType.Maintainer]);
+                                    } else { }
+
+                                    const userTokenPayload = {
+                                        type: 'user',
+                                        orgKey: user.orgKey,
+                                        id: user.id,
+                                        email: user.email,
+                                        name: user.name,
+                                        roleList: roleList,
+                                        authGeneration: user.authGeneration,
+                                    } as UserTokenPayload;
+                                    (req as UserRequest).info = { user: userTokenPayload, ip: req.headers['x-real-ip'] as string || '0.0.0.0', cookie: req.cookies };
+                                    resolve(userTokenPayload);
+                                    return;
+                                });
                             }
                         });
                     } else {
@@ -365,10 +369,10 @@ export const authenticateInviteToken = (req: Request, res: Response, next: NextF
     const token = req.headers.authorization?.split(' ')[1];
     if (token == null) return res.sendStatus(401);
     jwt.verify(token, ONETIME_TOKEN_JWT_SECRET, (err: any, _token: any) => {
-        const inviteToken = _token as InviteToken;
+        const inviteTokenPayload = _token as InviteTokenPayload;
         if (err) return res.sendStatus(403);
-        if (inviteToken.type === 'invite') {
-            (req as InviteRequest).info = { invite: inviteToken, ip: req.headers['x-real-ip'] as string || '0.0.0.0' };
+        if (inviteTokenPayload.type === 'invite') {
+            (req as InviteRequest).info = { invite: inviteTokenPayload, ip: req.headers['x-real-ip'] as string || '0.0.0.0' };
             next();
         } else {
             return res.sendStatus(403);

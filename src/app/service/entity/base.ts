@@ -8,7 +8,7 @@ export class MyBaseEntity extends BaseEntity {
     id!: string;
 
     @PrimaryColumn()
-    tenantKey!: string; // テナント単位の識別子
+    orgKey!: string; // テナント単位の識別子
 
     @Column({ nullable: false })
     createdBy!: string;
@@ -47,7 +47,7 @@ export class MyBaseEntityNoUpdateTimestamp extends BaseEntity {
     id!: string;
 
     @PrimaryColumn()
-    tenantKey!: string; // テナント単位の識別子
+    orgKey!: string; // テナント単位の識別子
 
     @Column({ nullable: false })
     createdBy!: string;
@@ -84,7 +84,7 @@ export class MyBaseEntityNoUpdateTimestamp extends BaseEntity {
 
 // SELECT table_name
 // FROM information_schema.columns
-// WHERE column_name = 'tenant_key'
+// WHERE column_name = 'org_key'
 //   AND table_schema = 'ribbon'
 
 // CREATE TABLE mm_user_entity_bk AS SELECT * FROM mm_user_entity;
@@ -120,7 +120,7 @@ export class MyBaseEntityNoUpdateTimestamp extends BaseEntity {
 // CREATE TABLE session_entity_bk AS SELECT * FROM session_entity;
 // CREATE TABLE team_entity_bk AS SELECT * FROM team_entity;
 // CREATE TABLE team_member_entity_bk AS SELECT * FROM team_member_entity;
-// CREATE TABLE tenant_entity_bk AS SELECT * FROM tenant_entity;
+// CREATE TABLE organization_entity_bk AS SELECT * FROM organization_entity;
 // CREATE TABLE thread_entity_bk AS SELECT * FROM thread_entity;
 // CREATE TABLE thread_group_entity_bk AS SELECT * FROM thread_group_entity;
 // CREATE TABLE tool_call_group_entity_bk AS SELECT * FROM tool_call_group_entity;
@@ -134,44 +134,44 @@ export class MyBaseEntityNoUpdateTimestamp extends BaseEntity {
 
 
 
-// update file_group_entity SET tenant_key='public';
-// update file_body_entity SET tenant_key='public';
-// update git_project_entity SET tenant_key='public';
-// update content_part_entity SET tenant_key='public';
-// update tool_call_group_entity SET tenant_key='public';
-// update mm_file_entity SET tenant_key='public';
-// update login_history_entity SET tenant_key='public';
-// update user_entity SET tenant_key='public';
-// update session_entity SET tenant_key='public';
-// update invite_entity SET tenant_key='public';
-// update department_entity SET tenant_key='public';
-// update department_member_entity SET tenant_key='public';
-// update o_auth_account_entity SET tenant_key='public';
-// update team_entity SET tenant_key='public';
-// update team_member_entity SET tenant_key='public';
-// update predict_history_wrapper_entity SET tenant_key='public';
-// update project_entity SET tenant_key='public';
-// update message_cluster_entity SET tenant_key='public';
-// update tool_call_part_entity SET tenant_key='public';
-// update api_provider_entity SET tenant_key='public';
-// update api_provider_template_entity SET tenant_key='public';
-// update tenant_entity SET tenant_key='public';
-// update box_item_entity SET tenant_key='public';
-// update file_tag_entity SET tenant_key='public';
-// update file_version_entity SET tenant_key='public';
-// update file_access_entity SET tenant_key='public';
-// update vertex_cached_content_entity SET tenant_key='public';
-// update mm_timeline_entity SET tenant_key='public';
-// update mm_timeline_channel_entity SET tenant_key='public';
-// update predict_history_entity SET tenant_key='public';
-// update message_group_entity SET tenant_key='public';
-// update message_entity SET tenant_key='public';
-// update box_file_entity SET tenant_key='public';
-// update box_file_body_entity SET tenant_key='public';
-// update thread_group_entity SET tenant_key='public';
-// update thread_entity SET tenant_key='public';
-// update box_collection_entity SET tenant_key='public';
-// update user_setting_entity SET tenant_key='public';
-// update git_project_commit_entity SET tenant_key='public';
-// update file_entity SET tenant_key='public';
+// update file_group_entity SET org_key='public';
+// update file_body_entity SET org_key='public';
+// update git_project_entity SET org_key='public';
+// update content_part_entity SET org_key='public';
+// update tool_call_group_entity SET org_key='public';
+// update mm_file_entity SET org_key='public';
+// update login_history_entity SET org_key='public';
+// update user_entity SET org_key='public';
+// update session_entity SET org_key='public';
+// update invite_entity SET org_key='public';
+// update department_entity SET org_key='public';
+// update department_member_entity SET org_key='public';
+// update o_auth_account_entity SET org_key='public';
+// update team_entity SET org_key='public';
+// update team_member_entity SET org_key='public';
+// update predict_history_wrapper_entity SET org_key='public';
+// update project_entity SET org_key='public';
+// update message_cluster_entity SET org_key='public';
+// update tool_call_part_entity SET org_key='public';
+// update api_provider_entity SET org_key='public';
+// update api_provider_template_entity SET org_key='public';
+// update organization_entity SET org_key='public';
+// update box_item_entity SET org_key='public';
+// update file_tag_entity SET org_key='public';
+// update file_version_entity SET org_key='public';
+// update file_access_entity SET org_key='public';
+// update vertex_cached_content_entity SET org_key='public';
+// update mm_timeline_entity SET org_key='public';
+// update mm_timeline_channel_entity SET org_key='public';
+// update predict_history_entity SET org_key='public';
+// update message_group_entity SET org_key='public';
+// update message_entity SET org_key='public';
+// update box_file_entity SET org_key='public';
+// update box_file_body_entity SET org_key='public';
+// update thread_group_entity SET org_key='public';
+// update thread_entity SET org_key='public';
+// update box_collection_entity SET org_key='public';
+// update user_setting_entity SET org_key='public';
+// update git_project_commit_entity SET org_key='public';
+// update file_entity SET org_key='public';
 

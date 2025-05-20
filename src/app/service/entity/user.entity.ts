@@ -2,11 +2,11 @@ import { Entity, Column, Index } from 'typeorm';
 import { MyBaseEntity } from './base.js';
 
 @Entity()
-@Index(['tenantKey', 'userId', 'key'], { unique: true }) // 複合インデックス
+@Index(['orgKey', 'userId']) // 複合インデックス
+@Index(['orgKey', 'userId', 'key'], { unique: true }) // 複合インデックス
 export class UserSettingEntity extends MyBaseEntity {
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     userId!: string;
 
     @Column()

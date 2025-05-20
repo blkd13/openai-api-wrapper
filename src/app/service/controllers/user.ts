@@ -6,7 +6,7 @@ import { ds } from '../db.js'; // データソース
 import { validationErrorHandler } from '../middleware/validation.js';
 import { UserSettingEntity } from '../entity/user.entity.js';
 import { UserRequest } from '../models/info.js';
-import { ApiProviderAuthType, ApiProviderEntity, ApiProviderPostType, ApiProviderTemplateEntity, OAuth2Config, OAuth2ConfigTemplate, TenantEntity, UserRoleType } from '../entity/auth.entity.js';
+import { ApiProviderAuthType, ApiProviderEntity, ApiProviderPostType, ApiProviderTemplateEntity, OAuth2Config, OAuth2ConfigTemplate, OrganizationEntity, UserRoleType } from '../entity/auth.entity.js';
 import { NextFunction } from 'http-proxy-middleware/dist/types.js';
 import { decrypt, encrypt } from './tool-call.js';
 import { MakeOptional } from '../../common/utils.js';
@@ -23,7 +23,7 @@ export const upsertUserSetting = [
         const { key } = req.params as { key: string };
         const { value } = req.body as { value: any };
         const userId = req.info.user.id;
-        const tenantKey = req.info.user.tenantKey; // テナントIDを取得
+        const orgKey = req.info.user.orgKey; // テナントIDを取得
         // console.log('userId:', userId);
         // console.log('key:', key);
         // console.log('value:', value);
@@ -31,7 +31,7 @@ export const upsertUserSetting = [
             const repository = ds.getRepository(UserSettingEntity);
 
             // `userId` と `key` の組み合わせで既存のレコードを探す
-            let setting = await repository.findOne({ where: { tenantKey, userId, key } });
+            let setting = await repository.findOne({ where: { orgKey, userId, key } });
 
             if (setting) {
                 // 既存のレコードがある場合は更新
@@ -42,7 +42,7 @@ export const upsertUserSetting = [
                 setting.userId = userId;
                 setting.key = key;
                 setting.value = value;
-                setting.tenantKey = req.info.user.tenantKey;
+                setting.orgKey = req.info.user.orgKey;
                 setting.createdBy = userId; // 作成者
                 setting.createdIp = req.info.ip; // 作成IP
             }
@@ -69,9 +69,9 @@ export const getUserSetting = [
         const req = _req as UserRequest;
         const { key } = req.params as { key: string };
         const userId = req.info.user.id;
-        const tenantKey = req.info.user.tenantKey; // テナントIDを取得
+        const orgKey = req.info.user.orgKey; // テナントIDを取得
         try {
-            const setting = await ds.getRepository(UserSettingEntity).findOne({ where: { tenantKey, userId, key } });
+            const setting = await ds.getRepository(UserSettingEntity).findOne({ where: { orgKey, userId, key } });
             if (!setting) {
                 // return res.status(404).json({ message: 'ユーザー設定が見つかりません' });
                 return res.status(200).json({});
@@ -94,10 +94,10 @@ export const deleteUserSetting = [
         const req = _req as UserRequest;
         const { key } = req.params as { key: string };
         const userId = req.info.user.id;
-        const tenantKey = req.info.user.tenantKey; // テナントIDを取得
+        const orgKey = req.info.user.orgKey; // テナントIDを取得
         try {
             const repository = ds.getRepository(UserSettingEntity);
-            const setting = await repository.findOne({ where: { tenantKey, userId, key } });
+            const setting = await repository.findOne({ where: { orgKey, userId, key } });
             if (!setting) {
                 return res.status(404).json({ message: 'ユーザー設定が見つかりません' });
             }
@@ -118,20 +118,20 @@ export const deleteUserSetting = [
  * [GET] APIプロバイダー一覧の取得
  */
 export const getApiProviders = [
-    param('tenantKey').optional({ values: 'undefined' }).isString(),
+    param('orgKey').optional({ values: 'undefined' }).isString(),
     query('type').optional().isString(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { type } = req.query as { type: string };
-        // 認証済み経路の方はパラメータに tenantKey が無いので、ユーザー情報から取得する
-        const nonAuth = !!req.params.tenantKey;
-        const isAdmin = req.info && req.info.user && [UserRoleType.Admin, UserRoleType.Maintainer].includes(req.info.user.role);
-        const tenantKey = isAdmin ? req.info.user.tenantKey : req.params.tenantKey;
+        // 認証済み経路の方はパラメータに orgKey が無いので、ユーザー情報から取得する
+        const nonAuth = !!req.params.orgKey;
+        const isAdmin = req.info && req.info.user && req.info.user.roleList.find(role => [UserRoleType.Admin, UserRoleType.Maintainer].includes(role.role));
+        const orgKey = isAdmin ? req.info.user.orgKey : req.params.orgKey;
         // console.log('isAdmin:', isAdmin);
-        // tenantKey が指定されている場合、ユーザーのテナントキーと一致しない場合は403エラーを返す
-        if (isAdmin && req.params.tenantKey && req.params.tenantKey !== req.info.user.tenantKey) {
-            // そもそも tenantKey が指定されている場合はユーザ認証経路を使わないはずだが、経路としては空いているので塞いでおく。
+        // orgKey が指定されている場合、ユーザーのテナントキーと一致しない場合は403エラーを返す
+        if (isAdmin && req.params.orgKey && req.params.orgKey !== req.info.user.orgKey) {
+            // そもそも orgKey が指定されている場合はユーザ認証経路を使わないはずだが、経路としては空いているので塞いでおく。
             return res.status(403).json({ message: '権限がありません' });
         } else { }
 
@@ -179,11 +179,11 @@ export const getApiProviders = [
             }
             // console.dir(select, { depth: null });
             const whereClause: {
-                tenantKey: string,
+                orgKey: string,
                 isDeleted: false,
                 type?: string,
             } = {
-                tenantKey,
+                orgKey,
                 isDeleted: false
             };
 
@@ -312,7 +312,7 @@ export const upsertApiProvider = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
+        const orgKey = req.info.user.orgKey;
         const userId = req.info.user.id;
         const ip = req.info.ip;
         const bodyData = req.body as MakeOptional<ApiProviderEntity, 'id' | 'createdBy' | 'createdIp' | 'updatedBy' | 'updatedIp'>;
@@ -326,7 +326,7 @@ export const upsertApiProvider = [
             // IDが提供されている場合、既存のエンティティを検索
             if (id) {
                 entity = await repository.findOne({
-                    where: { id, tenantKey, isDeleted: false }
+                    where: { id, orgKey, isDeleted: false }
                 });
 
                 if (entity) {
@@ -347,14 +347,14 @@ export const upsertApiProvider = [
 
             // 一意性チェック（同一テナント内で type+uriBase と type+provider の両方が一意）
             const typeAndUriQuery: FindOptionsWhere<ApiProviderEntity> = {
-                tenantKey,
+                orgKey,
                 type: bodyData.type,
                 uriBase: bodyData.uriBase,
                 isDeleted: false
             };
 
             const typeAndProviderQuery: FindOptionsWhere<ApiProviderEntity> = {
-                tenantKey,
+                orgKey,
                 type: bodyData.type,
                 name: bodyData.name,
                 isDeleted: false
@@ -389,8 +389,8 @@ export const upsertApiProvider = [
             // 論理削除されたエンティティの復活チェック
             const deletedEntity = await repository.findOne({
                 where: [
-                    { tenantKey, type: bodyData.type, uriBase: bodyData.uriBase, isDeleted: true },
-                    { tenantKey, type: bodyData.type, name: bodyData.name, isDeleted: true }
+                    { orgKey, type: bodyData.type, uriBase: bodyData.uriBase, isDeleted: true },
+                    { orgKey, type: bodyData.type, name: bodyData.name, isDeleted: true }
                 ]
             });
 
@@ -404,7 +404,7 @@ export const upsertApiProvider = [
                     entity.isDeleted = false; // 論理削除フラグを解除
                 } else {
                     entity = repository.create({
-                        tenantKey,
+                        orgKey,
                         type: bodyData.type,
                         name: bodyData.name,
                         label: bodyData.label,
@@ -455,7 +455,7 @@ export const deleteApiProvider = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
+        const orgKey = req.info.user.orgKey;
         const { id } = req.params;
         const updatedBy = req.info.user.id;
         const ip = req.info.ip;
@@ -463,7 +463,7 @@ export const deleteApiProvider = [
         try {
             const repository = ds.getRepository(ApiProviderEntity);
             const entity = await repository.findOne({
-                where: { id, tenantKey, isDeleted: false }
+                where: { id, orgKey, isDeleted: false }
             });
 
             if (!entity) {
@@ -493,12 +493,12 @@ export const getApiProviderTemplates = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
+        const orgKey = req.info.user.orgKey;
         const { authType } = req.query as { authType: ApiProviderAuthType };
 
         try {
             const whereClause: FindOptionsWhere<ApiProviderTemplateEntity> = {
-                tenantKey,
+                orgKey,
                 isDeleted: false
             };
 
@@ -614,7 +614,7 @@ export const upsertApiProviderTemplate = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
+        const orgKey = req.info.user.orgKey;
         const userId = req.info.user.id;
         const ip = req.info.ip;
         const bodyData = req.body;
@@ -628,7 +628,7 @@ export const upsertApiProviderTemplate = [
             // IDが提供されている場合、既存のエンティティを検索
             if (id) {
                 entity = await repository.findOne({
-                    where: { id, tenantKey, isDeleted: false }
+                    where: { id, orgKey, isDeleted: false }
                 });
 
                 if (entity) {
@@ -638,7 +638,7 @@ export const upsertApiProviderTemplate = [
 
             // name の一意性チェック
             const nameQuery: any = {
-                tenantKey,
+                orgKey,
                 name: bodyData.name,
                 isDeleted: false
             };
@@ -662,7 +662,7 @@ export const upsertApiProviderTemplate = [
             if (isNew) {
                 // 新規エンティティの作成
                 const newEntity: any = {
-                    tenantKey,
+                    orgKey,
                     name: bodyData.name,
                     authType: bodyData.authType,
                     pathUserInfo: bodyData.pathUserInfo,
@@ -730,7 +730,7 @@ export const deleteApiProviderTemplate = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
+        const orgKey = req.info.user.orgKey;
         const { id } = req.params;
         const updatedBy = req.info.user.id;
         const ip = req.info.ip;
@@ -738,7 +738,7 @@ export const deleteApiProviderTemplate = [
         try {
             const repository = ds.getRepository(ApiProviderTemplateEntity);
             const entity = await repository.findOne({
-                where: { id, tenantKey, isDeleted: false }
+                where: { id, orgKey, isDeleted: false }
             });
 
             if (!entity) {
@@ -758,22 +758,22 @@ export const deleteApiProviderTemplate = [
     }
 ];
 
-/* Tenant Controller */
+/* Organization Controller */
 
 /**
  * [GET] テナント一覧の取得
  */
-export const getTenants = [
+export const getOrganizations = [
     query('isActive').optional().isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
+        const orgKey = req.info.user.orgKey;
         const { isActive } = req.query;
 
         try {
             const whereClause: any = {
-                tenantKey
+                orgKey
             };
 
             // アクティブフラグが指定されていればフィルタリング
@@ -781,16 +781,16 @@ export const getTenants = [
                 whereClause.isActive = isActive === 'true';
             }
 
-            const entities = await ds.getRepository(TenantEntity).find({
+            const entities = await ds.getRepository(OrganizationEntity).find({
                 where: whereClause,
                 order: {
-                    name: 'ASC'
+                    key: 'ASC'
                 }
             });
 
             res.status(200).json(entities);
         } catch (error) {
-            console.error('Error retrieving tenants:', error);
+            console.error('Error retrieving organizations:', error);
             res.status(500).json({ message: 'テナント一覧の取得中にエラーが発生しました' });
         }
     }
@@ -799,29 +799,30 @@ export const getTenants = [
 /**
  * [PUT] テナントの作成または更新 (Upsert)
  */
-export const upsertTenant = [
+export const upsertOrganization = [
     param('id').optional().isUUID(),
-    body('name').isString().notEmpty(),
+    body('key').isString().notEmpty(),
+    body('label').isString().notEmpty(),
     body('description').optional().isString(),
     body('isActive').optional().isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
+        const orgKey = req.info.user.orgKey;
         const userId = req.info.user.id;
         const ip = req.info.ip;
         const bodyData = req.body;
         const id = req.params.id;
 
         try {
-            const repository = ds.getRepository(TenantEntity);
-            let entity: TenantEntity | null = null;
+            const repository = ds.getRepository(OrganizationEntity);
+            let entity: OrganizationEntity | null = null;
             let isNew = true;
 
             // IDが提供されている場合、既存のエンティティを検索
             if (id) {
                 entity = await repository.findOne({
-                    where: { id, tenantKey }
+                    where: { id, orgKey }
                 });
 
                 if (entity) {
@@ -833,8 +834,9 @@ export const upsertTenant = [
             if (isNew) {
                 // 新規エンティティの作成
                 entity = repository.create({
-                    tenantKey,
-                    name: bodyData.name,
+                    orgKey,
+                    key: bodyData.key,
+                    label: bodyData.label,
                     description: bodyData.description,
                     isActive: bodyData.isActive !== undefined ? bodyData.isActive : true,
                     createdBy: userId,
@@ -844,7 +846,7 @@ export const upsertTenant = [
                 });
             } else {
                 // 既存エンティティの更新
-                entity!.name = bodyData.name;
+                entity!.key = bodyData.key;
                 if (bodyData.description !== undefined) entity!.description = bodyData.description;
                 if (bodyData.isActive !== undefined) entity!.isActive = bodyData.isActive;
                 entity!.updatedBy = userId;
@@ -854,7 +856,7 @@ export const upsertTenant = [
             const saved = await repository.save(entity!);
             res.status(isNew ? 201 : 200).json(saved);
         } catch (error) {
-            console.error('Error upserting tenant:', error);
+            console.error('Error upserting organization:', error);
             res.status(500).json({ message: 'テナントの作成/更新中にエラーが発生しました' });
         }
     }
@@ -864,20 +866,20 @@ export const upsertTenant = [
  * [DELETE] テナントの非アクティブ化
  * 注意: テナントは物理的に削除せず、isActiveフラグをfalseに設定
  */
-export const deactivateTenant = [
+export const deactivateOrganization = [
     param('id').isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const tenantKey = req.info.user.tenantKey;
+        const orgKey = req.info.user.orgKey;
         const { id } = req.params;
         const updatedBy = req.info.user.id;
         const ip = req.info.ip;
 
         try {
-            const repository = ds.getRepository(TenantEntity);
+            const repository = ds.getRepository(OrganizationEntity);
             const entity = await repository.findOne({
-                where: { id, tenantKey }
+                where: { id, orgKey }
             });
 
             if (!entity) {
@@ -891,7 +893,7 @@ export const deactivateTenant = [
             await repository.save(entity);
             res.status(200).json(entity);
         } catch (error) {
-            console.error('Error deactivating tenant:', error);
+            console.error('Error deactivating organization:', error);
             res.status(500).json({ message: 'テナントの非アクティブ化中にエラーが発生しました' });
         }
     }

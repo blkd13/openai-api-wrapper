@@ -11,11 +11,11 @@ import { NextFunction } from 'http-proxy-middleware/dist/types.js';
 import { decrypt, encrypt } from '../controllers/tool-call.js';
 import { getAxios, getProxyUrl } from '../../common/http-client.js';
 
-export async function getAccessToken(tenantKey: string, userId: string, provider: string): Promise<OAuthAccountEntity> {
+export async function getAccessToken(orgKey: string, userId: string, provider: string): Promise<OAuthAccountEntity> {
     const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneByOrFail({
-        tenantKey, userId, status: OAuthAccountStatus.ACTIVE, provider,
+        orgKey, userId, status: OAuthAccountStatus.ACTIVE, provider,
     });
-    const e = await getExtApiClient(oAuthAccount.tenantKey, provider);
+    const e = await getExtApiClient(oAuthAccount.orgKey, provider);
     // console.log(oAuthAccount.tokenExpiresAt, new Date());
     if (oAuthAccount.tokenExpiresAt && oAuthAccount.tokenExpiresAt < new Date()) {
         if (oAuthAccount.refreshToken && e.oAuth2Config) {
@@ -70,7 +70,7 @@ export const getOAuthApiProxy = [
         const provider = `${providerType}-${providerName}`;
         const e = {} as ExtApiClient;
         try {
-            Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+            Object.assign(e, await getExtApiClient(req.info.user.orgKey, provider));
         } catch (error) {
             res.status(401).json({ error: `${provider}は認証されていません。` });
             return;

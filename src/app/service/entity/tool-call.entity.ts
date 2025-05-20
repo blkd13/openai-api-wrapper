@@ -28,7 +28,7 @@ export class ToolCallGroupEntity extends MyBaseEntity {
     @Generated('increment')
     seq!: number;
 
-    @Column()
+    @Column({ type: 'uuid' })
     projectId!: string; // 参照範囲チェックのため
 
     @Column({ type: 'enum', enum: ToolCallGroupStatus, default: ToolCallGroupStatus.Normal })
@@ -36,18 +36,16 @@ export class ToolCallGroupEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['tenantKey', 'toolCallGroupId']) // インデックス
-@Index(['tenantKey', 'toolCallId']) // インデックス
+@Index(['orgKey', 'toolCallGroupId']) // インデックス
+@Index(['orgKey', 'toolCallId']) // インデックス
 export class ToolCallPartEntity extends MyBaseEntity {
     @Column({ type: 'integer' })
     @Generated('increment')
     seq!: number;
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     toolCallGroupId!: string;
 
-    @Index() // インデックス
     @Column()
     toolCallId!: string;
 

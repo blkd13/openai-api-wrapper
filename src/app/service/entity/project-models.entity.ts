@@ -3,6 +3,7 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMan
 import { MyBaseEntity } from './base.js';
 import { ContentPartType, MessageGroupType, MessageClusterType, PredictHistoryStatus, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamStatus, TeamType, ThreadStatus, ThreadGroupVisibility, ThreadGroupStatus, ThreadGroupType, ContentPartStatus } from '../models/values.js';
 import { CountTokensResponse } from '@google-cloud/vertexai/build/src/index.js';
+import { ChatCompletionCreateParams } from 'openai/resources.js';
 
 @Entity()
 export class TeamEntity extends MyBaseEntity {
@@ -27,18 +28,16 @@ export class TeamEntity extends MyBaseEntity {
 
 
 @Entity()
-@Index(['tenantKey', 'teamId']) // インデックスを追加
-@Index(['tenantKey', 'userId']) // インデックスを追加
+@Index(['orgKey', 'teamId']) // インデックスを追加
+@Index(['orgKey', 'userId']) // インデックスを追加
 export class TeamMemberEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     teamId!: string;
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     userId!: string;
 
     @Column({ type: 'enum', enum: TeamMemberRoleType, })
@@ -89,13 +88,13 @@ export class PredictHistoryWrapperEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn()
     // id!: number;
 
-    @Column({ nullable: true })
+    @Column({ nullable: true, type: 'uuid' })
     connectionId?: string;
 
-    @Column({ nullable: true })
+    @Column({ nullable: true, type: 'uuid' })
     streamId?: string;
 
-    @Column({ nullable: true })
+    @Column({ nullable: true, type: 'uuid' })
     messageId?: string;
 
     @Column({ nullable: true })
@@ -183,7 +182,7 @@ export class PredictHistoryWrapperEntity extends MyBaseEntity {
 // }
 
 @Entity()
-@Index(['tenantKey', 'teamId']) // インデックスを追加
+@Index(['orgKey', 'teamId']) // インデックスを追加
 export class ProjectEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
@@ -191,8 +190,7 @@ export class ProjectEntity extends MyBaseEntity {
     @Column({ type: 'enum', enum: ProjectVisibility, })
     visibility!: ProjectVisibility;
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     teamId!: string;
 
     @Column()
@@ -209,13 +207,12 @@ export class ProjectEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['tenantKey', 'projectId']) // インデックスを追加
+@Index(['orgKey', 'projectId']) // インデックスを追加
 export class ThreadGroupEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     projectId!: string;
 
     @Column({ type: 'enum', enum: ThreadGroupVisibility, default: ThreadGroupVisibility.Team })
@@ -242,13 +239,12 @@ export class ThreadGroupEntity extends MyBaseEntity {
 
 
 @Entity()
-@Index(['tenantKey', 'threadGroupId']) // インデックスを追加
+@Index(['orgKey', 'threadGroupId']) // インデックスを追加
 export class ThreadEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     threadGroupId!: string;
 
     @Column({ type: 'integer' })
@@ -258,19 +254,18 @@ export class ThreadEntity extends MyBaseEntity {
     // @Column({ type: 'integer', default: 0 })
     // subSeq!: number; // グループ内での順番
 
-    @Column({ type: 'text' })
-    inDtoJson!: string;
+    @Column({ type: 'jsonb' })
+    inDto!: { args: Omit<ChatCompletionCreateParams, 'messages'> };
 
     @Column({ type: 'enum', enum: ThreadStatus, default: ThreadStatus.Normal })
     status!: ThreadStatus;
 }
 
 @Entity()
-@Index(['tenantKey', 'threadId']) // インデックスを追加
+@Index(['orgKey', 'threadId']) // インデックスを追加
 export class MessageClusterEntity extends MyBaseEntity {
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     threadId!: string;
 
     @Column({ type: 'integer' })
@@ -280,7 +275,7 @@ export class MessageClusterEntity extends MyBaseEntity {
     @Column({ type: 'enum', enum: MessageClusterType, default: MessageClusterType.Single })
     type!: MessageClusterType;
 
-    @Column({ nullable: true })
+    @Column({ type: 'uuid', nullable: true })
     previousMessageClusterId?: string; // 先行するメッセージのID.メッセージグループIDではないことに注意。グループIDで紐づけるとグループ内のどのメッセージに紐づくか分からなくなってしまうので。
 
     @Column()
@@ -288,13 +283,12 @@ export class MessageClusterEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['tenantKey', 'threadId']) // インデックスを追加
+@Index(['orgKey', 'threadId']) // インデックスを追加
 export class MessageGroupEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     threadId!: string;
 
     @Column({ type: 'enum', enum: MessageGroupType, default: MessageGroupType.Single })
@@ -307,7 +301,7 @@ export class MessageGroupEntity extends MyBaseEntity {
     @UpdateDateColumn({ type: 'timestamptz' })
     lastUpdate!: Date;
 
-    @Column({ nullable: true })
+    @Column({ type: 'uuid', nullable: true })
     previousMessageGroupId?: string; // 先行するメッセージのID.メッセージグループIDではないことに注意。グループIDで紐づけるとグループ内のどのメッセージに紐づくか分からなくなってしまうので。
 
     @Column()
@@ -325,13 +319,12 @@ export class MessageGroupEntity extends MyBaseEntity {
 
 
 @Entity()
-@Index(['tenantKey', 'messageGroupId']) // インデックスを追加
+@Index(['orgKey', 'messageGroupId']) // インデックスを追加
 export class MessageEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     messageGroupId!: string;
 
     @Column({ type: 'integer' })
@@ -347,13 +340,13 @@ export class MessageEntity extends MyBaseEntity {
     // @Column({ nullable: true })
     // previousMessageId?: string; // 先行するメッセージのID.メッセージグループIDではないことに注意。グループIDで紐づけるとグループ内のどのメッセージに紐づくか分からなくなってしまうので。
 
-    @Column({ nullable: true })
+    @Column({ type: 'uuid', nullable: true })
     cacheId?: string;
 
     @Column()
     label!: string;
 
-    @Column({ nullable: true })
+    @Column({ type: 'uuid', nullable: true })
     editedRootMessageId?: string;
 
     // @Column()
@@ -364,7 +357,7 @@ export class MessageEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['tenantKey', 'messageId']) // インデックスを追加
+@Index(['orgKey', 'messageId']) // インデックスを追加
 export class ContentPartEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
@@ -376,8 +369,7 @@ export class ContentPartEntity extends MyBaseEntity {
     @Column({ type: 'integer', default: 0 })
     subSeq!: number; // バージョン（更新のたびにカウントアップ）
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     messageId!: string;
 
     @Column({ type: 'enum', enum: ContentPartType, default: ContentPartType.TEXT })
@@ -386,7 +378,7 @@ export class ContentPartEntity extends MyBaseEntity {
     @Column({ nullable: true, type: 'text' })
     text?: string;
 
-    @Column({ nullable: true })
+    @Column({ nullable: true, type: 'uuid' })
     linkId?: string;
 
     @Column({ nullable: true, type: 'jsonb' })
@@ -464,3 +456,46 @@ export class ContentPartEntity extends MyBaseEntity {
 // FROM content_part_entity_backup;
 // SELECT last_value FROM content_part_entity_seq_seq;
 // SELECT SETVAL('content_part_entity_seq_seq', 5251, FALSE);
+
+// INSERT INTO user_role_entity (org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,scope_info_scope_type,scope_info_scope_id) 
+// SELECT org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,id,'ORGANIZATION','{xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}' FROM user_entity; 
+
+// SELECT COUNT(*) FROM Team_Member_Entity WHERE NOT (user_Id IS NULL OR user_Id ~* '^[0-9a-fA-F-]{36}$' AND user_Id::uuid IS NOT NULL);
+
+// ALTER TABLE Team_Member_Entity ALTER COLUMN user_Id TYPE uuid USING user_Id::uuid;
+// ALTER TABLE Team_Member_Entity ALTER COLUMN team_Id TYPE uuid USING team_Id::uuid;
+// ALTER TABLE git_project_commit_Entity ALTER COLUMN file_group_Id TYPE uuid USING file_group_Id::uuid;
+// ALTER TABLE mm_timeline_Entity ALTER COLUMN user_Id TYPE uuid USING user_Id::uuid;
+// ALTER TABLE mm_timeline_channel_Entity ALTER COLUMN timeline_Id TYPE uuid USING timeline_Id::uuid;
+// ALTER TABLE box_item_Entity ALTER COLUMN user_Id TYPE uuid USING user_Id::uuid;
+// ALTER TABLE box_collection_Entity ALTER COLUMN user_Id TYPE uuid USING user_Id::uuid;
+// ALTER TABLE file_group_Entity ALTER COLUMN project_Id TYPE uuid USING project_Id::uuid;
+// ALTER TABLE file_Entity ALTER COLUMN project_Id TYPE uuid USING project_Id::uuid;
+// ALTER TABLE file_Entity ALTER COLUMN file_body_Id TYPE uuid USING file_body_Id::uuid;
+// ALTER TABLE file_Entity ALTER COLUMN file_group_Id TYPE uuid USING file_group_Id::uuid;
+// ALTER TABLE file_tag_Entity ALTER COLUMN file_Id TYPE uuid USING file_Id::uuid;
+// ALTER TABLE file_version_Entity ALTER COLUMN file_Id TYPE uuid USING file_Id::uuid;
+// ALTER TABLE file_access_Entity ALTER COLUMN file_Id TYPE uuid USING file_Id::uuid;
+// ALTER TABLE file_access_Entity ALTER COLUMN team_Id TYPE uuid USING team_Id::uuid;
+// ALTER TABLE vertex_cached_content_Entity ALTER COLUMN project_Id TYPE uuid USING project_Id::uuid;
+// DROP VIEW predict_history_view;
+// ALTER TABLE predict_history_wrapper_Entity ALTER COLUMN message_Id TYPE uuid USING message_Id::uuid;
+// ALTER TABLE predict_history_wrapper_Entity ALTER COLUMN stream_Id TYPE uuid USING stream_Id::uuid;
+// ALTER TABLE predict_history_wrapper_Entity ALTER COLUMN connection_Id TYPE uuid USING connection_Id::uuid;
+// ALTER TABLE project_Entity ALTER COLUMN team_Id TYPE uuid USING team_Id::uuid;
+// ALTER TABLE thread_group_Entity ALTER COLUMN project_Id TYPE uuid USING project_Id::uuid;
+// ALTER TABLE thread_Entity ALTER COLUMN thread_group_Id TYPE uuid USING thread_group_Id::uuid;
+// ALTER TABLE message_cluster_Entity ALTER COLUMN thread_Id TYPE uuid USING thread_Id::uuid;
+// ALTER TABLE message_cluster_Entity ALTER COLUMN previous_message_cluster_Id TYPE uuid USING previous_message_cluster_Id::uuid;
+// ALTER TABLE message_group_Entity ALTER COLUMN thread_Id TYPE uuid USING thread_Id::uuid;
+// ALTER TABLE message_group_Entity ALTER COLUMN previous_message_group_Id TYPE uuid USING previous_message_group_Id::uuid;
+// ALTER TABLE message_Entity ALTER COLUMN message_group_Id TYPE uuid USING message_group_Id::uuid;
+// ALTER TABLE message_Entity ALTER COLUMN cache_Id TYPE uuid USING cache_Id::uuid;
+// ALTER TABLE message_Entity ALTER COLUMN edited_root_message_Id TYPE uuid USING edited_root_message_Id::uuid;
+// ALTER TABLE content_part_Entity ALTER COLUMN message_Id TYPE uuid USING message_Id::uuid;
+// ALTER TABLE content_part_Entity ALTER COLUMN link_id TYPE uuid USING link_id::uuid;
+// ALTER TABLE tool_call_group_Entity ALTER COLUMN project_id TYPE uuid USING project_id::uuid;
+// ALTER TABLE tool_call_part_Entity ALTER COLUMN tool_call_group_id TYPE uuid USING tool_call_group_id::uuid;
+// ALTER TABLE user_setting_Entity ALTER COLUMN user_id TYPE uuid USING user_id::uuid;
+// ALTER TABLE thread_Entity ALTER COLUMN in_dto_json TYPE jsonb USING in_dto_json::jsonb;
+// ALTER TABLE thread_Entity RENAME COLUMN in_dto_json TO in_dto;

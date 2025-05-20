@@ -209,7 +209,7 @@ export interface MyCompletionOptions {
     label?: string,
     toolCallCounter?: number,
     cachedContent?: CachedContent,
-    tenantKey?: string,
+    orgKey?: string,
     userId?: string,
     ip?: string,
     authType?: string,
@@ -2011,7 +2011,7 @@ export class OpenAIApiWrapper {
                                         entity.cost = tokenCount.cost;
                                         entity.status = stepName as any;
                                         entity.message = String(error) || message; // 追加メッセージがあれば書く。
-                                        entity.tenantKey = options?.tenantKey || 'unknown'; // ここでは利用者不明
+                                        entity.orgKey = options?.orgKey || 'unknown'; // ここでは利用者不明
                                         entity.createdBy = options?.userId || 'batch'; // ここでは利用者不明
                                         entity.updatedBy = options?.userId || 'batch'; // ここでは利用者不明
                                         if (options?.ip) {

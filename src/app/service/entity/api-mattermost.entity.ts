@@ -2,11 +2,11 @@ import { Entity, Column, PrimaryColumn, Index, PrimaryGeneratedColumn, In } from
 import { MyBaseEntity } from './base.js';
 
 @Entity() // テーブル名を指定
-// @Index(['tenantKey', 'id'], { unique: true }) // インデックスを追加
-@Index(['tenantKey', 'username'], { unique: true }) // インデックスを追加
+// @Index(['orgKey', 'id'], { unique: true }) // インデックスを追加
+@Index(['orgKey', 'username'], { unique: true }) // インデックスを追加
 export class MmUserEntity {
     @PrimaryColumn()
-    tenantKey!: string; // テナントキーを追加
+    orgKey!: string; // テナントキーを追加
 
     @Column()
     seq!: number;
@@ -149,10 +149,10 @@ export class MmUserPreEntity extends MmUserEntity { }
 // }
 
 @Entity()
-@Index(['tenantKey', 'id'], { unique: true }) // インデックスを追加
+@Index(['orgKey', 'id'], { unique: true }) // インデックスを追加
 export class MmPostEntity {
     @PrimaryColumn()
-    tenantKey!: string; // テナントキーを追加
+    orgKey!: string; // テナントキーを追加
 
     @PrimaryColumn()
     id!: string;
@@ -284,13 +284,12 @@ export enum MmTimelineStatus {
 }
 
 @Entity()
-@Index(['tenantKey', 'userId']) // インデックスを追加
+@Index(['orgKey', 'userId']) // インデックスを追加
 export class MmTimelineEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     userId!: string;
 
     @Column()
@@ -304,13 +303,12 @@ export class MmTimelineEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['tenantKey', 'timelineId']) // インデックスを追加
+@Index(['orgKey', 'timelineId']) // インデックスを追加
 export class MmTimelineChannelEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Index() // インデックス
-    @Column()
+    @Column({ type: 'uuid' })
     timelineId!: string;
 
     @Column()
@@ -324,17 +322,17 @@ export class MmTimelineChannelEntity extends MyBaseEntity {
 }
 
 
-@Entity()
-export class MmFileEntity extends MyBaseEntity {
-    // @PrimaryGeneratedColumn('uuid')
-    // id!: string;
+// @Entity()
+// export class MmFileEntity extends MyBaseEntity {
+//     // @PrimaryGeneratedColumn('uuid')
+//     // id!: string;
 
-    @Column()
-    domain!: string;
+//     @Column()
+//     domain!: string;
 
-    @Column()
-    mmFiileId!: string;
+//     @Column()
+//     mmFiileId!: string;
 
-    @Column()
-    fileBodyId!: string;
-}
+//     @Column()
+//     fileBodyId!: string;
+// }

@@ -2,10 +2,182 @@ import { Request, Response } from 'express';
 import { param, body, query } from 'express-validator';
 import { In, Not } from 'typeorm';
 
-import { AIProviderType, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIModelAlias } from '../entity/auth.entity.js';
+import { AIProviderType, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIModelAlias, AIProviderEntity, ScopeType } from '../entity/auth.entity.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { ds } from '../db.js';
 import { UserRequest } from '../models/info.js';
+
+/**
+ * [GET] AIProvider 一覧取得
+ */
+export const getAIProviders = [
+    query('provider').optional().isString(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        try {
+            const { provider, scopeType, providerId } = req.query as {
+                provider?: string,
+                scopeType?: string,
+                providerId?: string
+            };
+
+            const where: any = {
+                orgKey: req.info.user.orgKey,
+                isActive: true,
+            };
+
+            if (providerId) where.id = providerId;
+            if (provider) where.provider = provider;
+            if (scopeType) where['scopeInfo.scopeType'] = scopeType;
+
+            const providers = await ds.getRepository(AIProviderEntity).find({
+                where,
+                order: { createdAt: 'DESC' }
+            });
+
+            res.status(200).json(providers);
+        } catch (error) {
+            console.error('Error fetching AIProviders:', error);
+            res.status(500).json({ message: 'AIProvider一覧の取得に失敗しました' });
+        }
+    }
+];
+
+/**
+ * [POST/PUT] AIProvider 作成または更新 (Upsert)
+ */
+export const upsertAIProvider = [
+    param('providerId').optional({ nullable: true }).isUUID(),
+    body('provider').isIn(Object.values(AIProviderType)),
+    body('label').isString().notEmpty(),
+    body('scopeInfo.scopeType').isIn(Object.values(ScopeType)),
+    body('scopeInfo.scopeId').isString().notEmpty(),
+    body('metadata').optional({ nullable: true }),
+    body('isActive').isBoolean(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        try {
+            const repo = ds.getRepository(AIProviderEntity);
+            const bodyData = req.body as AIProviderEntity;
+            const { providerId } = req.params;
+            let entity: AIProviderEntity | null = null;
+            let isNew = true;
+
+            // 既存レコードチェック
+            if (providerId) {
+                entity = await repo.findOne({
+                    where: {
+                        id: providerId,
+                        orgKey: req.info.user.orgKey
+                    }
+                });
+                if (entity) isNew = false;
+            }
+
+            // 一意制約チェック: organization + scopeInfo + provider
+            const conflict = await repo.findOne({
+                where: {
+                    provider: bodyData.provider,
+                    orgKey: req.info.user.orgKey,
+                    scopeInfo: {
+                        scopeType: bodyData.scopeInfo.scopeType,
+                        scopeId: bodyData.scopeInfo.scopeId
+                    },
+                    ...(isNew ? {} : { id: Not(providerId) })
+                }
+            });
+
+            if (conflict) {
+                return res.status(409).json({
+                    message: `同じスコープと${bodyData.provider}のプロバイダーが既に存在します`
+                });
+            }
+
+            if (isNew) {
+                // 新規作成
+                entity = repo.create({
+                    provider: bodyData.provider,
+                    label: bodyData.label,
+                    scopeInfo: {
+                        scopeType: bodyData.scopeInfo.scopeType,
+                        scopeId: bodyData.scopeInfo.scopeId
+                    },
+                    metadata: bodyData.metadata,
+                    isActive: bodyData.isActive ?? true,
+                });
+            } else {
+                // 更新 - 必須フィールド
+                Object.assign(entity!, {
+                    provider: bodyData.provider,
+                    label: bodyData.label,
+                    scopeInfo: {
+                        scopeType: bodyData.scopeInfo.scopeType,
+                        scopeId: bodyData.scopeInfo.scopeId
+                    },
+                    isActive: bodyData.isActive,
+                });
+            }
+
+            // オプショナルフィールドの設定
+            if ('metadata' in bodyData) entity!.metadata = bodyData.metadata;
+
+            // 共通フィールドの設定
+            entity!.orgKey = req.info.user.orgKey;
+            entity!.updatedBy = req.info.user.id;
+            entity!.updatedIp = req.info.ip;
+
+            // createdBy, createdAtは新規作成時のみ設定
+            if (isNew) {
+                entity!.createdBy = req.info.user.id;
+                entity!.createdIp = req.info.ip;
+            }
+
+            const saved = await repo.save(entity!);
+            res.status(isNew ? 201 : 200).json(saved);
+        } catch (error) {
+            console.error('Error upserting AIProvider:', error);
+            res.status(500).json({ message: 'AIProviderの保存に失敗しました' });
+        }
+    }
+];
+
+/**
+ * [DELETE] AIProvider 論理削除
+ */
+export const deleteAIProvider = [
+    param('providerId').isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        try {
+            const { providerId } = req.params;
+            const repo = ds.getRepository(AIProviderEntity);
+            const entity = await repo.findOne({
+                where: {
+                    id: providerId,
+                    orgKey: req.info.user.orgKey
+                }
+            });
+
+            if (!entity) {
+                return res.status(404).json({ message: 'AIProviderが見つかりません' });
+            }
+
+            // 論理削除
+            entity.isActive = false;
+            entity.updatedBy = req.info.user.id;
+            entity.updatedIp = req.info.ip;
+            await repo.save(entity);
+
+            res.status(204).send();
+        } catch (error) {
+            console.error('Error deleting AIProvider:', error);
+            res.status(500).json({ message: 'AIProviderの削除に失敗しました' });
+        }
+    }
+];
 
 /**
  * [GET] BaseModel 一覧取得
@@ -20,7 +192,7 @@ export const getBaseModels = [
         try {
             const { provider, status, modelId } = req.query as { provider?: string, status?: string, modelId?: string };
             const where: any = {
-                tenantKey: req.info.user.tenantKey,
+                orgKey: req.info.user.orgKey,
                 isActive: true,
             };
             if (modelId) where.id = modelId;
@@ -35,7 +207,7 @@ export const getBaseModels = [
             // エイリアスを取得
             const aliases = await ds.getRepository(AIModelAlias).find({
                 where: {
-                    tenantKey: req.info.user.tenantKey,
+                    orgKey: req.info.user.orgKey,
                     modelId: In(models.map(model => model.id))
                 }
             });
@@ -47,7 +219,7 @@ export const getBaseModels = [
             // プライスリストを取得
             const pricingHistory = await ds.getRepository(AIModelPricingEntity).find({
                 where: {
-                    tenantKey: req.info.user.tenantKey,
+                    orgKey: req.info.user.orgKey,
                     modelId: In(models.map(model => model.id))
                 },
                 order: { validFrom: 'DESC' }
@@ -86,6 +258,7 @@ export const upsertBaseModel = [
     body('details').optional({ nullable: true }).isArray(),
     body('details.*').isString(),
     body('inputFormats').optional({ nullable: true }).isArray(),
+    body('inputFormats.*').isString(),
     body('outputFormats').optional({ nullable: true }).isArray(),
     body('outputFormats.*').isString(),
     body('defaultParameters').optional({ nullable: true }),
@@ -116,7 +289,7 @@ export const upsertBaseModel = [
 
             // 既存レコードチェック
             if (modelId) {
-                entity = await repo.findOne({ where: { id: modelId, tenantKey: req.info.user.tenantKey } });
+                entity = await repo.findOne({ where: { id: modelId, orgKey: req.info.user.orgKey } });
                 if (entity) isNew = false;
             }
 
@@ -125,7 +298,7 @@ export const upsertBaseModel = [
                 where: {
                     provider: bodyData.provider,
                     providerModelId: bodyData.providerModelId,
-                    ...(isNew ? { tenantKey: req.info.user.tenantKey } : { id: Not(modelId), tenantKey: req.info.user.tenantKey })
+                    ...(isNew ? { orgKey: req.info.user.orgKey } : { id: Not(modelId), orgKey: req.info.user.orgKey })
                 }
             });
             if (conflict) {
@@ -147,7 +320,7 @@ export const upsertBaseModel = [
                 where: {
                     provider: bodyData.provider,
                     alias: In(aliases),
-                    ...(isNew ? { tenantKey: req.info.user.tenantKey } : { modelId: Not(modelId), tenantKey: req.info.user.tenantKey })
+                    ...(isNew ? { orgKey: req.info.user.orgKey } : { modelId: Not(modelId), orgKey: req.info.user.orgKey })
                 }
             });
             if (conflictAlias && conflictAlias.length > 0) {
@@ -192,7 +365,7 @@ export const upsertBaseModel = [
             if ('throttleKey' in bodyData) entity!.throttleKey = bodyData.throttleKey;
             if ('description' in bodyData) entity!.description = bodyData.description;
             if ('details' in bodyData) entity!.details = bodyData.details;
-            if ('inputFormats' in bodyData) entity!.inputFormats = bodyData.inputFormats;
+            if ('inputFormats' in bodyData) entity!.inputFormats = bodyData.inputFormats || [];
             if ('outputFormats' in bodyData) entity!.outputFormats = bodyData.outputFormats || [];
             if ('defaultParameters' in bodyData) entity!.defaultParameters = bodyData.defaultParameters;
             if ('capabilities' in bodyData) entity!.capabilities = bodyData.capabilities;
@@ -208,7 +381,7 @@ export const upsertBaseModel = [
             if ('isStream' in bodyData) entity!.isStream = bodyData.isStream;
 
             // 共通フィールドの設定
-            entity!.tenantKey = req.info.user.tenantKey;
+            entity!.orgKey = req.info.user.orgKey;
             entity!.updatedBy = req.info.user.id;
             entity!.updatedIp = req.info.ip;
             // createdBy, createdAtは新規作成時のみ設定
@@ -221,7 +394,7 @@ export const upsertBaseModel = [
 
 
             // 重複エイリアスが存在しない場合は既存のエイリアスを削除して新しいエイリアスを追加
-            const existingAliases = await repoAlias.find({ where: { modelId: saved.id, tenantKey: req.info.user.tenantKey } });
+            const existingAliases = await repoAlias.find({ where: { modelId: saved.id, orgKey: req.info.user.orgKey } });
             // 削除されたエイリアスを削除
             const deletedAliases = existingAliases.filter(alias => !aliases.includes(alias.alias));
             if (deletedAliases.length > 0) {
@@ -232,7 +405,7 @@ export const upsertBaseModel = [
             if (newAliases.length > 0) {
                 const newAliasEntities = newAliases.map(alias => {
                     const aliasEntity = new AIModelAlias();
-                    aliasEntity.tenantKey = req.info.user.tenantKey;
+                    aliasEntity.orgKey = req.info.user.orgKey;
                     aliasEntity.provider = bodyData.provider;
                     aliasEntity.alias = alias;
                     aliasEntity.modelId = saved.id;
@@ -267,7 +440,7 @@ export const deleteBaseModel = [
         try {
             const { modelId } = req.params;
             const repo = ds.getRepository(AIModelEntity);
-            const entity = await repo.findOne({ where: { id: modelId, tenantKey: req.info.user.tenantKey } });
+            const entity = await repo.findOne({ where: { id: modelId, orgKey: req.info.user.orgKey } });
             if (!entity) {
                 return res.status(404).json({ message: 'BaseModelが見つかりません' });
             }
@@ -278,7 +451,7 @@ export const deleteBaseModel = [
                 entity.updatedIp = req.info.ip;
                 await repo.save(entity);
             } else {
-                await repo.delete({ id: modelId, tenantKey: req.info.user.tenantKey });
+                await repo.delete({ id: modelId, orgKey: req.info.user.orgKey });
             }
             res.status(204).send();
         } catch (error) {
@@ -303,7 +476,7 @@ export const getModelPricings = [
         const req = _req as UserRequest;
         try {
             const repo = ds.getRepository(AIModelPricingEntity);
-            const list = await repo.find({ order: { validFrom: 'DESC' }, where: { tenantKey: req.info.user.tenantKey } });
+            const list = await repo.find({ order: { validFrom: 'DESC' }, where: { orgKey: req.info.user.orgKey } });
             res.json(list);
         } catch (err) {
             console.error(err);
@@ -328,7 +501,7 @@ export const upsertModelPricing = [
             const repo = ds.getRepository(AIModelPricingEntity);
             let entity;
             if (modelId) {
-                entity = await repo.findOne({ where: { id: modelId, tenantKey: req.info.user.tenantKey } });
+                entity = await repo.findOne({ where: { id: modelId, orgKey: req.info.user.orgKey } });
             }
             if (entity) {
                 repo.merge(entity, payload);
@@ -338,7 +511,7 @@ export const upsertModelPricing = [
                 entity.createdIp = req.info.ip;
             }
             // 共通フィールドの設定
-            entity.tenantKey = req.info.user.tenantKey;
+            entity.orgKey = req.info.user.orgKey;
             entity.updatedBy = req.info.user.id;
             entity.updatedIp = req.info.ip;
             const saved = await repo.save(entity);
@@ -359,7 +532,7 @@ export const deleteModelPricing = [
         const { modelId } = req.params;
         try {
             const repo = ds.getRepository(AIModelPricingEntity);
-            const entity = await repo.findOne({ where: { id: modelId, tenantKey: req.info.user.tenantKey } });
+            const entity = await repo.findOne({ where: { id: modelId, orgKey: req.info.user.orgKey } });
             if (!entity) {
                 return res.status(404).json({ message: '料金履歴が見つかりません' });
             }
@@ -372,7 +545,7 @@ export const deleteModelPricing = [
                 return res.status(204).send();
             }
             // 物理削除
-            await repo.delete({ modelId, tenantKey: req.info.user.tenantKey });
+            await repo.delete({ modelId, orgKey: req.info.user.orgKey });
             res.status(204).send();
         } catch (err) {
             console.error(err);

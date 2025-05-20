@@ -505,7 +505,7 @@ export function commonFunctionDefinitions(
                 const newLabel = `${label}-call_ai-${model}`;
                 // レスポンス返した後にゆるりとヒストリーを更新しておく。
                 const history = new PredictHistoryWrapperEntity();
-                history.tenantKey = req.info.user.tenantKey;
+                history.orgKey = req.info.user.orgKey;
                 history.connectionId = connectionId;
                 history.streamId = streamId;
                 history.messageId = message.id;
@@ -539,6 +539,25 @@ export function commonFunctionDefinitions(
                         },
                     });;
                 });
+            },
+        },
+        {
+            info: { group: 'command', isActive: true, isInteractive: true, label: 'ユーザーへの確認', },
+            definition: {
+                type: 'function', function: {
+                    name: 'command_confirm',
+                    description: `ユーザーに現在の方針のまま進めてよいか確認する。`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            text: { type: 'string', description: '確認メッセージ' },
+                        },
+                        required: ['text']
+                    }
+                }
+            },
+            handler: async (args: { text: string }): Promise<string> => {
+                return Promise.resolve(`confirm: ${args.text}`);
             },
         },
         {
@@ -629,13 +648,13 @@ export interface ElasticsearchResponse {
 
 
 export async function getOAuthAccountForTool(req: UserRequest, provider: string): Promise<{ e: ExtApiClient, oAuthAccount: OAuthAccountEntity, axiosWithAuth: AxiosInstance }> {
-    const e = await getExtApiClient(req.info.user.tenantKey, provider);
+    const e = await getExtApiClient(req.info.user.orgKey, provider);
     const user_id = req.info.user.id;
     if (!user_id) {
         throw new Error('User ID is required.');
     }
     const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneOrFail({
-        where: { provider, userId: req.info.user.id },
+        where: { orgKey: req.info.user.orgKey, provider, userId: req.info.user.id },
     });
     let axiosWithAuth;
     if (provider.startsWith('mattermost')) {

@@ -8,7 +8,7 @@ export class FileGroupEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     projectId!: string;
 
     @Column({ type: 'enum', enum: FileGroupType, default: FileGroupType.UPLOAD })
@@ -28,12 +28,12 @@ export class FileGroupEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['tenantKey', 'fileGroupId'])
+@Index(['orgKey', 'fileGroupId'])
 export class FileEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Column() @Index()
+    @Column({ type: 'uuid' })
     fileGroupId!: string;
 
     @Column()
@@ -42,13 +42,13 @@ export class FileEntity extends MyBaseEntity {
     @Column()
     filePath!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     projectId!: string;
 
     @Column()
     uploadedBy!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     fileBodyId!: string;
 
     @Column({ default: true })
@@ -90,7 +90,7 @@ export class FileTagEntity extends MyBaseEntity {
     @Column()
     name!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     fileId!: string;
 }
 
@@ -99,7 +99,7 @@ export class FileVersionEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     fileId!: string;
 
     @Column()
@@ -117,10 +117,10 @@ export class FileAccessEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     fileId!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     teamId!: string;
 
     @Column()

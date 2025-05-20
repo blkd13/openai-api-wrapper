@@ -25,14 +25,14 @@ export const fetchCommit = [
 
             const refId = req.params[0] as string | undefined;
 
-            const project = await ds.getRepository(ProjectEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: projectId } });
+            const project = await ds.getRepository(ProjectEntity).findOne({ where: { orgKey: req.info.user.orgKey, id: projectId } });
             if (!project) {
                 res.status(404).json({ message: '指定されたプロジェクトが見つかりません' });
                 return;
             }
 
             const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
-                where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id, teamId: project.teamId }
+                where: { orgKey: req.info.user.orgKey, userId: req.info.user.id, teamId: project.teamId }
             });
 
             if (project.visibility !== ProjectVisibility.Public && project.visibility !== ProjectVisibility.Login && !teamMember) {
@@ -42,7 +42,7 @@ export const fetchCommit = [
 
             const e = {} as ExtApiClient;
             try {
-                Object.assign(e, await getExtApiClient(req.info.user.tenantKey, provider));
+                Object.assign(e, await getExtApiClient(req.info.user.orgKey, provider));
             } catch (error) {
                 res.status(401).json({ error: `${provider}は認証されていません。` });
                 return;
@@ -81,16 +81,16 @@ export const fetchCommit = [
             };
 
             let gitProjectCommit = await ds.getRepository(GitProjectCommitEntity).findOne({
-                where: { tenantKey: req.info.user.tenantKey, provider, gitProjectId: Number(gitlabProjectId), commitId }
+                where: { orgKey: req.info.user.orgKey, provider, gitProjectId: Number(gitlabProjectId), commitId }
             })
 
             let fileGroup;
 
             if (gitProjectCommit) {
                 // 既に同じコミットをダウンロード済みの場合
-                fileGroup = await copyFromFirst(gitProjectCommit.fileGroupId, project, req.info.user.tenantKey, req.info.user.id, req.info.ip);
+                fileGroup = await copyFromFirst(gitProjectCommit.fileGroupId, project, req.info.user.orgKey, req.info.user.id, req.info.ip);
             } else {
-                const object = await gitFetchCommitId(req.info.user.tenantKey, req.info.user.id, req.info.ip, projectId, FileGroupType.GITLAB, gitlabProject.name, provider, { provider, projectId: gitlabProjectId, refType, refId, commitId }, Number(gitlabProjectId), e.uriBase, gitlabProject.http_url_to_repo, gitlabProject.path_with_namespace, username, accessToken, commitId);
+                const object = await gitFetchCommitId(req.info.user.orgKey, req.info.user.id, req.info.ip, projectId, FileGroupType.GITLAB, gitlabProject.name, provider, { provider, projectId: gitlabProjectId, refType, refId, commitId }, Number(gitlabProjectId), e.uriBase, gitlabProject.http_url_to_repo, gitlabProject.path_with_namespace, username, accessToken, commitId);
                 gitProjectCommit = object.gitProjectCommit;
                 fileGroup = object.fileGroup;
             }

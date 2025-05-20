@@ -68,14 +68,14 @@ server.on('upgrade', (req, res, header) => {
     const next = async () => {
 
         // /api/user/oauth/api/proxy/mattermost/sample/api/v4/websocket
-        const [_0, _1, _2, _3, _4, _5, tenantKey, providerType, providerName] = req.url?.split('/') || [];
+        const [_0, _1, _2, _3, _4, _5, orgKey, providerType, providerName] = req.url?.split('/') || [];
         const pathRewrite: { [key: string]: string } = {};
-        pathRewrite[`/api/user/oauth/ws/proxy/${tenantKey}/${providerType}/${providerName}`] = ``;
+        pathRewrite[`/api/user/oauth/ws/proxy/${orgKey}/${providerType}/${providerName}`] = ``;
         // console.log(`pathRewrite ${JSON.stringify(pathRewrite)}`);
         // console.log(`req.path ${req.url}`);
         // console.log(`call next`);
         try {
-            const accessToken = await getAccessToken(tenantKey, (req as any).info.user.id, `${providerType}-${providerName}`);
+            const accessToken = await getAccessToken(orgKey, (req as any).info.user.id, `${providerType}-${providerName}`);
             // console.log(`accessToken ${accessToken}`);
             createProxyMiddleware({
                 target: OAUTH2_MATTERMOST_URI_BASE,

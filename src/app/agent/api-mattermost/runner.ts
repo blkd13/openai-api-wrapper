@@ -83,7 +83,7 @@ async function insert() {
                 const jsonString = fs.readFileSync(file, 'utf-8');
                 const jsonObject = JSON.parse(jsonString) as MmUserPreEntity[];
                 jsonObject.forEach(obj => {
-                    obj.tenantKey = 'common';
+                    obj.orgKey = 'public';
                     obj.seq = seq;
                     seq++;
                     if (obj.delete_at) {

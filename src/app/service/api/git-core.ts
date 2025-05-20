@@ -115,7 +115,7 @@ async function processFilesInArchive(repoDir: string, ref: string): Promise<File
     return files;
 }
 
-export async function gitCat(tenantKey: string, userId: string, ip: string, provider: string, gitlabProjectId: number, repoUrlWithoutAuth: string, repoUrlWithAuth: string, path_with_namespace: string, ref: string): Promise<FileContent[]> {
+export async function gitCat(orgKey: string, userId: string, ip: string, provider: string, gitlabProjectId: number, repoUrlWithoutAuth: string, repoUrlWithAuth: string, path_with_namespace: string, ref: string): Promise<FileContent[]> {
     const repoDire = `${GIT_REPOSITORIES}/${provider}/${path_with_namespace}`;
     console.log(`repoDire: ${repoDire}`);
     // gitリポジトリ操作前にDBで状態管理を行う
@@ -129,11 +129,11 @@ export async function gitCat(tenantKey: string, userId: string, ip: string, prov
         // (3) 無ければ新規作成
         if (!gitProject) {
             gitProject = new GitProjectEntity();
-            gitProject.tenantKey = tenantKey;
+            gitProject.orgKey = orgKey;
             gitProject.provider = provider;
             gitProject.gitProjectId = gitlabProjectId;
             gitProject.status = GitProjectStatus.Cloning;
-            gitProject.tenantKey = tenantKey;
+            gitProject.orgKey = orgKey;
             gitProject.createdBy = userId;
             gitProject.updatedBy = userId;
             gitProject.createdIp = ip;
@@ -170,7 +170,7 @@ export async function gitCat(tenantKey: string, userId: string, ip: string, prov
         return await processFilesInArchive(repoDire, ref);
     } else if ([GitProjectStatus.Cloning, GitProjectStatus.Fetching].includes(gitProject.status)) {
 
-        const e = await getExtApiClient(tenantKey, provider);
+        const e = await getExtApiClient(orgKey, provider);
         const proxy = await getProxyUrl(e.uriBase) || '';
         const git = simpleGit().env('http', proxy).env('https', proxy).env('sslVerify', 'false');
         try {
@@ -207,24 +207,24 @@ export async function gitCat(tenantKey: string, userId: string, ip: string, prov
     }
 }
 
-export async function copyFromFirst(firstFileGroupId: string, project: ProjectEntity, tenantKey: string, userId: string, ip: string): Promise<FileGroupEntity> {
+export async function copyFromFirst(firstFileGroupId: string, project: ProjectEntity, orgKey: string, userId: string, ip: string): Promise<FileGroupEntity> {
     // すでにダウンロード済みの場合、最初の1個として登録されたものを再利用する
     return await ds.transaction(async tm => {
         const firstFileGroup = await tm.getRepository(FileGroupEntity).findOneOrFail({
-            where: { tenantKey, id: firstFileGroupId },
+            where: { orgKey, id: firstFileGroupId },
         });
         // 再作成するためにいくつかのプロパティを削除
         ['id', 'createdAt', 'updatedAt',].forEach(key => delete (firstFileGroup as any)[key]);
         firstFileGroup.projectId = project.id;
         firstFileGroup.isActive = true; // 全部有効にする
-        firstFileGroup.tenantKey = tenantKey;
+        firstFileGroup.orgKey = orgKey;
         firstFileGroup.createdBy = userId;
         firstFileGroup.updatedBy = userId;
         firstFileGroup.createdIp = ip;
         firstFileGroup.updatedIp = ip;
         const fileGroup = await tm.getRepository(FileGroupEntity).save(firstFileGroup);
         const files = await tm.getRepository(FileEntity).find({
-            where: { tenantKey, fileGroupId: firstFileGroupId },
+            where: { orgKey, fileGroupId: firstFileGroupId },
         });
         const newFileGroupId = fileGroup.id;
         const savedfiles = await Promise.all(files.map(file => {
@@ -232,7 +232,7 @@ export async function copyFromFirst(firstFileGroupId: string, project: ProjectEn
             ['id', 'createdAt', 'updatedAt',].forEach(key => delete (file as any)[key]);
             file.projectId = project.id;
             file.isActive = true; // 全部有効にする
-            file.tenantKey = tenantKey;
+            file.orgKey = orgKey;
             file.createdBy = userId;
             file.updatedBy = userId;
             file.createdIp = ip;
@@ -243,18 +243,18 @@ export async function copyFromFirst(firstFileGroupId: string, project: ProjectEn
         }));
 
         const fileAccesses = await tm.getRepository(FileAccessEntity).find({
-            where: { tenantKey, fileId: In(files.map(savedFile => savedFile.id)) },
+            where: { orgKey, fileId: In(files.map(savedFile => savedFile.id)) },
         });
         // fileAccessはコピーじゃなくて全部権限OKで作っておく。
         await Promise.all(savedfiles.map(_file => {
             const fileAccess = new FileAccessEntity();
-            fileAccess.tenantKey = tenantKey;
+            fileAccess.orgKey = orgKey;
             fileAccess.fileId = _file.id;
             fileAccess.teamId = project.teamId;
             fileAccess.canRead = true;
             fileAccess.canWrite = true;
             fileAccess.canDelete = true;
-            fileAccess.tenantKey = tenantKey;
+            fileAccess.orgKey = orgKey;
             fileAccess.createdBy = userId;
             fileAccess.updatedBy = userId;
             fileAccess.createdIp = ip;
@@ -268,7 +268,7 @@ export async function copyFromFirst(firstFileGroupId: string, project: ProjectEn
 }
 
 export async function gitFetchCommitId(
-    tenantKey: string,
+    orgKey: string,
     userId: string,
     ip: string,
     projectId: string,
@@ -286,14 +286,14 @@ export async function gitFetchCommitId(
 ): Promise<{ fileGroup: FileGroupEntity, gitProjectCommit: GitProjectCommitEntity }> {
     console.log(`http_url_to_repo=${http_url_to_repo}`);
     const { repoUrlWithoutAuth, repoUrlWithAuth } = replaceDomain(http_url_to_repo, uriBase, username, accessToken);
-    const files = await gitCat(tenantKey, userId, ip, provider, Number(gitProjectId), repoUrlWithoutAuth, repoUrlWithAuth, path_with_namespace, commitId);
+    const files = await gitCat(orgKey, userId, ip, provider, Number(gitProjectId), repoUrlWithoutAuth, repoUrlWithAuth, path_with_namespace, commitId);
     const contents = files.map(file => ({
         filePath: file.name,
         base64Data: `data:application/octet-stream;base64,${Buffer.from(file.content).toString('base64')}`,
     }));
 
     // アップロードしてファイルグループを取得
-    const uploadedFileGroupList = await uploadFileFunction(userId, projectId, contents, fileGroupType, tenantKey, ip, repositoryName, JSON.stringify(descriptionObject));
+    const uploadedFileGroupList = await uploadFileFunction(userId, projectId, contents, fileGroupType, orgKey, ip, repositoryName, JSON.stringify(descriptionObject));
 
     // 成功
     if (uploadedFileGroupList.length === 1) {
@@ -301,7 +301,7 @@ export async function gitFetchCommitId(
 
         // 新しい GitProjectCommitEntity を作成して紐づける
         let gitProjectCommit = new GitProjectCommitEntity();
-        gitProjectCommit.tenantKey = tenantKey;
+        gitProjectCommit.orgKey = orgKey;
         gitProjectCommit.provider = provider;
         gitProjectCommit.gitProjectId = gitProjectId;
         gitProjectCommit.commitId = commitId;

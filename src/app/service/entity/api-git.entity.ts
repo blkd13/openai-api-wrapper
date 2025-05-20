@@ -17,12 +17,12 @@ export enum GitProjectStatus {
 }
 
 @Entity() // テーブル名を指定
-@Unique(['tenantKey', 'provider', 'gitProjectId', 'commitId']) // ここで複合ユニーク制約を設定
-@Index(['tenantKey', 'provider']) // インデックスを追加
-@Index(['tenantKey', 'fileGroupId']) // インデックスを追加
+@Unique(['orgKey', 'provider', 'gitProjectId', 'commitId']) // ここで複合ユニーク制約を設定
+@Index(['orgKey', 'provider']) // インデックスを追加
+@Index(['orgKey', 'fileGroupId']) // インデックスを追加
 export class GitProjectCommitEntity extends MyBaseEntity {
 
-    @Column() @Index()
+    @Column()
     provider!: string;
 
     @Column()
@@ -31,7 +31,7 @@ export class GitProjectCommitEntity extends MyBaseEntity {
     @Column()
     commitId!: string;
 
-    @Column() @Index()
+    @Column({ type: 'uuid' })
     fileGroupId!: string;
 
     @Column({ type: 'enum', enum: GitProjectCommitStatus, default: GitProjectCommitStatus.Initialized })
@@ -39,11 +39,11 @@ export class GitProjectCommitEntity extends MyBaseEntity {
 }
 
 @Entity() // テーブル名を指定
-@Unique(['tenantKey', 'provider', 'gitProjectId']) // ここで複合ユニーク制約を設定
-@Index(['tenantKey', 'provider']) // インデックスを追加
+@Unique(['orgKey', 'provider', 'gitProjectId']) // ここで複合ユニーク制約を設定
+@Index(['orgKey', 'provider']) // インデックスを追加
 export class GitProjectEntity extends MyBaseEntity {
 
-    @Column() @Index()
+    @Column()
     provider!: string;
 
     @Column()

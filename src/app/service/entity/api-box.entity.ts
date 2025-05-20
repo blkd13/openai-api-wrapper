@@ -7,10 +7,10 @@ export enum BoxItemType {
 }
 
 @Entity() // テーブル名を指定
-@Unique(['userId', 'type', 'itemId', 'offset', 'limit']) // ここで複合ユニーク制約を設定
+@Unique(['orgKey', 'userId', 'type', 'itemId', 'offset', 'limit']) // ここで複合ユニーク制約を設定
 export class BoxItemEntity extends MyBaseEntity {
 
-    @Column()
+    @Column({ type: 'uuid' })
     userId!: string;
 
     @Column({ type: 'enum', enum: BoxItemType })
@@ -33,11 +33,11 @@ export class BoxItemEntity extends MyBaseEntity {
 }
 
 @Entity() // テーブル名を指定
-@Unique(["userId", "collectionId"]) // ここで複合ユニーク制約を設定
-@Index(['tenantKey', 'userId']) // インデックスを追加
+@Unique(['orgKey', 'userId', 'collectionId']) // ここで複合ユニーク制約を設定
+@Index(['orgKey', 'userId']) // インデックスを追加
 export class BoxCollectionEntity extends MyBaseEntity {
 
-    @Column() @Index()
+    @Column({ type: 'uuid' })
     userId!: string;
 
     @Column()
@@ -58,8 +58,8 @@ export class BoxCollectionEntity extends MyBaseEntity {
 
 
 @Entity() // テーブル名を指定
-@Unique(['tenantKey', 'fileId', 'versionId']) // ここで複合ユニーク制約を設定
-@Index(['tenantKey', 'fileId']) // インデックスを追加
+@Unique(['orgKey', 'fileId', 'versionId']) // ここで複合ユニーク制約を設定
+@Index(['orgKey', 'fileId']) // インデックスを追加
 export class BoxFileEntity extends MyBaseEntity {
 
     @Column()

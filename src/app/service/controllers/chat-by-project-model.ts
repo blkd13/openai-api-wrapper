@@ -45,7 +45,7 @@ export const COUNT_TOKEN_OPENAI_MODEL = 'gpt-4o' as const;
 export const tokenCountRequestLimitation = new EnhancedRequestLimiter(300);
 
 async function buildFileGroupBodyMap(
-    tenantKey: string,
+    orgKey: string,
     contentPartList: (ContentPartEntity | { type: 'text', text: string } | { type: 'file', text: string, fileGroupId: string })[],
     // fileGroupBodyMap: { [fileGroupId: string]: { file: FileEntity, fileBody: FileBodyEntity, base64: string }[] } = {},
     fileGroupIdChatCompletionContentPartImageMap: { [fileGroupId: string]: ChatCompletionContentPartImage[][] } = {},
@@ -53,12 +53,12 @@ async function buildFileGroupBodyMap(
     // コンテンツの内容がファイルの時用
     const fileGroupIdList = contentPartList.filter(contentPart => contentPart.type === 'file').map(contentPart => (contentPart as { linkId: string }).linkId || (contentPart as { fileGroupId: string }).fileGroupId);
     const fileList = await ds.getRepository(FileEntity).find({
-        where: { tenantKey, fileGroupId: In(fileGroupIdList) }
+        where: { orgKey, fileGroupId: In(fileGroupIdList) }
     });
     // コンテンツの内容がファイルの時のファイルの実体用
     const fileBodyIdList = fileList.map(file => file.fileBodyId);
     const fileBodyList = await ds.getRepository(FileBodyEntity).find({
-        where: { tenantKey, id: In(fileBodyIdList) }
+        where: { orgKey, id: In(fileBodyIdList) }
     });
     // ファイルIDとファイル内容のdataURL形式文字列のマップを作る。
     const fileBodyIdMap = fileBodyList.reduce((prev, curr) => {
@@ -140,7 +140,7 @@ export type ArgsBuildType = 'threadGroup' | 'thread' | 'messageGroup' | 'message
 export type MessageSet = { threadGroup: ThreadGroupEntity, thread: ThreadEntity, messageGroup: MessageGroupEntity, message: MessageEntity, contentPartList: ContentPartEntity[] };
 export type MessageArgsSet = MessageSet & { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, } & { totalTokens?: number, totalBillableCharacters?: number };
 async function buildArgs(
-    tenantKey: string,
+    orgKey: string,
     userId: string,
     type: ArgsBuildType,
     idList: string[],
@@ -160,8 +160,8 @@ async function buildArgs(
         const activeMessage = await ds.getRepository(MessageEntity)
             .createQueryBuilder("t")
             .select("t.*") // ここは性能が悪化してきたら絞った方がいいかもしれない。少なくともlabelは要らないので。
-            .addSelect("ROW_NUMBER() OVER (PARTITION BY COALESCE(t.edited_root_message_id, t.id::text) ORDER BY t.last_update DESC)", "rn")
-            .where("t.tenant_key =:tenantKey AND t.message_group_id IN (:...ids)", { tenantKey, ids: messageGroupIds })
+            .addSelect("ROW_NUMBER() OVER (PARTITION BY COALESCE(t.edited_root_message_id, t.id) ORDER BY t.last_update DESC)", "rn")
+            .where("t.org_key =:orgKey AND t.message_group_id IN (:...ids)", { orgKey, ids: messageGroupIds })
             .getRawMany()
             .then(rawData => rawData.filter(row => row.rn === '1')); // フィルタリングをアプリケーション側で実施;
         return convertKeysToCamelCase(activeMessage);
@@ -171,9 +171,9 @@ async function buildArgs(
             .createQueryBuilder("t")
             .select([
                 "t.*",
-                "ROW_NUMBER() OVER (PARTITION BY COALESCE(t.thread_id, t.id::text) ORDER BY t.last_update DESC) AS rn"
+                "ROW_NUMBER() OVER (PARTITION BY COALESCE(t.thread_id, t.id) ORDER BY t.last_update DESC) AS rn"
             ])
-            .where("t.tenant_key = :tenantKey AND t.thread_id IN (:...ids)", { tenantKey, ids: threadIds });
+            .where("t.org_key = :orgKey AND t.thread_id IN (:...ids)", { orgKey, ids: threadIds });
 
         const activeGroups = await ds.createQueryBuilder()
             .select("*")
@@ -187,17 +187,17 @@ async function buildArgs(
     };
     const getActiveMessageGroupsByMessageGroupIds = async (ids: string[]): Promise<MessageGroupEntity[]> => {
         return ds.getRepository(MessageGroupEntity).find({
-            where: { tenantKey, id: In(ids) }
+            where: { orgKey, id: In(ids) }
         });
     };
     const getActiveThreadsByThreadIds = async (ids: string[]): Promise<ThreadEntity[]> => {
         return ds.getRepository(ThreadEntity).find({
-            where: { tenantKey, id: In(ids), status: Not(ThreadStatus.Deleted) }
+            where: { orgKey, id: In(ids), status: Not(ThreadStatus.Deleted) }
         });
     };
     const getActiveThreadGroupsByThreadGroupIds = async (ids: string[]): Promise<ThreadGroupEntity[]> => {
         return ds.getRepository(ThreadGroupEntity).find({
-            where: { tenantKey, id: In(ids), status: Not(ThreadGroupStatus.Deleted) }
+            where: { orgKey, id: In(ids), status: Not(ThreadGroupStatus.Deleted) }
         });
     };
 
@@ -226,18 +226,18 @@ async function buildArgs(
             // console.log('contentPart');
             // console.log(idList);
             const contentpartList = await ds.getRepository(ContentPartEntity).find({
-                where: { tenantKey, id: In(idList), status: Not(ContentPartStatus.Deleted) },
+                where: { orgKey, id: In(idList), status: Not(ContentPartStatus.Deleted) },
             })
             // console.log(contentpartList);
             tailMessageList = await ds.getRepository(MessageEntity).find({
-                where: { tenantKey, id: In(contentpartList.map(cp => cp.messageId)) },
+                where: { orgKey, id: In(contentpartList.map(cp => cp.messageId)) },
             });
             messageGroupList = await getActiveMessageGroupsByMessageGroupIds(tailMessageList.map(m => m.messageGroupId));
             threadList = await getActiveThreadsByThreadIds(messageGroupList.map(mg => mg.threadId));
             threadGroupList = await getActiveThreadGroupsByThreadGroupIds(threadList.map(t => t.threadGroupId));
         } else if (type === 'message') {
             tailMessageList = await ds.getRepository(MessageEntity).find({
-                where: { tenantKey, id: In(idList) },
+                where: { orgKey, id: In(idList) },
             });
             messageGroupList = await getActiveMessageGroupsByMessageGroupIds(tailMessageList.map(m => m.messageGroupId));
             threadList = await getActiveThreadsByThreadIds(messageGroupList.map(mg => mg.threadId));
@@ -262,7 +262,7 @@ async function buildArgs(
         } else if (type === 'threadGroup') {
             threadGroupList = await getActiveThreadGroupsByThreadGroupIds(idList);
             threadList = await ds.getRepository(ThreadEntity).find({
-                where: { tenantKey, threadGroupId: In(threadGroupList.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
+                where: { orgKey, threadGroupId: In(threadGroupList.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
             });
             messageGroupList = await getLatestMessageGroupsByThreadIds(threadList.map(t => t.id));
             tailMessageList = await getLatestMessagesByMessageGroupIds(messageGroupList.map(mg => mg.id));
@@ -295,12 +295,12 @@ async function buildArgs(
 
     // プロジェクトの取得と権限チェック
     const projectList = await ds.getRepository(ProjectEntity).find({
-        where: { tenantKey, id: In(threadGroupList.map(message => message.projectId)) }
+        where: { orgKey, id: In(threadGroupList.map(message => message.projectId)) }
     });
 
     // メンバーチェック
     const teamMemberList = await ds.getRepository(TeamMemberEntity).find({
-        where: { tenantKey, teamId: In(projectList.map(project => project.teamId)), userId: userId || '' }
+        where: { orgKey, teamId: In(projectList.map(project => project.teamId)), userId: userId || '' }
     });
 
     // 権限チェック
@@ -312,14 +312,14 @@ async function buildArgs(
 
     // メッセージグループ全量取得->マップ化
     const messageGroupListAll = await ds.getRepository(MessageGroupEntity).find({
-        where: { tenantKey, threadId: In(threadList.map(thread => thread.id)) },
+        where: { orgKey, threadId: In(threadList.map(thread => thread.id)) },
         order: { updatedAt: 'ASC' }
     });
     const messageGroupMap = Object.fromEntries(messageGroupListAll.map(messageGroup => [messageGroup.id, messageGroup]));
 
     // メッセージ全量マップ取得->マップ化
     const messageListAll = await ds.getRepository(MessageEntity).find({
-        where: { tenantKey, messageGroupId: In(Object.keys(messageGroupMap)) },
+        where: { orgKey, messageGroupId: In(Object.keys(messageGroupMap)) },
     });
     const messageMap = Object.fromEntries(messageListAll.map(message => [message.id, message]));
     const messageMapByMessageGroupId = messageListAll.reduce((prev, curr) => {
@@ -352,8 +352,9 @@ async function buildArgs(
         }
         messageSetList.reverse();
         // console.log(messageSetList.map(messageSet => messageSet.message.id));
+        // console.log(messageSet.thread.inDto)
 
-        const inDto = JSON.parse(messageSet.thread.inDtoJson) as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
+        const inDto = messageSet.thread.inDto as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
 
         if (mode === 'createCache') {
             // キャッシュ作成の時はゴミが残ってても上から更新する。
@@ -374,7 +375,7 @@ async function buildArgs(
         // console.log('messageSetList=', messageSetList.map(messageSet => messageSet));
         const messageIdList = messageSetList.map(messageSet => messageSet.message.id);
         const contentPartList = await ds.getRepository(ContentPartEntity).find({
-            where: { tenantKey, messageId: In(messageIdList), status: Not(ContentPartStatus.Deleted) },
+            where: { orgKey, messageId: In(messageIdList), status: Not(ContentPartStatus.Deleted) },
             order: { seq: 'ASC' },
         });
 
@@ -404,8 +405,8 @@ async function buildArgs(
             const fileGroupIdList = contentPartList.filter(contentPart => contentPart.type === 'file').map(contentPart => contentPart.linkId).filter(Boolean) as string[];
             const toolGroupIdList = contentPartList.filter(contentPart => contentPart.type === 'tool').map(contentPart => contentPart.linkId).filter(Boolean) as string[];
 
-            const fileTokenCountList = await getCountTokenListByFileGroupIdList(tenantKey, fileGroupIdList);
-            const toolTokenCountList = await getCountTokenListByToolGroupIdList(tenantKey, toolGroupIdList);
+            const fileTokenCountList = await getCountTokenListByFileGroupIdList(orgKey, fileGroupIdList);
+            const toolTokenCountList = await getCountTokenListByToolGroupIdList(orgKey, toolGroupIdList);
             const tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters?: number } } = {};
             for (const tokenCount of textContentList.concat(fileTokenCountList).concat(toolTokenCountList)) {
                 for (const model of Object.keys(tokenCount)) {
@@ -425,7 +426,7 @@ async function buildArgs(
         } else { }
 
         // コンテンツIDリストからDataURLのマップを作成しておく。
-        fileGroupIdChatCompletionContentPartImageMap = await buildFileGroupBodyMap(tenantKey, contentPartList, fileGroupIdChatCompletionContentPartImageMap);
+        fileGroupIdChatCompletionContentPartImageMap = await buildFileGroupBodyMap(orgKey, contentPartList, fileGroupIdChatCompletionContentPartImageMap);
         // console.log(Object.keys(fileGroupIdChatCompletionContentPartImageMap));
 
         // console.log(`\n\ncontentPartList.length = ${contentPartList.length}\n`);
@@ -491,7 +492,7 @@ async function buildArgs(
 
                     // toolCallGroupIdがある場合はtoolCallを取得して組み立てる
                     const toolCallList = await ds.getRepository(ToolCallPartEntity).find({
-                        where: { tenantKey, toolCallGroupId: content.linkId || '' },
+                        where: { orgKey, toolCallGroupId: content.linkId || '' },
                         order: { seq: 'ASC' },
                     });
                     const tollCallObjectKeyListSequencial: string[] = [];
@@ -660,7 +661,7 @@ export const chatCompletionByProjectModel = [
             const generativeModel = vertex_ai.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
             const idList = id.split('|');
-            const { messageArgsSetList } = await buildArgs(req.info.user.tenantKey, req.info.user.id, type, idList);
+            const { messageArgsSetList } = await buildArgs(req.info.user.orgKey, req.info.user.id, type, idList);
             // console.dir(messageArgsSetList[0].args.messages, { depth: null });
 
             // 重複無しのメッセージグループリスト
@@ -722,7 +723,7 @@ export const chatCompletionByProjectModel = [
                         newContentPart.type = ContentPartType.TEXT;
                         newContentPart.text = '';
                         newContentPart.seq = 0;
-                        newContentPart.tenantKey = req.info.user.tenantKey;
+                        newContentPart.orgKey = req.info.user.orgKey;
                         newContentPart.createdBy = req.info.user.id;
                         newContentPart.updatedBy = req.info.user.id;
                         newContentPart.createdIp = req.info.ip;
@@ -744,7 +745,7 @@ export const chatCompletionByProjectModel = [
                         newMessageGroup.type = MessageGroupType.Single;
                         newMessageGroup.role = 'assistant';
                         newMessageGroup.source = messageArgsSetList.find(inDto => inDto.messageGroup.id === messageGroupId)?.args.model;
-                        newMessageGroup.tenantKey = req.info.user.tenantKey;
+                        newMessageGroup.orgKey = req.info.user.orgKey;
                         newMessageGroup.createdBy = req.info.user.id;
                         newMessageGroup.createdIp = req.info.ip;
                         newMessageGroup.updatedBy = req.info.user.id;
@@ -770,10 +771,10 @@ export const chatCompletionByProjectModel = [
                         const cachedContent = (inDto.args as any).cachedContent as VertexCachedContentEntity;
 
                         // 課金用にプロジェクト振り分ける。当たらなかったら当たらなかったでよい。
-                        const departmentMember = await transactionalEntityManager.getRepository(DepartmentMemberEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, name: req.info.user.name || '', departmentRole: DepartmentRoleType.Member } });
+                        const departmentMember = await transactionalEntityManager.getRepository(DepartmentMemberEntity).findOne({ where: { orgKey: req.info.user.orgKey, name: req.info.user.name || '', departmentRole: DepartmentRoleType.Member } });
                         // console.log(departmentMember);
                         if (departmentMember) {
-                            const department = await transactionalEntityManager.getRepository(DepartmentEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: departmentMember.departmentId } });
+                            const department = await transactionalEntityManager.getRepository(DepartmentEntity).findOne({ where: { orgKey: req.info.user.orgKey, id: departmentMember.departmentId } });
                             (inDto.args as any).gcpProjectId = department?.gcpProjectId || GCP_PROJECT_ID;
                             // console.log(department?.gcpProjectId);
                         } else {
@@ -807,7 +808,7 @@ export const chatCompletionByProjectModel = [
                                 newMessage.cacheId = undefined;
                                 newMessage.label = '';
                                 newMessage.subSeq = message.subSeq; // 先行メッセージのサブシーケンスと同じにする
-                                newMessage.tenantKey = req.info.user.tenantKey;
+                                newMessage.orgKey = req.info.user.orgKey;
                                 newMessage.createdBy = req.info.user.id;
                                 newMessage.updatedBy = req.info.user.id;
                                 newMessage.createdIp = req.info.ip;
@@ -840,7 +841,7 @@ export const chatCompletionByProjectModel = [
                                 newContentPart.type = ContentPartType.TEXT;
                                 newContentPart.text = '';
                                 newContentPart.seq = 0;
-                                newContentPart.tenantKey = req.info.user.tenantKey;
+                                newContentPart.orgKey = req.info.user.orgKey;
                                 newContentPart.createdBy = req.info.user.id;
                                 newContentPart.updatedBy = req.info.user.id;
                                 newContentPart.createdIp = req.info.ip;
@@ -853,7 +854,7 @@ export const chatCompletionByProjectModel = [
                                 if (cachedContent) {
                                     // console.log(`cachedContent=${cachedContent.id}`, JSON.stringify(cachedContent));
                                     const chacedEntity = await transactionalEntityManager.getRepository(VertexCachedContentEntity).findOne({
-                                        where: { tenantKey: req.info.user.tenantKey, id: cachedContent.id }
+                                        where: { orgKey: req.info.user.orgKey, id: cachedContent.id }
                                     })
                                     if (chacedEntity) {
                                         // カウント回数は登り電文を信用しない。
@@ -901,7 +902,7 @@ export const chatCompletionByProjectModel = [
                     history.label = label;
                     history.model = inDto.args.model;
                     history.provider = provider;
-                    history.tenantKey = req.info.user.tenantKey;
+                    history.orgKey = req.info.user.orgKey;
                     history.createdBy = req.info.user.id;
                     history.updatedBy = req.info.user.id;
                     history.createdIp = req.info.ip;
@@ -956,7 +957,7 @@ export const chatCompletionByProjectModel = [
                                 toolCallCommandEntity.toolCallId = toolCall.toolCallId;
                                 toolCallCommandEntity.type = ToolCallPartType.COMMAND;
                                 toolCallCommandEntity.body = toolCallPartCommandList[index].body || {};
-                                toolCallCommandEntity.tenantKey = req.info.user.tenantKey;
+                                toolCallCommandEntity.orgKey = req.info.user.orgKey;
                                 toolCallCommandEntity.createdBy = req.info.user.id;
                                 toolCallCommandEntity.updatedBy = req.info.user.id;
                                 toolCallCommandEntity.createdIp = req.info.ip;
@@ -1005,7 +1006,7 @@ export const chatCompletionByProjectModel = [
                     inDto.args.tools.map(tool => tool.function.name).forEach(functionName => providerSet.add(functions[functionName].info.group));
                     const savedToolCallGroup = await ds.getRepository(OAuthAccountEntity).find({
                         where: {
-                            tenantKey: req.info.user.tenantKey,
+                            orgKey: req.info.user.orgKey,
                             userId: req.info.user.id,
                             provider: In(Array.from(providerSet)),
                             status: OAuthAccountStatus.ACTIVE,
@@ -1063,7 +1064,7 @@ export const chatCompletionByProjectModel = [
                             // console.log(`SAVE_BLOCK:INFO:toolCallGroupId=${info.toolCallId}`);
                             const toolCallGroup = new ToolCallGroupEntity();
                             toolCallGroup.projectId = messageArgsSetList[index].threadGroup.projectId;
-                            toolCallGroup.tenantKey = req.info.user.tenantKey;
+                            toolCallGroup.orgKey = req.info.user.orgKey;
                             toolCallGroup.createdBy = req.info.user.id;
                             toolCallGroup.updatedBy = req.info.user.id;
                             toolCallGroup.createdIp = req.info.ip;
@@ -1082,7 +1083,7 @@ export const chatCompletionByProjectModel = [
                             toolCallEntity.toolCallId = toolTransaction.toolCallId;
                             toolCallEntity.type = toolTransaction.type;
                             toolCallEntity.body = toolTransaction.body;
-                            toolCallEntity.tenantKey = req.info.user.tenantKey;
+                            toolCallEntity.orgKey = req.info.user.orgKey;
                             toolCallEntity.createdBy = req.info.user.id;
                             toolCallEntity.updatedBy = req.info.user.id;
                             toolCallEntity.createdIp = req.info.ip;
@@ -1134,7 +1135,7 @@ export const chatCompletionByProjectModel = [
                             newContentPart.type = ContentPartType.TEXT;
                             newContentPart.text = '';
                             newContentPart.seq = 0;
-                            newContentPart.tenantKey = req.info.user.tenantKey;
+                            newContentPart.orgKey = req.info.user.orgKey;
                             newContentPart.createdBy = req.info.user.id;
                             newContentPart.updatedBy = req.info.user.id;
                             newContentPart.createdIp = req.info.ip;
@@ -1360,7 +1361,7 @@ export const chatCompletionByProjectModel = [
                                         newContentPart.type = ContentPartType.ERROR;
                                         newContentPart.text = Utils.errorFormat(error, false);
                                         newContentPart.seq = 1;
-                                        newContentPart.tenantKey = req.info.user.tenantKey;
+                                        newContentPart.orgKey = req.info.user.orgKey;
                                         newContentPart.createdBy = req.info.user.id;
                                         newContentPart.updatedBy = req.info.user.id;
                                         newContentPart.createdIp = req.info.ip;
@@ -1443,7 +1444,7 @@ export const chatCompletionByProjectModel = [
                                         newContentPart.type = ContentPartType.ERROR;
                                         newContentPart.text = Utils.errorFormat(error, false);
                                         newContentPart.seq = 1;
-                                        newContentPart.tenantKey = req.info.user.tenantKey;
+                                        newContentPart.orgKey = req.info.user.orgKey;
                                         newContentPart.createdBy = req.info.user.id;
                                         newContentPart.updatedBy = req.info.user.id;
                                         newContentPart.createdIp = req.info.ip;
@@ -1467,7 +1468,7 @@ export const chatCompletionByProjectModel = [
     }
 ];
 
-async function getCountTokenListByFileGroupIdList(tenantKey: string, fileGroupIdList: string[]): Promise<{ [modelId: string]: CountTokensResponse }[]> {
+async function getCountTokenListByFileGroupIdList(orgKey: string, fileGroupIdList: string[]): Promise<{ [modelId: string]: CountTokensResponse }[]> {
     // 0件の場合は0件で返す
     if (fileGroupIdList.length === 0) { return Promise.resolve([]) }
     // TODO subqueryじゃなくてJOINにすべきと思う。
@@ -1480,10 +1481,10 @@ async function getCountTokenListByFileGroupIdList(tenantKey: string, fileGroupId
                 .from(FileEntity, 'file')
                 .where('file.fileGroupId IN (:...fileGroupIds) AND file.isActive = true')
                 .getQuery();
-            return 'cast(fileBody.id AS text) IN ' + subQuery +
-                ' AND fileBody.fileType NOT IN (:...invalidMimeList) AND fileBody.tenantKey = :tenantKey';
+            return 'fileBody.id IN ' + subQuery +
+                ' AND fileBody.fileType NOT IN (:...invalidMimeList) AND fileBody.orgKey = :orgKey';
         })
-        .setParameter('tenantKey', tenantKey)
+        .setParameter('orgKey', orgKey)
         .setParameter('fileGroupIds', fileGroupIdList)
         .setParameter('invalidMimeList', invalidMimeList);
 
@@ -1494,14 +1495,14 @@ async function getCountTokenListByFileGroupIdList(tenantKey: string, fileGroupId
     }).filter(tokenCount => tokenCount && tokenCount[COUNT_TOKEN_MODEL]) as { [modelId: string]: CountTokensResponse }[];
 }
 
-async function getCountTokenListByToolGroupIdList(tenantKey: string, toolGroupIdList: string[]): Promise<{ [modelId: string]: CountTokensResponse }[]> {
+async function getCountTokenListByToolGroupIdList(orgKey: string, toolGroupIdList: string[]): Promise<{ [modelId: string]: CountTokensResponse }[]> {
     // 0件の場合は0件で返す
     if (toolGroupIdList.length === 0) { return Promise.resolve([]) }
     // console.log(qb.getSql());
     const toolTokenCountList = await ds.getRepository(ToolCallPartEntity).find({
         select: ['tokenCount'],
         where: {
-            tenantKey: tenantKey,
+            orgKey: orgKey,
             toolCallGroupId: In(toolGroupIdList),
         },
     });
@@ -1541,7 +1542,7 @@ export const geminiCountTokensByProjectModel = [
             const tokenCountSummaryList: { [model: string]: { totalTokens: number, totalBillableCharacters?: number } }[] = [];
             if (id) {
                 // メッセージIDが指定されていたらまずそれらを読み込む
-                const { messageArgsSetList } = await buildArgs(req.info.user.tenantKey, req.info.user.id, type, [id], 'countOnly');
+                const { messageArgsSetList } = await buildArgs(req.info.user.orgKey, req.info.user.id, type, [id], 'countOnly');
 
                 // const tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters: number } } = {};
                 // 実体はトークン数だけが返ってくる
@@ -1586,9 +1587,9 @@ export const geminiCountTokensByProjectModel = [
             }).filter(bit => bit && bit.content && bit.content.length > 0) as ChatCompletionMessageParam[];
 
             // ファイルのトークン数を取得
-            const fileTokenCountList = await getCountTokenListByFileGroupIdList(req.info.user.tenantKey, fileGroupIdList);
+            const fileTokenCountList = await getCountTokenListByFileGroupIdList(req.info.user.orgKey, fileGroupIdList);
             // ツールのトークン数を取得
-            const toolTokenCountList = await getCountTokenListByToolGroupIdList(req.info.user.tenantKey, toolGroupIdList);
+            const toolTokenCountList = await getCountTokenListByToolGroupIdList(req.info.user.orgKey, toolGroupIdList);
 
             // 取得したトークン数をまとめる
             tokenCountSummaryList.forEach(tokenCountSummary => {
@@ -1701,7 +1702,7 @@ export const geminiCountTokensByThread = [
             const result: { id: string, totalTokens: number, totalBillableCharacters: number }[] = [];
             if (ids.length > 0) {
                 // メッセージIDが指定されていたらまずそれらを読み込む
-                const { messageArgsSetList } = await buildArgs(req.info.user.tenantKey, req.info.user.id, 'thread', ids, 'countOnly');
+                const { messageArgsSetList } = await buildArgs(req.info.user.orgKey, req.info.user.id, 'thread', ids, 'countOnly');
                 // 指定されたIDの順番に並び替え
                 const messageArgsSetListSorted = ids.map(id => messageArgsSetList.find(m => m.thread.id === id) as MessageArgsSet);
                 // 実体はトークン数だけが返ってくる
@@ -1963,14 +1964,14 @@ export const geminiCreateContextCacheByProjectModel = [
         const { type, id, model } = req.query as { type: ArgsBuildType, id: string, model: string };
         const { ttl, expire_time } = req.body as GenerateContentRequestForCache;
         try {
-            const { messageArgsSetList } = await buildArgs(req.info.user.tenantKey, req.info.user.id, type, [id], 'createCache');
+            const { messageArgsSetList } = await buildArgs(req.info.user.orgKey, req.info.user.id, type, [id], 'createCache');
             // const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
 
             // 課金用にプロジェクト振り分ける。当たらなかったら当たらなかったでよい。
-            const departmentMember = await ds.getRepository(DepartmentMemberEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, name: req.info.user.name || '', departmentRole: DepartmentRoleType.Member } });
+            const departmentMember = await ds.getRepository(DepartmentMemberEntity).findOne({ where: { orgKey: req.info.user.orgKey, name: req.info.user.name || '', departmentRole: DepartmentRoleType.Member } });
             // console.log(departmentMember);
             if (departmentMember) {
-                const department = await ds.getRepository(DepartmentEntity).findOne({ where: { tenantKey: req.info.user.tenantKey, id: departmentMember.departmentId } });
+                const department = await ds.getRepository(DepartmentEntity).findOne({ where: { orgKey: req.info.user.orgKey, id: departmentMember.departmentId } });
                 messageArgsSetList.forEach(messageSet => {
                     (messageSet.args as any).gcpProjectId = department?.gcpProjectId || GCP_PROJECT_ID;
                 });
@@ -2050,7 +2051,7 @@ export const geminiCreateContextCacheByProjectModel = [
                                 // 使用回数
                                 entity.usage = 0;
 
-                                entity.tenantKey = req.info.user.tenantKey;
+                                entity.orgKey = req.info.user.orgKey;
                                 entity.createdBy = userId;
                                 entity.updatedBy = userId;
                                 entity.createdIp = req.info.ip;
@@ -2100,20 +2101,20 @@ export const geminiUpdateContextCacheByProjectModel = [
 
             // メッセージの存在確認
             const threadGroup = await ds.getRepository(ThreadGroupEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: threadGroupId }
+                where: { orgKey: req.info.user.orgKey, id: threadGroupId }
             });
             const threads = await ds.getRepository(ThreadEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, threadGroupId: threadGroup.id }
+                where: { orgKey: req.info.user.orgKey, threadGroupId: threadGroup.id }
             });
 
             // TODO 本来は複数のコンテキストキャッシュに対応すべき。
-            const inDto = JSON.parse(threads[0].inDtoJson);
-            const cachedContent: VertexCachedContentEntity = inDto.args.cachedContent;
+            const inDto = threads[0].inDto;
+            const cachedContent: VertexCachedContentEntity = (inDto.args as any).cachedContent;
             const cacheName = cachedContent.name;
 
             // キャッシュの存在確認
             let cacheEntity = await ds.getRepository(VertexCachedContentEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, name: cacheName }
+                where: { orgKey: req.info.user.orgKey, name: cacheName }
             });
 
             let savedCachedContent: VertexCachedContentEntity | undefined;
@@ -2128,7 +2129,7 @@ export const geminiUpdateContextCacheByProjectModel = [
 
                     // トランザクションの中で再度取得してこないと変になる。
                     cacheEntity = await transactionalEntityManager.getRepository(VertexCachedContentEntity).findOneOrFail({
-                        where: { tenantKey: req.info.user.tenantKey, id: cacheEntity.id }
+                        where: { orgKey: req.info.user.orgKey, id: cacheEntity.id }
                     });
 
                     // 独自定義
@@ -2167,22 +2168,22 @@ export const geminiDeleteContextCacheByProjectModel = [
         try {
             // スレッドグループの存在確認
             const threadGroup = await ds.getRepository(ThreadGroupEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: threadGroupId, status: Not(ThreadGroupStatus.Deleted) }
+                where: { orgKey: req.info.user.orgKey, id: threadGroupId, status: Not(ThreadGroupStatus.Deleted) }
             });
 
             // メッセージの存在確認
             const threadList = await ds.getRepository(ThreadEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, threadGroupId: threadGroup.id, status: Not(ThreadStatus.Deleted) }
+                where: { orgKey: req.info.user.orgKey, threadGroupId: threadGroup.id, status: Not(ThreadStatus.Deleted) }
             });
             const result = await ds.transaction(async transactionalEntityManager => {
                 for (const thread of threadList) {
                     // TODO for文で書いては見たものの最後axios投げるところが複数スレッド対応していないので注意。
-                    const inDto = JSON.parse(thread.inDtoJson);
-                    const cachedContent: VertexCachedContentEntity = inDto.args.cachedContent;
+                    const inDto = thread.inDto;
+                    const cachedContent: VertexCachedContentEntity = (inDto.args as any).cachedContent;
 
                     // cachedContentを消して更新
-                    delete inDto.args.cachedContent;
-                    thread.inDtoJson = JSON.stringify(inDto);
+                    delete (inDto.args as any).cachedContent;
+                    thread.inDto = inDto;
                     thread.updatedBy = req.info.user.id;
                     thread.updatedIp = req.info.ip;
                     const savedThread = await transactionalEntityManager.save(ThreadEntity, thread);
@@ -2197,7 +2198,7 @@ export const geminiDeleteContextCacheByProjectModel = [
                             updatedBy: () => `:updatedBy`,
                             updatedIp: () => `:updatedIp`,
                         })
-                        .where('tenant_key = :tenantKey AND cache_id = :cacheId', { tenantKey: req.info.user.tenantKey, cacheId: cachedContent.id })
+                        .where('org_key = :orgKey AND cache_id = :cacheId', { orgKey: req.info.user.orgKey, cacheId: cachedContent.id })
                         .setParameters({
                             updatedBy: req.info.user.id,
                             updatedIp: req.info.ip

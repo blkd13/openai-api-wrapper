@@ -2,7 +2,7 @@ import { Column, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
 import { MyBaseEntity } from "./base.js";
 
 @Entity()
-@Index(['tenantKey', 'name'])
+@Index(['orgKey', 'name'])
 export class VertexCachedContentEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
@@ -12,7 +12,7 @@ export class VertexCachedContentEntity extends MyBaseEntity {
     @Column()
     location!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     projectId!: string;
     @Column({ nullable: true })
     title?: string;
@@ -20,7 +20,6 @@ export class VertexCachedContentEntity extends MyBaseEntity {
     description?: string;
 
     @Column()
-    @Index()
     name!: string;
     @Column()
     model!: string;

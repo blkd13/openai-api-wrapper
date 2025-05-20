@@ -1029,7 +1029,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                         const newLabel = `${label}-call_ai-${inDto.args.model}`;
                         // レスポンス返した後にゆるりとヒストリーを更新しておく。
                         const history = new PredictHistoryWrapperEntity();
-                        history.tenantKey = req.info.user.tenantKey;
+                        history.orgKey = req.info.user.orgKey;
                         history.connectionId = connectionId;
                         history.streamId = streamId;
                         history.messageId = message.id;

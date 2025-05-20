@@ -37,11 +37,11 @@ export const createTeam = [
                 if (teamType === TeamType.Alone) {
                     // ユーザーが所属しているチームのIDを取得
                     const teamMembers = await transactionalEntityManager.getRepository(TeamMemberEntity).find({
-                        where: { tenantKey: userReq.info.user.tenantKey, userId: userReq.info.user.id }
+                        where: { orgKey: userReq.info.user.orgKey, userId: userReq.info.user.id }
                     });
                     const teamIds = teamMembers.map(member => member.teamId);
                     const existingAloneTeam = await transactionalEntityManager.findOne(TeamEntity, {
-                        where: { tenantKey: userReq.info.user.tenantKey, id: In(teamIds), teamType: TeamType.Alone },
+                        where: { orgKey: userReq.info.user.orgKey, id: In(teamIds), teamType: TeamType.Alone },
                     });
                     if (existingAloneTeam) {
                         return res.status(400).json({ message: '個人用チーム定義は既に存在します' });
@@ -53,7 +53,7 @@ export const createTeam = [
                 team.description = userReq.body.description;
 
                 // チーム作成
-                team.tenantKey = userReq.info.user.tenantKey;
+                team.orgKey = userReq.info.user.orgKey;
                 team.createdBy = userReq.info.user.id;
                 team.updatedBy = userReq.info.user.id;
                 team.createdIp = userReq.info.ip;
@@ -65,7 +65,7 @@ export const createTeam = [
                 teamMember.teamId = savedTeam.id;
                 teamMember.userId = userReq.info.user.id;
                 teamMember.role = TeamMemberRoleType.Owner;
-                teamMember.tenantKey = userReq.info.user.tenantKey;
+                teamMember.orgKey = userReq.info.user.orgKey;
                 teamMember.createdBy = userReq.info.user.id;
                 teamMember.updatedBy = userReq.info.user.id;
                 teamMember.createdIp = userReq.info.ip;
@@ -98,13 +98,13 @@ export const getTeamList = [
         try {
             // ユーザーが所属しているチームのIDを取得
             const teamMembers = await ds.getRepository(TeamMemberEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id }
+                where: { orgKey: req.info.user.orgKey, userId: req.info.user.id }
             });
             const teamIds = teamMembers.map(member => member.teamId);
 
             // チーム情報を取得
             const teams = await ds.getRepository(TeamEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, id: In(teamIds), status: TeamStatus.Normal }
+                where: { orgKey: req.info.user.orgKey, id: In(teamIds), status: TeamStatus.Normal }
             });
 
             res.status(200).json(teams);
@@ -130,7 +130,7 @@ export const getTeam = [
             // ユーザーがチームのメンバーであるか確認
             const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
                 where: {
-                    tenantKey: req.info.user.tenantKey,
+                    orgKey: req.info.user.orgKey,
                     teamId: teamId,
                     userId: req.info.user.id
                 }
@@ -142,19 +142,19 @@ export const getTeam = [
 
             // チーム情報を取得
             const team = await ds.getRepository(TeamEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: teamId, status: TeamStatus.Normal }
+                where: { orgKey: req.info.user.orgKey, id: teamId, status: TeamStatus.Normal }
             });
 
             // チームメンバー情報を取得
             let teamMembers = await ds.getRepository(TeamMemberEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, teamId: teamId }
+                where: { orgKey: req.info.user.orgKey, teamId: teamId }
             });
             // ゴミが混ざると巻き込まれ死するので綺麗にしておく。
             teamMembers = teamMembers.filter(member => Utils.isUUID(member.userId));
 
             // チームメンバーのユーザー情報を取得
             const teamMemberNames = await ds.getRepository(UserEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, id: In(teamMembers.map(member => member.userId)) },
+                where: { orgKey: req.info.user.orgKey, id: In(teamMembers.map(member => member.userId)) },
             });
             const teamMemberNamesMap = teamMemberNames.reduce((map, user) => {
                 map[user.id] = user;
@@ -206,7 +206,7 @@ export const updateTeam = [
             // ユーザーがチームのオーナーまたは管理者であるか確認
             const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
                 where: {
-                    tenantKey: req.info.user.tenantKey,
+                    orgKey: req.info.user.orgKey,
                     teamId: teamId,
                     userId: req.info.user.id,
                     role: TeamMemberRoleType.Owner // オーナーのみ許可
@@ -219,7 +219,7 @@ export const updateTeam = [
 
             // チーム情報を取得
             const team = await ds.getRepository(TeamEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: teamId }
+                where: { orgKey: req.info.user.orgKey, id: teamId }
             });
 
             // 更新可能なフィールドを更新
@@ -271,7 +271,7 @@ export const deleteTeam = [
                 // ユーザーがチームのオーナーであるか確認
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: req.info.user.id,
                         role: TeamMemberRoleType.Owner
@@ -284,7 +284,7 @@ export const deleteTeam = [
 
                 // チーム情報を取得
                 const team = await transactionalEntityManager.findOneOrFail(TeamEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: teamId }
+                    where: { orgKey: req.info.user.orgKey, id: teamId }
                 });
 
                 // チームを論理削除
@@ -331,7 +331,7 @@ export const addTeamMember = [
                 // ユーザーがチームのオーナーであるか確認
                 const requesterMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: req.info.user.id,
                         role: TeamMemberRoleType.Owner
@@ -344,13 +344,13 @@ export const addTeamMember = [
 
                 // チームが存在するか確認
                 await transactionalEntityManager.findOneOrFail(TeamEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: teamId }
+                    where: { orgKey: req.info.user.orgKey, id: teamId }
                 });
 
                 // 既にメンバーでないか確認
                 const existingMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: userId
                     }
@@ -366,7 +366,7 @@ export const addTeamMember = [
                 newMember.userId = userId;
                 newMember.role = role;
 
-                newMember.tenantKey = req.info.user.tenantKey;
+                newMember.orgKey = req.info.user.orgKey;
                 newMember.createdBy = req.info.user.id;
                 newMember.updatedBy = req.info.user.id;
                 newMember.createdIp = req.info.ip;
@@ -402,7 +402,7 @@ export const getTeamMembers = [
             // リクエスト元のユーザーがチームメンバーであるか確認
             const requesterMember = await ds.getRepository(TeamMemberEntity).findOne({
                 where: {
-                    tenantKey: req.info.user.tenantKey,
+                    orgKey: req.info.user.orgKey,
                     teamId: teamId,
                     userId: req.info.user.id
                 }
@@ -414,7 +414,7 @@ export const getTeamMembers = [
 
             // チームメンバー一覧を取得
             const teamMembers = await ds.getRepository(TeamMemberEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, teamId: teamId },
+                where: { orgKey: req.info.user.orgKey, teamId: teamId },
                 order: { role: 'ASC', createdAt: 'ASC' }
             });
 
@@ -449,7 +449,7 @@ export const updateTeamMember = [
                 // リクエスト元のユーザーがチームのオーナーであるか確認
                 const requesterMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: req.info.user.id,
                         role: TeamMemberRoleType.Owner
@@ -463,7 +463,7 @@ export const updateTeamMember = [
                 // 更新対象のメンバーが存在するか確認
                 const targetMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: userId
                     }
@@ -477,7 +477,7 @@ export const updateTeamMember = [
                 if (targetMember.role === TeamMemberRoleType.Owner && role !== TeamMemberRoleType.Owner) {
                     const ownerCount = await transactionalEntityManager.count(TeamMemberEntity, {
                         where: {
-                            tenantKey: req.info.user.tenantKey,
+                            orgKey: req.info.user.orgKey,
                             teamId: teamId,
                             role: TeamMemberRoleType.Owner
                         }
@@ -527,7 +527,7 @@ export const removeTeamMember = [
                 // リクエスト元のユーザーがチームのオーナーであるか確認
                 const requesterMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: req.info.user.id,
                         role: TeamMemberRoleType.Owner
@@ -541,7 +541,7 @@ export const removeTeamMember = [
                 // 削除対象のメンバーが存在するか確認
                 const targetMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: userId
                     }
@@ -560,7 +560,7 @@ export const removeTeamMember = [
                 if (targetMember.role === TeamMemberRoleType.Owner) {
                     const ownerCount = await transactionalEntityManager.count(TeamMemberEntity, {
                         where: {
-                            tenantKey: req.info.user.tenantKey,
+                            orgKey: req.info.user.orgKey,
                             teamId: teamId,
                             role: TeamMemberRoleType.Owner
                         }
@@ -614,7 +614,7 @@ export const createProject = [
         project.visibility = req.body.visibility;
         project.description = req.body.description || '';
         project.label = req.body.label;
-        project.tenantKey = req.info.user.tenantKey;
+        project.orgKey = req.info.user.orgKey;
         project.createdBy = req.info.user.id;
         project.updatedBy = req.info.user.id;
         project.createdIp = req.info.ip;
@@ -629,12 +629,12 @@ export const createProject = [
             });
         }
         // 権限チェック（チームメンバーかつオーナーであること）
-        ds.getRepository(TeamMemberEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, teamId: req.body.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then((teamMember) => {
+        ds.getRepository(TeamMemberEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, teamId: req.body.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then((teamMember) => {
             // プロジェクトにチームIDをセット            
             project.teamId = req.body.teamId;
             if (project.visibility === ProjectVisibility.Default) {
                 // Defaultプロジェクトは一人一個限定なので、既存のDefaultプロジェクトがあるか確認する
-                ds.getRepository(ProjectEntity).find({ where: { tenantKey: req.info.user.tenantKey, teamId: project.teamId, visibility: ProjectVisibility.Default } }).then(projects => {
+                ds.getRepository(ProjectEntity).find({ where: { orgKey: req.info.user.orgKey, teamId: project.teamId, visibility: ProjectVisibility.Default } }).then(projects => {
                     if (projects.length > 0) {
                         res.status(400).json({ message: `Default project already exists` });
                         return;
@@ -663,12 +663,12 @@ export const getProjectList = [
         const req = _req as UserRequest;
         if (req.info && req.info.user) {
             // ログインしている場合
-            ds.getRepository(TeamMemberEntity).find({ where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id } }).then((teamMembers) => {
+            ds.getRepository(TeamMemberEntity).find({ where: { orgKey: req.info.user.orgKey, userId: req.info.user.id } }).then((teamMembers) => {
                 return teamMembers.map((teamMember) => teamMember.teamId);
             }).then((teamIds) => {
                 return ds.getRepository(ProjectEntity).find({
                     where: [
-                        { tenantKey: req.info.user.tenantKey, teamId: In(teamIds), status: Not(ProjectStatus.Deleted) },
+                        { orgKey: req.info.user.orgKey, teamId: In(teamIds), status: Not(ProjectStatus.Deleted) },
                         { visibility: ProjectVisibility.Public, status: Not(ProjectStatus.Deleted) },
                         { visibility: ProjectVisibility.Login, status: Not(ProjectStatus.Deleted) },
                     ],
@@ -683,7 +683,7 @@ export const getProjectList = [
         } else {
             // ログインしていない場合
             ds.getRepository(ProjectEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, visibility: ProjectVisibility.Public, status: Not(ProjectStatus.Deleted) }
+                where: { orgKey: req.info.user.orgKey, visibility: ProjectVisibility.Public, status: Not(ProjectStatus.Deleted) }
             }).then((projects) => {
                 res.status(200).json(projects);
             }).catch((error) => {
@@ -702,14 +702,14 @@ export const getProject = [
     validationErrorHandler,
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.getRepository(ProjectEntity).findOneOrFail({ where: { tenantKey: req.info.user.tenantKey, id: req.params.id } }).then((project) => {
+        ds.getRepository(ProjectEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, id: req.params.id } }).then((project) => {
             if (req.info && req.info.user) {
                 if (project.visibility === ProjectVisibility.Public || project.visibility === ProjectVisibility.Login) {
                     // OK
                     res.status(200).json(project);
                 } else {
                     // チームメンバーであること（ロールは問わない）
-                    ds.getRepository(TeamMemberEntity).find({ where: { tenantKey: req.info.user.tenantKey, userId: req.info.user.id, teamId: project.teamId } }).then((teamMembers) => {
+                    ds.getRepository(TeamMemberEntity).find({ where: { orgKey: req.info.user.orgKey, userId: req.info.user.id, teamId: project.teamId } }).then((teamMembers) => {
                         if (teamMembers.length === 0) {
                             res.status(403).json({ message: `Forbidden` });
                         } else {
@@ -743,9 +743,9 @@ export const updateProject = [
     (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         ds.transaction(tx => {
-            return tx.findOneOrFail(ProjectEntity, { where: { tenantKey: req.info.user.tenantKey, id: req.params.id } }).then(project => {
+            return tx.findOneOrFail(ProjectEntity, { where: { orgKey: req.info.user.orgKey, id: req.params.id } }).then(project => {
                 // 権限チェック（チームメンバーかつオーナーであること）
-                return tx.findOneOrFail(TeamMemberEntity, { where: { tenantKey: req.info.user.tenantKey, teamId: project.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then(() => {
+                return tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then(() => {
                     if (req.body.name) {
                         project.name = req.body.name;
                     }
@@ -765,7 +765,7 @@ export const updateProject = [
                     project.updatedIp = req.info.ip;
                     if (req.body.teamId) {
                         // TODO 権限持ってないチームに渡してしまうのを防ぐチェック
-                        return tx.findOneOrFail(TeamMemberEntity, { where: { tenantKey: req.info.user.tenantKey, teamId: req.body.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then(() => {
+                        return tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: req.body.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then(() => {
                             project.teamId = req.body.teamId;
                             return tx.save(ProjectEntity, project);
                         });
@@ -797,9 +797,9 @@ export const deleteProject = [
         const req = _req as UserRequest;
 
         ds.transaction(tx => {
-            return tx.findOneOrFail(ProjectEntity, { where: { tenantKey: req.info.user.tenantKey, id: req.params.id } }).then(project => {
+            return tx.findOneOrFail(ProjectEntity, { where: { orgKey: req.info.user.orgKey, id: req.params.id } }).then(project => {
                 // 権限チェック（チームメンバーかつオーナーであること）
-                tx.findOneOrFail(TeamMemberEntity, { where: { tenantKey: req.info.user.tenantKey, teamId: project.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then((teamMember) => {
+                tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then((teamMember) => {
                     project.status = ProjectStatus.Deleted;
                     project.updatedBy = req.info.user.id;
                     project.updatedIp = req.info.ip;
@@ -838,11 +838,11 @@ export const updateThreadGroupTitleAndDescription = [
             await ds.transaction(async transactionalEntityManager => {
                 // プロジェクトの存在確認
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: projectId }
+                    where: { orgKey: req.info.user.orgKey, id: projectId }
                 });
 
                 const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id }
+                    where: { orgKey: req.info.user.orgKey, id }
                 });
 
                 // TODO なんか権限チェックは適当だから考え直した方がよい。本来はthreadGroupの権限も組み合わせて見るべき
@@ -856,7 +856,7 @@ export const updateThreadGroupTitleAndDescription = [
                         // ユーザーがプロジェクトのチームメンバーであるか確認し、ロールを取得
                         const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                             where: {
-                                tenantKey: req.info.user.tenantKey,
+                                orgKey: req.info.user.orgKey,
                                 teamId: project.teamId,
                                 userId: req.info.user.id
                             }
@@ -903,7 +903,7 @@ export const upsertThreadGroup = [
     body('description').trim().isString(),
     body('visibility').isIn(Object.values(ThreadGroupVisibility)),
     body('threadList').isArray().notEmpty(),
-    body('threadList.*.inDto').trim().notEmpty(),
+    body('threadList.*.inDto').notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -915,7 +915,7 @@ export const upsertThreadGroup = [
             await ds.transaction(async transactionalEntityManager => {
                 // プロジェクトの存在確認
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: projectId }
+                    where: { orgKey: req.info.user.orgKey, id: projectId }
                 });
 
                 let hasPermission = false;
@@ -929,7 +929,7 @@ export const upsertThreadGroup = [
                         // ユーザーがプロジェクトのチームメンバーであるか確認し、ロールを取得
                         const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                             where: {
-                                tenantKey: req.info.user.tenantKey,
+                                orgKey: req.info.user.orgKey,
                                 teamId: project.teamId,
                                 userId: req.info.user.id
                             }
@@ -956,18 +956,18 @@ export const upsertThreadGroup = [
                     // デフォルトスレッド（ユーザーごとの初期設定）の場合、デフォルトプロジェクトに保存する。
                     // TODO createdByを見るのは良くない。項目としてuserIdを追加すべき
                     const defaultProject = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, createdBy: req.info.user.id, status: ProjectStatus.InProgress, visibility: ProjectVisibility.Default }
+                        where: { orgKey: req.info.user.orgKey, createdBy: req.info.user.id, status: ProjectStatus.InProgress, visibility: ProjectVisibility.Default }
                     });
 
                     // スレッドグループの更新
                     threadGroup = await transactionalEntityManager.findOne(ThreadGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, projectId: defaultProject.id, type: ThreadGroupType.Default, status: ThreadGroupStatus.Normal }
+                        where: { orgKey: req.info.user.orgKey, projectId: defaultProject.id, type: ThreadGroupType.Default, status: ThreadGroupStatus.Normal }
                     });
                     if (threadGroup) {
                         // デフォルトプロジェクトのスレッドグループが存在する場合は更新
                         // スレッドグループに紐づくスレッドは削除(論理削除)
                         await transactionalEntityManager.update(ThreadEntity,
-                            { tenantKey: req.info.user.tenantKey, threadGroupId: threadGroup.id, status: Not(ThreadStatus.Deleted) },
+                            { orgKey: req.info.user.orgKey, threadGroupId: threadGroup.id, status: Not(ThreadStatus.Deleted) },
                             { status: ThreadStatus.Deleted },
                         );
                         // await transactionalEntityManager.delete(ThreadEntity, { threadGroupId: threadGroup.id });
@@ -976,7 +976,7 @@ export const upsertThreadGroup = [
                         threadGroup = new ThreadGroupEntity();
                         threadGroup.projectId = defaultProject.id;
                         threadGroup.status = ThreadGroupStatus.Normal;
-                        threadGroup.tenantKey = req.info.user.tenantKey;
+                        threadGroup.orgKey = req.info.user.orgKey;
                         threadGroup.createdBy = req.info.user.id;
                         threadGroup.createdIp = req.info.ip;
                     }
@@ -984,19 +984,19 @@ export const upsertThreadGroup = [
                 } else if (id) {
                     // スレッドグループの更新
                     threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id }
+                        where: { orgKey: req.info.user.orgKey, id }
                     });
                     // デフォルトプロジェクトのスレッドグループが存在する場合は更新
                     // スレッドグループに紐づくスレッドは削除(論理削除)
                     await transactionalEntityManager.update(ThreadEntity,
-                        { tenantKey: req.info.user.tenantKey, threadGroupId: threadGroup.id, status: Not(ThreadStatus.Deleted) },
+                        { orgKey: req.info.user.orgKey, threadGroupId: threadGroup.id, status: Not(ThreadStatus.Deleted) },
                         { status: ThreadStatus.Deleted },
                     );
                 } else {
                     threadGroup = new ThreadGroupEntity();
                     threadGroup.projectId = projectId;
                     threadGroup.status = ThreadGroupStatus.Normal;
-                    threadGroup.tenantKey = req.info.user.tenantKey;
+                    threadGroup.orgKey = req.info.user.orgKey;
                     threadGroup.createdBy = req.info.user.id;
                     threadGroup.createdIp = req.info.ip;
                 }
@@ -1013,12 +1013,12 @@ export const upsertThreadGroup = [
                 let index = 0;
                 for (let _thread of threadList) {
                     let thread;
-                    // console.log('thread.id');
-                    // console.log(_thread.id);
+                    // console.log('thread.id', _thread.id);
+                    // console.log(_thread.inDto);
                     if (_thread.id) {
                         // スレッドの更新
                         thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                            where: { tenantKey: req.info.user.tenantKey, id: _thread.id }
+                            where: { orgKey: req.info.user.orgKey, id: _thread.id }
                         });
                         // } else if (thread = await transactionalEntityManager.findOne(ThreadEntity, {
                         //     where: { threadGroupId: threadGroup.id, subSeq: index }
@@ -1026,7 +1026,7 @@ export const upsertThreadGroup = [
                     } else {
                         // 新しいスレッドを作成
                         thread = new ThreadEntity();
-                        thread.tenantKey = req.info.user.tenantKey;
+                        thread.orgKey = req.info.user.orgKey;
                         thread.createdBy = req.info.user.id;
                         thread.createdIp = req.info.ip;
                     }
@@ -1035,7 +1035,7 @@ export const upsertThreadGroup = [
                     // // thread.subSeq = index;
                     thread.status = ThreadStatus.Normal;
                     thread.threadGroupId = savedThreadGroup.id;
-                    thread.inDtoJson = (_thread as any).inDtoJson;
+                    thread.inDto = _thread.inDto;
                     thread.updatedBy = req.info.user.id;
                     thread.updatedIp = req.info.ip;
                     const savedThread = await transactionalEntityManager.save(ThreadEntity, thread);
@@ -1072,7 +1072,7 @@ export const getThreadGroupList = [
 
         try {
             const project = await ds.getRepository(ProjectEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: projectId }
+                where: { orgKey: req.info.user.orgKey, id: projectId }
             });
 
             let threadGroups: ThreadGroupEntity[];
@@ -1082,7 +1082,7 @@ export const getThreadGroupList = [
                 // ログインしている場合
                 const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: project.teamId,
                         userId: req.info.user.id
                     }
@@ -1091,10 +1091,10 @@ export const getThreadGroupList = [
                 if (teamMember || project.visibility === ProjectVisibility.Public || project.visibility === ProjectVisibility.Login) {
                     // チームメンバー、または公開/ログインユーザー向けプロジェクトの場合
                     threadGroups = await ds.getRepository(ThreadGroupEntity).find({
-                        where: { tenantKey: req.info.user.tenantKey, projectId, status: Not(ThreadGroupStatus.Deleted) }
+                        where: { orgKey: req.info.user.orgKey, projectId, status: Not(ThreadGroupStatus.Deleted) }
                     });
                     threads = await ds.getRepository(ThreadEntity).find({
-                        where: { tenantKey: req.info.user.tenantKey, threadGroupId: In(threadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) },
+                        where: { orgKey: req.info.user.orgKey, threadGroupId: In(threadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) },
                         order: { seq: 'ASC' }
                     });
                 } else {
@@ -1105,10 +1105,10 @@ export const getThreadGroupList = [
                 if (project.visibility === ProjectVisibility.Public) {
                     // 公開プロジェクトの場合
                     threadGroups = await ds.getRepository(ThreadGroupEntity).find({
-                        where: { tenantKey: req.info.user.tenantKey, projectId, visibility: ThreadGroupVisibility.Public, status: Not(ThreadGroupStatus.Deleted) }
+                        where: { orgKey: req.info.user.orgKey, projectId, visibility: ThreadGroupVisibility.Public, status: Not(ThreadGroupStatus.Deleted) }
                     });
                     threads = await ds.getRepository(ThreadEntity).find({
-                        where: { tenantKey: req.info.user.tenantKey, threadGroupId: In(threadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
+                        where: { orgKey: req.info.user.orgKey, threadGroupId: In(threadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
                     });
                 } else {
                     throw new Error('このプロジェクトのスレッド一覧を取得する権限がありません');
@@ -1146,26 +1146,26 @@ export const moveThreadGroup = [
             let updatedThread;
             await ds.transaction(async transactionalEntityManager => {
                 const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id, status: Not(ThreadGroupStatus.Deleted) }
+                    where: { orgKey: req.info.user.orgKey, id, status: Not(ThreadGroupStatus.Deleted) }
                 });
 
                 const projectFm = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                    where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                 });
                 const projectTo = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: projectId }
+                    where: { orgKey: req.info.user.orgKey, id: projectId }
                 });
 
                 const teamMemberFm = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: projectFm.teamId,
                         userId: req.info.user.id
                     }
                 });
                 const teamMemberTo = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: projectTo.teamId,
                         userId: req.info.user.id
                     }
@@ -1211,16 +1211,16 @@ export const deleteThreadGroup = [
         try {
             await ds.transaction(async transactionalEntityManager => {
                 const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id, status: Not(ThreadGroupStatus.Deleted) }
+                    where: { orgKey: req.info.user.orgKey, id, status: Not(ThreadGroupStatus.Deleted) }
                 });
 
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                    where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                 });
 
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: project.teamId,
                         userId: req.info.user.id
                     }
@@ -1281,22 +1281,22 @@ export const upsertMessageWithContents = [
             const result = await ds.transaction(async transactionalEntityManager => {
                 // スレッドの存在確認
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadId, status: Not(ThreadStatus.Deleted) }
+                    where: { orgKey: req.info.user.orgKey, id: threadId, status: Not(ThreadStatus.Deleted) }
                 });
 
                 // スレッドグループの取得
                 const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
                 });
 
                 // プロジェクトの取得と権限チェック
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                    where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                 });
 
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: project.teamId,
                         userId: req.info.user.id
                     }
@@ -1313,13 +1313,13 @@ export const upsertMessageWithContents = [
                 if (messageClusterId) {
                     // 更新の場合
                     messageCluster = await transactionalEntityManager.findOneOrFail(MessageClusterEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: messageClusterId, threadId }
+                        where: { orgKey: req.info.user.orgKey, id: messageClusterId, threadId }
                     });
                 } else {
                     // 新規作成の場合
                     messageCluster = new MessageClusterEntity();
                     messageCluster.threadId = threadId;
-                    messageCluster.tenantKey = req.info.user.tenantKey;
+                    messageCluster.orgKey = req.info.user.orgKey;
                     messageCluster.createdBy = req.info.user.id;
                     messageCluster.createdIp = req.info.ip;
                 }
@@ -1331,13 +1331,13 @@ export const upsertMessageWithContents = [
                 if (messageGroupId) {
                     // 更新の場合
                     messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: messageGroupId }
+                        where: { orgKey: req.info.user.orgKey, id: messageGroupId }
                     });
                 } else {
                     // 新規作成の場合
                     messageGroup = new MessageGroupEntity();
                     messageGroup.threadId = threadId;
-                    messageGroup.tenantKey = req.info.user.tenantKey;
+                    messageGroup.orgKey = req.info.user.orgKey;
                     messageGroup.createdBy = req.info.user.id;
                     messageGroup.createdIp = req.info.ip;
                 }
@@ -1352,11 +1352,11 @@ export const upsertMessageWithContents = [
                 if (messageId) {
                     // 更新の場合
                     message = await transactionalEntityManager.findOneOrFail(MessageEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: messageId },
+                        where: { orgKey: req.info.user.orgKey, id: messageId },
                     });
 
                     messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: message.messageGroupId }
+                        where: { orgKey: req.info.user.orgKey, id: message.messageGroupId }
                     });
 
                     if (messageGroup.threadId !== threadId) {
@@ -1371,7 +1371,7 @@ export const upsertMessageWithContents = [
                 } else {
                     // 新規作成の場合
                     message = new MessageEntity();
-                    message.tenantKey = req.info.user.tenantKey;
+                    message.orgKey = req.info.user.orgKey;
                     message.createdBy = req.info.user.id;
                     message.createdIp = req.info.ip;
                 }
@@ -1392,7 +1392,7 @@ export const upsertMessageWithContents = [
                 // 既存のContentPartsを取得（更新の場合）
                 const existingContentParts = await (messageId
                     ? transactionalEntityManager.find(ContentPartEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, messageId: messageId },
+                        where: { orgKey: req.info.user.orgKey, messageId: messageId },
                         order: { seq: 'ASC' }
                     })
                     : Promise.resolve([] as ContentPartEntity[]));
@@ -1407,7 +1407,7 @@ export const upsertMessageWithContents = [
                         // 新しいContentPartを作成
                         contentPart = new ContentPartEntity();
                         contentPart.messageId = savedMessage.id;
-                        contentPart.tenantKey = req.info.user.tenantKey;
+                        contentPart.orgKey = req.info.user.orgKey;
                         contentPart.createdBy = req.info.user.id;
                         contentPart.createdIp = req.info.ip;
                     }
@@ -1446,7 +1446,7 @@ export const upsertMessageWithContents = [
                 // 不要になったContentPartsを削除
                 const contentPartIdsToKeep = updatedContentParts.map(cp => cp.id);
                 await transactionalEntityManager.delete(ContentPartEntity, {
-                    tenantKey: req.info.user.tenantKey,
+                    orgKey: req.info.user.orgKey,
                     messageId: savedMessage.id,
                     id: Not(In(contentPartIdsToKeep))
                 });
@@ -1504,22 +1504,22 @@ export const upsertMessageWithContents2 = [
             const result = await ds.transaction(async transactionalEntityManager => {
                 // スレッドの存在確認
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadId, status: Not(ThreadStatus.Deleted) }
+                    where: { orgKey: req.info.user.orgKey, id: threadId, status: Not(ThreadStatus.Deleted) }
                 });
 
                 // スレッドグループの取得
                 const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
                 });
 
                 // プロジェクトの取得と権限チェック
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                    where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                 });
 
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: project.teamId,
                         userId: req.info.user.id
                     }
@@ -1536,18 +1536,18 @@ export const upsertMessageWithContents2 = [
                 if (messageGroupId) {
                     // 更新の場合
                     messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: messageGroupId }
+                        where: { orgKey: req.info.user.orgKey, id: messageGroupId }
                     });
                     (messageGroup as any).id = undefined;
                     (messageGroup as any).createdAt = undefined;
-                    messageGroup.tenantKey = req.info.user.tenantKey;
+                    messageGroup.orgKey = req.info.user.orgKey;
                     messageGroup.createdBy = req.info.user.id;
                     messageGroup.createdIp = req.info.ip;
                 } else {
                     // 新規作成の場合
                     messageGroup = new MessageGroupEntity();
                     messageGroup.threadId = threadId;
-                    messageGroup.tenantKey = req.info.user.tenantKey;
+                    messageGroup.orgKey = req.info.user.orgKey;
                     messageGroup.createdBy = req.info.user.id;
                     messageGroup.createdIp = req.info.ip;
                     messageGroup.previousMessageGroupId = previousMessageGroupId; // 変えちゃダメなので新規の時だけセット
@@ -1562,11 +1562,11 @@ export const upsertMessageWithContents2 = [
                 if (messageId) {
                     // 更新の場合
                     message = await transactionalEntityManager.findOneOrFail(MessageEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: messageId },
+                        where: { orgKey: req.info.user.orgKey, id: messageId },
                     });
 
                     messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: message.messageGroupId }
+                        where: { orgKey: req.info.user.orgKey, id: message.messageGroupId }
                     });
 
                     if (messageGroup.threadId !== threadId) {
@@ -1582,7 +1582,7 @@ export const upsertMessageWithContents2 = [
                     // 新規作成の場合
                     message = new MessageEntity();
                     message.editedRootMessageId = editedRootMessageId;
-                    message.tenantKey = req.info.user.tenantKey;
+                    message.orgKey = req.info.user.orgKey;
                     message.createdBy = req.info.user.id;
                     message.createdIp = req.info.ip;
                 }
@@ -1603,7 +1603,7 @@ export const upsertMessageWithContents2 = [
                 // 既存のContentPartsを取得（更新の場合）
                 const existingContentParts = await (messageId
                     ? transactionalEntityManager.find(ContentPartEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, messageId: messageId },
+                        where: { orgKey: req.info.user.orgKey, messageId: messageId },
                         order: { seq: 'ASC' }
                     })
                     : Promise.resolve([] as ContentPartEntity[]));
@@ -1618,7 +1618,7 @@ export const upsertMessageWithContents2 = [
                         // 新しいContentPartを作成
                         contentPart = new ContentPartEntity();
                         contentPart.messageId = savedMessage.id;
-                        contentPart.tenantKey = req.info.user.tenantKey;
+                        contentPart.orgKey = req.info.user.orgKey;
                         contentPart.createdBy = req.info.user.id;
                         contentPart.createdIp = req.info.ip;
                     }
@@ -1657,7 +1657,7 @@ export const upsertMessageWithContents2 = [
                 // 不要になったContentPartsを削除
                 const contentPartIdsToKeep = updatedContentParts.map(cp => cp.id);
                 await transactionalEntityManager.delete(ContentPartEntity, {
-                    tenantKey: req.info.user.tenantKey,
+                    orgKey: req.info.user.orgKey,
                     messageId: savedMessage.id,
                     id: Not(In(contentPartIdsToKeep))
                 });
@@ -1719,22 +1719,22 @@ export const upsertMessageWithContents3 = [
             const result = await ds.transaction(async transactionalEntityManager => {
                 // スレッドの存在確認
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadId, status: Not(ThreadStatus.Deleted) }
+                    where: { orgKey: req.info.user.orgKey, id: threadId, status: Not(ThreadStatus.Deleted) }
                 });
 
                 // スレッドグループの取得
                 const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
                 });
 
                 // プロジェクトの取得と権限チェック
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                    where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                 });
 
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: project.teamId,
                         userId: req.info.user.id
                     }
@@ -1749,7 +1749,7 @@ export const upsertMessageWithContents3 = [
                 if (id) {
                     // 更新の場合
                     const orgMessageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id }
+                        where: { orgKey: req.info.user.orgKey, id }
                     });
 
                     if (applyType === 'insert') {
@@ -1758,7 +1758,7 @@ export const upsertMessageWithContents3 = [
                         newMessageGroup = new MessageGroupEntity();
                         newMessageGroup.threadId = orgMessageGroup.threadId;
                         newMessageGroup.previousMessageGroupId = orgMessageGroup.previousMessageGroupId; // 変えちゃダメなので新規の時だけセット
-                        newMessageGroup.tenantKey = req.info.user.tenantKey;
+                        newMessageGroup.orgKey = req.info.user.orgKey;
                         newMessageGroup.createdBy = req.info.user.id;
                         newMessageGroup.createdIp = req.info.ip;
                     } else {
@@ -1770,7 +1770,7 @@ export const upsertMessageWithContents3 = [
                     newMessageGroup = new MessageGroupEntity();
                     newMessageGroup.threadId = threadId;
                     newMessageGroup.previousMessageGroupId = previousMessageGroupId; // 変えちゃダメなので新規の時だけセット
-                    newMessageGroup.tenantKey = req.info.user.tenantKey;
+                    newMessageGroup.orgKey = req.info.user.orgKey;
                     newMessageGroup.createdBy = req.info.user.id;
                     newMessageGroup.createdIp = req.info.ip;
                 }
@@ -1807,11 +1807,11 @@ export const upsertMessageWithContents3 = [
                     if (srcMessage.id) {
                         // 更新の場合
                         const orgMessage = await transactionalEntityManager.findOneOrFail(MessageEntity, {
-                            where: { tenantKey: req.info.user.tenantKey, id: srcMessage.id, messageGroupId: id },
+                            where: { orgKey: req.info.user.orgKey, id: srcMessage.id, messageGroupId: id },
                         });
 
                         const orgMessageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                            where: { tenantKey: req.info.user.tenantKey, id: orgMessage.messageGroupId }
+                            where: { orgKey: req.info.user.orgKey, id: orgMessage.messageGroupId }
                         });
 
                         if (orgMessageGroup.threadId !== threadId) {
@@ -1828,7 +1828,7 @@ export const upsertMessageWithContents3 = [
                             newMessage = new MessageEntity();
                             newMessage.editedRootMessageId = orgMessage.id;
                             newMessage.subSeq = orgMessage.subSeq; // subSeqは変更禁止なので新規の時だけセット
-                            newMessage.tenantKey = req.info.user.tenantKey;
+                            newMessage.orgKey = req.info.user.orgKey;
                             newMessage.createdBy = req.info.user.id;
                             newMessage.createdIp = req.info.ip;
                         } else {
@@ -1839,7 +1839,7 @@ export const upsertMessageWithContents3 = [
                         // 新規作成の場合
                         newMessage = new MessageEntity();
                         newMessage.subSeq = srcMessage.subSeq; // subSeqは変更禁止なので新規の時だけセット
-                        newMessage.tenantKey = req.info.user.tenantKey;
+                        newMessage.orgKey = req.info.user.orgKey;
                         newMessage.createdBy = req.info.user.id;
                         newMessage.createdIp = req.info.ip;
                     }
@@ -1859,7 +1859,7 @@ export const upsertMessageWithContents3 = [
                     // 既存のContentPartsを取得（更新の場合）
                     const existingContentParts = await (srcMessage.id
                         ? transactionalEntityManager.find(ContentPartEntity, {
-                            where: { tenantKey: req.info.user.tenantKey, messageId: srcMessage.id },
+                            where: { orgKey: req.info.user.orgKey, messageId: srcMessage.id },
                             order: { seq: 'ASC' }
                         })
                         : Promise.resolve([] as ContentPartEntity[]));
@@ -1875,7 +1875,7 @@ export const upsertMessageWithContents3 = [
                         // 新しいContentPartを作成
                         contentPart = new ContentPartEntity();
                         contentPart.messageId = savedMessage.id;
-                        contentPart.tenantKey = req.info.user.tenantKey;
+                        contentPart.orgKey = req.info.user.orgKey;
                         contentPart.createdBy = req.info.user.id;
                         contentPart.createdIp = req.info.ip;
 
@@ -1916,7 +1916,7 @@ export const upsertMessageWithContents3 = [
                     // 不要になったContentPartsを削除
                     const contentPartIdsToKeep = updatedContentParts.map(cp => cp.id);
                     await transactionalEntityManager.delete(ContentPartEntity, {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         messageId: savedMessage.id,
                         id: Not(In(contentPartIdsToKeep))
                     });
@@ -1975,32 +1975,32 @@ export const editMessageWithContents = [
             const result = await ds.transaction(async transactionalEntityManager => {
                 // 更新の場合
                 const orgMessage = await transactionalEntityManager.findOneOrFail(MessageEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: messageId },
+                    where: { orgKey: req.info.user.orgKey, id: messageId },
                 });
 
                 // メッセージグループの確認
                 const messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: orgMessage.messageGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: orgMessage.messageGroupId }
                 });
 
                 // スレッドの存在確認
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+                    where: { orgKey: req.info.user.orgKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
                 });
 
                 // スレッドグループの取得
                 const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
                 });
 
                 // プロジェクトの取得と権限チェック
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                    where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                 });
 
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: project.teamId,
                         userId: req.info.user.id
                     }
@@ -2012,7 +2012,7 @@ export const editMessageWithContents = [
 
                 // 既存のContentPartsを取得（更新の場合）
                 const existingContentParts = await transactionalEntityManager.find(ContentPartEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, messageId: messageId },
+                    where: { orgKey: req.info.user.orgKey, messageId: messageId },
                     order: { seq: 'ASC' }
                 });
 
@@ -2028,7 +2028,7 @@ export const editMessageWithContents = [
                     // 新しいContentPartを作成
                     contentPart = new ContentPartEntity();
                     contentPart.messageId = messageId;
-                    contentPart.tenantKey = req.info.user.tenantKey;
+                    contentPart.orgKey = req.info.user.orgKey;
                     contentPart.createdBy = req.info.user.id;
                     contentPart.createdIp = req.info.ip;
 
@@ -2067,7 +2067,7 @@ export const editMessageWithContents = [
                 // 不要になったContentPartsを削除
                 const contentPartIdsToKeep = updatedContentParts.map(cp => cp.id);
                 await transactionalEntityManager.delete(ContentPartEntity, {
-                    tenantKey: req.info.user.tenantKey,
+                    orgKey: req.info.user.orgKey,
                     messageId: messageId,
                     id: Not(In(contentPartIdsToKeep))
                 });
@@ -2104,15 +2104,15 @@ export const editMessageWithContents = [
  * [user認証] スレッドのクローン
  */
 export const threadCloneCore = async (req: UserRequest, transactionalEntityManager: EntityManager, threadId: string, targetThreadGroupId: string): Promise<ThreadEntity> => {
-    const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, { where: { tenantKey: req.info.user.tenantKey, id: threadId } });
+    const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, { where: { orgKey: req.info.user.orgKey, id: threadId } });
     // const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, { where: { id: thread.threadGroupId } });
     // const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, { where: { id: threadGroup.projectId } });
 
     const newThread = new ThreadEntity();
     newThread.threadGroupId = targetThreadGroupId;
-    newThread.inDtoJson = thread.inDtoJson;
+    newThread.inDto = thread.inDto;
     newThread.status = ThreadStatus.Normal; // 新規スレッドは常にNormal
-    newThread.tenantKey = req.info.user.tenantKey;
+    newThread.orgKey = req.info.user.orgKey;
     newThread.createdBy = req.info.user.id;
     newThread.updatedBy = req.info.user.id;
     newThread.createdIp = req.info.ip;
@@ -2127,7 +2127,7 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
         cache: { [oldId: string]: string },
         transaction: { [oldId: string]: string },
     } = { messageGroup: {}, message: {}, contentPart: {}, cache: {}, transaction: {} };
-    const messageGroups = await transactionalEntityManager.find(MessageGroupEntity, { where: { tenantKey: req.info.user.tenantKey, threadId }, order: { seq: 'ASC' } });
+    const messageGroups = await transactionalEntityManager.find(MessageGroupEntity, { where: { orgKey: req.info.user.orgKey, threadId }, order: { seq: 'ASC' } });
 
     const savedObjects: { messageGroups: MessageGroupEntity[], messages: MessageEntity[], contentParts: ContentPartEntity[] } = { messageGroups: [], messages: [], contentParts: [] };
 
@@ -2142,7 +2142,7 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
         newMessageGroup.role = messageGroup.role;
         newMessageGroup.source = messageGroup.source;
         // newMessageGroup.editedRootMessageGroupId = messageGroup.editedRootMessageGroupId;
-        newMessageGroup.tenantKey = req.info.user.tenantKey;
+        newMessageGroup.orgKey = req.info.user.orgKey;
         newMessageGroup.createdBy = req.info.user.id;
         newMessageGroup.updatedBy = req.info.user.id;
         newMessageGroup.createdIp = req.info.ip;
@@ -2153,7 +2153,7 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
         savedObjects.messageGroups.push(savedMessageGroup);
 
         // TODO cacheIdもコピーするべきかもしれないが、一旦除外。
-        const messages = await transactionalEntityManager.find(MessageEntity, { where: { tenantKey: req.info.user.tenantKey, messageGroupId: messageGroup.id } });
+        const messages = await transactionalEntityManager.find(MessageEntity, { where: { orgKey: req.info.user.orgKey, messageGroupId: messageGroup.id } });
         for (const message of messages) {
             const newMessage = new MessageEntity();
             newMessage.messageGroupId = savedMessageGroup.id;
@@ -2164,7 +2164,7 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
             if (message.editedRootMessageId) {
                 newMessage.editedRootMessageId = idRemapTable.message[message.editedRootMessageId];
             } else { }
-            newMessage.tenantKey = req.info.user.tenantKey;
+            newMessage.orgKey = req.info.user.orgKey;
             newMessage.createdBy = req.info.user.id;
             newMessage.updatedBy = req.info.user.id;
             newMessage.createdIp = req.info.ip;
@@ -2177,7 +2177,7 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
                 } else {
                     // キャッシュコピー
                     const vertexCachedContent = new VertexCachedContentEntity();
-                    const cache = await transactionalEntityManager.findOneOrFail(VertexCachedContentEntity, { where: { tenantKey: req.info.user.tenantKey, id: message.cacheId } });
+                    const cache = await transactionalEntityManager.findOneOrFail(VertexCachedContentEntity, { where: { orgKey: req.info.user.orgKey, id: message.cacheId } });
                     vertexCachedContent.id = cache.id;
                     vertexCachedContent.modelAlias = cache.modelAlias;
                     vertexCachedContent.location = cache.location;
@@ -2196,7 +2196,7 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
                     vertexCachedContent.text = cache.text;
                     vertexCachedContent.video = cache.video;
                     vertexCachedContent.usage = cache.usage;
-                    vertexCachedContent.tenantKey = req.info.user.tenantKey;
+                    vertexCachedContent.orgKey = req.info.user.orgKey;
                     vertexCachedContent.createdBy = req.info.user.id;
                     vertexCachedContent.updatedBy = req.info.user.id;
                     vertexCachedContent.createdIp = req.info.ip;
@@ -2212,14 +2212,14 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
             idRemapTable.message[message.id] = savedMessage.id;
             savedObjects.messages.push(savedMessage);
 
-            const contentParts = await transactionalEntityManager.find(ContentPartEntity, { where: { tenantKey: req.info.user.tenantKey, messageId: message.id } });
+            const contentParts = await transactionalEntityManager.find(ContentPartEntity, { where: { orgKey: req.info.user.orgKey, messageId: message.id } });
             for (const contentPart of contentParts) {
                 const newContentPart = new ContentPartEntity();
                 // newContentPart.seq = contentPart.seq;
                 newContentPart.messageId = savedMessage.id;
                 newContentPart.type = contentPart.type;
                 newContentPart.text = contentPart.text;
-                newContentPart.tenantKey = req.info.user.tenantKey;
+                newContentPart.orgKey = req.info.user.orgKey;
                 newContentPart.createdBy = req.info.user.id;
                 newContentPart.updatedBy = req.info.user.id;
                 newContentPart.createdIp = req.info.ip;
@@ -2232,14 +2232,14 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
                     } else {
                         if (contentPart.type === ContentPartType.FILE) {
                             // ファイルコピー
-                            const fileGroup = await transactionalEntityManager.findOneOrFail(FileGroupEntity, { where: { tenantKey: req.info.user.tenantKey, id: contentPart.linkId } });
+                            const fileGroup = await transactionalEntityManager.findOneOrFail(FileGroupEntity, { where: { orgKey: req.info.user.orgKey, id: contentPart.linkId } });
                             const newFileGroup = new FileGroupEntity();
                             newFileGroup.description = fileGroup.description;
                             newFileGroup.label = fileGroup.label;
                             newFileGroup.uploadedBy = fileGroup.uploadedBy;
                             newFileGroup.type = fileGroup.type;
                             newFileGroup.projectId = fileGroup.projectId;
-                            newFileGroup.tenantKey = req.info.user.tenantKey;
+                            newFileGroup.orgKey = req.info.user.orgKey;
                             newFileGroup.createdBy = req.info.user.id;
                             newFileGroup.updatedBy = req.info.user.id;
                             newFileGroup.createdIp = req.info.ip;
@@ -2248,7 +2248,7 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
                             idRemapTable.contentPart[fileGroup.id] = savedFileGroup.id;
                             const fileList = await transactionalEntityManager.find(FileEntity, { where: { fileGroupId: fileGroup.id } });
                             for (const file of fileList) {
-                                const fileBodyEntity = await transactionalEntityManager.findOneOrFail(FileBodyEntity, { where: { tenantKey: req.info.user.tenantKey, id: file.fileBodyId } });
+                                const fileBodyEntity = await transactionalEntityManager.findOneOrFail(FileBodyEntity, { where: { orgKey: req.info.user.orgKey, id: file.fileBodyId } });
 
                                 const newFile = new FileEntity();
                                 newFile.fileGroupId = savedFileGroup.id;
@@ -2258,7 +2258,7 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
                                 newFile.projectId = file.projectId;
                                 newFile.uploadedBy = file.uploadedBy;
                                 newFile.fileBodyId = file.fileBodyId;
-                                newFile.tenantKey = req.info.user.tenantKey;
+                                newFile.orgKey = req.info.user.orgKey;
                                 newFile.createdBy = req.info.user.id;
                                 newFile.updatedBy = req.info.user.id;
                                 newFile.createdIp = req.info.ip;
@@ -2268,19 +2268,19 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
                             }
                         } else if (contentPart.type === ContentPartType.TOOL) {
                             // ファイルコピー
-                            const toolCallGroup = await transactionalEntityManager.findOneOrFail(ToolCallGroupEntity, { where: { tenantKey: req.info.user.tenantKey, id: contentPart.linkId } });
+                            const toolCallGroup = await transactionalEntityManager.findOneOrFail(ToolCallGroupEntity, { where: { orgKey: req.info.user.orgKey, id: contentPart.linkId } });
                             const newToolGroup = new ToolCallGroupEntity();
                             // newToolGroup.seq = toolGroup.seq;
                             newToolGroup.status = toolCallGroup.status;
                             newToolGroup.projectId = toolCallGroup.projectId;
-                            newToolGroup.tenantKey = req.info.user.tenantKey;
+                            newToolGroup.orgKey = req.info.user.orgKey;
                             newToolGroup.createdBy = req.info.user.id;
                             newToolGroup.updatedBy = req.info.user.id;
                             newToolGroup.createdIp = req.info.ip;
                             newToolGroup.updatedIp = req.info.ip;
                             const savedToolGroup = await transactionalEntityManager.save(ToolCallGroupEntity, newToolGroup);
                             idRemapTable.contentPart[toolCallGroup.id] = savedToolGroup.id;
-                            const toolCallPartList = await transactionalEntityManager.find(ToolCallPartEntity, { where: { tenantKey: req.info.user.tenantKey, toolCallGroupId: toolCallGroup.id } });
+                            const toolCallPartList = await transactionalEntityManager.find(ToolCallPartEntity, { where: { orgKey: req.info.user.orgKey, toolCallGroupId: toolCallGroup.id } });
                             for (const toolCallPart of toolCallPartList) {
                                 const newToolCallPart = new ToolCallPartEntity();
                                 newToolCallPart.toolCallGroupId = savedToolGroup.id;
@@ -2289,7 +2289,7 @@ export const threadCloneCore = async (req: UserRequest, transactionalEntityManag
                                 newToolCallPart.body = toolCallPart.body;
                                 newToolCallPart.tokenCount = toolCallPart.tokenCount;
                                 newToolCallPart.status = toolCallPart.status;
-                                newToolCallPart.tenantKey = req.info.user.tenantKey;
+                                newToolCallPart.orgKey = req.info.user.orgKey;
                                 newToolCallPart.createdBy = req.info.user.id;
                                 newToolCallPart.updatedBy = req.info.user.id;
                                 newToolCallPart.createdIp = req.info.ip;
@@ -2339,11 +2339,11 @@ export const threadClone = [
 
         try {
             const result = await ds.transaction(async transactionalEntityManager => {
-                const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, { where: { tenantKey: req.info.user.tenantKey, id: threadId } });
-                const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, { where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId } });
+                const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, { where: { orgKey: req.info.user.orgKey, id: threadId } });
+                const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, { where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId } });
                 // アクセス権限チェック
-                const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, { where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId } });
-                const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, { where: { tenantKey: req.info.user.tenantKey, teamId: project.teamId, userId: req.info.user.id } });
+                const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, { where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId } });
+                const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id } });
                 if (!teamMember || ([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer, TeamMemberRoleType.Member].indexOf(teamMember.role) === -1)) {
                     throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
                 }
@@ -2379,10 +2379,10 @@ export const threadGroupClone = [
 
         try {
             const result = await ds.transaction(async transactionalEntityManager => {
-                const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, { where: { tenantKey: req.info.user.tenantKey, id: threadGroupId } });
+                const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, { where: { orgKey: req.info.user.orgKey, id: threadGroupId } });
                 // アクセス権限チェック
-                const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, { where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId } });
-                const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, { where: { tenantKey: req.info.user.tenantKey, teamId: project.teamId, userId: req.info.user.id } });
+                const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, { where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId } });
+                const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id } });
                 if (!teamMember || ([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer, TeamMemberRoleType.Member].indexOf(teamMember.role) === -1)) {
                     throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
                 }
@@ -2394,14 +2394,14 @@ export const threadGroupClone = [
                 newThreadGroup.title = title || threadGroup.title;
                 newThreadGroup.description = description || threadGroup.description;
                 newThreadGroup.status = ThreadGroupStatus.Normal; // 新規スレッドグループは常にNormal
-                newThreadGroup.tenantKey = req.info.user.tenantKey;
+                newThreadGroup.orgKey = req.info.user.orgKey;
                 newThreadGroup.createdBy = req.info.user.id;
                 newThreadGroup.updatedBy = req.info.user.id;
                 newThreadGroup.createdIp = req.info.ip;
                 newThreadGroup.updatedIp = req.info.ip;
                 const savedThreadGroup = await transactionalEntityManager.save(ThreadGroupEntity, newThreadGroup);
 
-                const threadList = await transactionalEntityManager.find(ThreadEntity, { where: { tenantKey: req.info.user.tenantKey, threadGroupId } });
+                const threadList = await transactionalEntityManager.find(ThreadEntity, { where: { orgKey: req.info.user.orgKey, threadGroupId } });
                 const threadCloneList = await Promise.all(threadList.map(async thread => {
                     return await threadCloneCore(req, transactionalEntityManager, thread.id, savedThreadGroup.id);
                 }));
@@ -2438,33 +2438,33 @@ export const updateMessageOrMessageGroupTimestamp = [
                 if (type === 'message') {
                     // メッセージの存在確認
                     const message = await transactionalEntityManager.findOneOrFail(MessageEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id }
+                        where: { orgKey: req.info.user.orgKey, id }
                     });
 
                     // メッセージグループの存在確認
                     const messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: message.messageGroupId }
+                        where: { orgKey: req.info.user.orgKey, id: message.messageGroupId }
                     });
 
                     // スレッドの存在確認
                     const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+                        where: { orgKey: req.info.user.orgKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
                     });
 
                     // スレッドグループの存在確認
                     const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                        where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
                     });
 
                     // プロジェクトの取得と権限チェック
                     const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                        where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                     });
 
                     // チームメンバーの存在確認
                     const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                         where: {
-                            tenantKey: req.info.user.tenantKey,
+                            orgKey: req.info.user.orgKey,
                             teamId: project.teamId,
                             userId: req.info.user.id
                         }
@@ -2481,28 +2481,28 @@ export const updateMessageOrMessageGroupTimestamp = [
                 } else if (type === 'message-group') {
                     // メッセージグループの存在確認
                     const messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id }
+                        where: { orgKey: req.info.user.orgKey, id }
                     });
 
                     // スレッドの存在確認
                     const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+                        where: { orgKey: req.info.user.orgKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
                     });
 
                     // スレッドグループの存在確認
                     const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                        where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
                     });
 
                     // プロジェクトの取得と権限チェック
                     const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                        where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                     });
 
                     // チームメンバーの存在確認
                     const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                         where: {
-                            tenantKey: req.info.user.tenantKey,
+                            orgKey: req.info.user.orgKey,
                             teamId: project.teamId,
                             userId: req.info.user.id
                         }
@@ -2552,12 +2552,12 @@ export const getMessageGroupList = [
         try {
             // スレッドグループの取得
             const threadGroup = await ds.getRepository(ThreadGroupEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: threadGroupId, status: Not(ThreadGroupStatus.Deleted) }
+                where: { orgKey: req.info.user.orgKey, id: threadGroupId, status: Not(ThreadGroupStatus.Deleted) }
             });
 
             // スレッドの存在確認
             const threads = await ds.getRepository(ThreadEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, threadGroupId, status: Not(ThreadStatus.Deleted) }
+                where: { orgKey: req.info.user.orgKey, threadGroupId, status: Not(ThreadStatus.Deleted) }
             });
 
             if (threads.length === 0) {
@@ -2566,12 +2566,12 @@ export const getMessageGroupList = [
 
             // プロジェクトの取得
             const project = await ds.getRepository(ProjectEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
             });
 
             const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
                 where: {
-                    tenantKey: req.info.user.tenantKey,
+                    orgKey: req.info.user.orgKey,
                     teamId: project.teamId,
                     userId: req.info.user.id
                 }
@@ -2583,7 +2583,7 @@ export const getMessageGroupList = [
 
             // メッセージグループを取得
             const [messageGroups, total] = await ds.getRepository(MessageGroupEntity).findAndCount({
-                where: { tenantKey: req.info.user.tenantKey, threadId: In(threads.map(t => t.id)) },
+                where: { orgKey: req.info.user.orgKey, threadId: In(threads.map(t => t.id)) },
                 order: { seq: 'ASC' },
                 skip: (page - 1) * limit,
                 take: limit,
@@ -2596,7 +2596,7 @@ export const getMessageGroupList = [
 
             // 関連するメッセージを一括で取得
             const messages = await ds.getRepository(MessageEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, messageGroupId: In(messageGroupIds) },
+                where: { orgKey: req.info.user.orgKey, messageGroupId: In(messageGroupIds) },
                 order: { seq: 'ASC' },
                 // select: ['id', 'messageGroupId', 'label', 'createdAt', 'updatedAt']
             });
@@ -2644,23 +2644,23 @@ export const getMessageGroupDetails = [
         try {
             // メッセージグループの取得
             const messageGroup = await ds.getRepository(MessageGroupEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: messageGroupId },
+                where: { orgKey: req.info.user.orgKey, id: messageGroupId },
                 // select: ['id', 'threadId', 'type', 'role', 'label', 'parentId', 'createdAt', 'updatedAt']
             });
 
             // スレッドの取得
             const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+                where: { orgKey: req.info.user.orgKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
             });
 
             // スレッドグループの取得
             const threadGroup = await ds.getRepository(ThreadGroupEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
             });
 
             // プロジェクトの取得
             const project = await ds.getRepository(ProjectEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
             });
 
             let hasAccess = false;
@@ -2677,7 +2677,7 @@ export const getMessageGroupDetails = [
                     // TeamプロジェクトまたはDefaultプロジェクトの場合、チームメンバーシップを確認
                     const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
                         where: {
-                            tenantKey: req.info.user.tenantKey,
+                            orgKey: req.info.user.orgKey,
                             teamId: project.teamId,
                             userId: req.info.user.id
                         }
@@ -2692,7 +2692,7 @@ export const getMessageGroupDetails = [
 
             // 関連するメッセージの取得
             const message = await ds.getRepository(MessageEntity).findOne({
-                where: { tenantKey: req.info.user.tenantKey, messageGroupId: messageGroupId },
+                where: { orgKey: req.info.user.orgKey, messageGroupId: messageGroupId },
                 // select: ['id', 'label', 'createdAt', 'updatedAt']
             });
 
@@ -2702,7 +2702,7 @@ export const getMessageGroupDetails = [
 
             // 関連するコンテンツパーツの取得
             const contentParts = await ds.getRepository(ContentPartEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, messageId: message.id },
+                where: { orgKey: req.info.user.orgKey, messageId: message.id },
                 // select: ['id', 'type', 'content', 'seq', 'createdAt', 'updatedAt'],
                 order: { seq: 'ASC' }
             });
@@ -2747,27 +2747,27 @@ export const getMessageContentParts = [
         try {
             // メッセージの存在確認とスレッドID取得
             const message = await ds.getRepository(MessageEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: messageId }
+                where: { orgKey: req.info.user.orgKey, id: messageId }
             });
 
             // メッセージグループの取得
             const messageGroup = await ds.getRepository(MessageGroupEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: message.messageGroupId }
+                where: { orgKey: req.info.user.orgKey, id: message.messageGroupId }
             });
 
             // スレッドの取得（プロジェクトIDを取得するため）
             const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+                where: { orgKey: req.info.user.orgKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
             });
 
             // スレッドグループの取得
             const threadGroup = await ds.getRepository(ThreadGroupEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
             });
 
             // プロジェクトの取得
             const project = await ds.getRepository(ProjectEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
             });
 
             let hasAccess = false;
@@ -2784,7 +2784,7 @@ export const getMessageContentParts = [
                     // TeamプロジェクトまたはDefaultプロジェクトの場合、チームメンバーシップを確認
                     const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
                         where: {
-                            tenantKey: req.info.user.tenantKey,
+                            orgKey: req.info.user.orgKey,
                             teamId: project.teamId,
                             userId: req.info.user.id
                         }
@@ -2799,12 +2799,12 @@ export const getMessageContentParts = [
 
             // メッセージコンテンツ部分の取得
             const contentParts = await ds.getRepository(ContentPartEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, messageId: messageId, text: Not('') },
+                where: { orgKey: req.info.user.orgKey, messageId: messageId, text: Not('') },
                 order: { seq: 'ASC' }
             });
 
             const fileGroups = await ds.getRepository(FileGroupEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, id: In(contentParts.filter(contentPart => contentPart.type === ContentPartType.FILE && contentPart.linkId).map(contentPart => contentPart.linkId)) },
+                where: { orgKey: req.info.user.orgKey, id: In(contentParts.filter(contentPart => contentPart.type === ContentPartType.FILE && contentPart.linkId).map(contentPart => contentPart.linkId)) },
             });
             contentParts.forEach(contentPart => {
                 if (contentPart.type === ContentPartType.FILE && contentPart.linkId) {
@@ -2835,27 +2835,27 @@ export const getMessageContentParts2 = [
         try {
             // メッセージの存在確認とスレッドID取得
             const message = await ds.getRepository(MessageEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: messageId }
+                where: { orgKey: req.info.user.orgKey, id: messageId }
             });
 
             // メッセージグループの取得
             const messageGroup = await ds.getRepository(MessageGroupEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: message.messageGroupId }
+                where: { orgKey: req.info.user.orgKey, id: message.messageGroupId }
             });
 
             // スレッドの取得（プロジェクトIDを取得するため）
             const thread = await ds.getRepository(ThreadEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+                where: { orgKey: req.info.user.orgKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
             });
 
             // スレッドグループの取得
             const threadGroup = await ds.getRepository(ThreadGroupEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
             });
 
             // プロジェクトの取得
             const project = await ds.getRepository(ProjectEntity).findOneOrFail({
-                where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
             });
 
             let hasAccess = false;
@@ -2872,7 +2872,7 @@ export const getMessageContentParts2 = [
                     // TeamプロジェクトまたはDefaultプロジェクトの場合、チームメンバーシップを確認
                     const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
                         where: {
-                            tenantKey: req.info.user.tenantKey,
+                            orgKey: req.info.user.orgKey,
                             teamId: project.teamId,
                             userId: req.info.user.id
                         }
@@ -2887,7 +2887,7 @@ export const getMessageContentParts2 = [
 
             // メッセージコンテンツ部分の取得
             const contentParts = await ds.getRepository(ContentPartEntity).find({
-                where: { tenantKey: req.info.user.tenantKey, messageId: messageId },
+                where: { orgKey: req.info.user.orgKey, messageId: messageId },
                 order: { seq: 'ASC' }
             });
 
@@ -2896,7 +2896,7 @@ export const getMessageContentParts2 = [
                 const fileIdListList = Utils.toChunkArray(fileIds, 1000);
                 for (const fileIdList of fileIdListList) {
                     await ds.getRepository(FileEntity).find({
-                        where: { tenantKey: req.info.user.tenantKey, id: In(fileIdList) },
+                        where: { orgKey: req.info.user.orgKey, id: In(fileIdList) },
                     });
                 }
             } else { }
@@ -2927,28 +2927,28 @@ export const deleteMessageGroup = [
             await ds.transaction(async transactionalEntityManager => {
                 // メッセージグループの取得
                 const messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: messageGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: messageGroupId }
                 });
 
                 // スレッドの取得
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+                    where: { orgKey: req.info.user.orgKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
                 });
 
                 // スレッドグループの取得
                 const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
                 });
 
                 // プロジェクトの取得
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                    where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                 });
 
                 // ユーザーの権限チェック
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: project.teamId,
                         userId: req.info.user.id
                     }
@@ -2960,7 +2960,7 @@ export const deleteMessageGroup = [
 
                 // 関連するメッセージの取得
                 const messages = await transactionalEntityManager.find(MessageEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, messageGroupId: messageGroupId }
+                    where: { orgKey: req.info.user.orgKey, messageGroupId: messageGroupId }
                 });
 
                 if (messages && messages.length > 0) {
@@ -2969,7 +2969,7 @@ export const deleteMessageGroup = [
                     // message.status = 'deleted';  // 適切なステータス名に置き換えてください
                     // message.updatedBy = req.info.user.id;
                     // await transactionalEntityManager.save(MessageEntity, message);
-                    await transactionalEntityManager.delete(MessageEntity, { tenantKey: req.info.user.tenantKey, messageGroupId: messageGroupId });
+                    await transactionalEntityManager.delete(MessageEntity, { orgKey: req.info.user.orgKey, messageGroupId: messageGroupId });
 
                     // 親メッセージIDの付け替え
                     const messageIds = messages.map(message => message.id);
@@ -2983,7 +2983,7 @@ export const deleteMessageGroup = [
                                 updatedBy: () => `:updatedBy`,
                                 updatedIp: () => `:updatedIp`,
                             })
-                            .where('tenant_key =:tenantKey AND previousMessageId IN (:...messageIds)', { tenantKey: req.info.user.tenantKey, messageIds })
+                            .where('org_key =:orgKey AND previousMessageId IN (:...messageIds)', { orgKey: req.info.user.orgKey, messageIds })
                             .setParameters({
                                 newpreviousMessageId: messageGroup.previousMessageGroupId,
                                 updatedBy: req.info.user.id,
@@ -2994,19 +2994,19 @@ export const deleteMessageGroup = [
 
                     // 関連するメッセージの取得
                     const contents = await transactionalEntityManager.find(ContentPartEntity, {
-                        where: { tenantKey: req.info.user.tenantKey, messageId: In(messageIds) }
+                        where: { orgKey: req.info.user.orgKey, messageId: In(messageIds) }
                     });
 
                     // 関連するコンテンツパーツの物理削除
                     await transactionalEntityManager.delete(ContentPartEntity,
-                        { tenantKey: req.info.user.tenantKey, messageId: In(messageIds) },
+                        { orgKey: req.info.user.orgKey, messageId: In(messageIds) },
                         // { status: 'deleted', updatedBy: req.info.user.id }
                     );
 
                     // ファイルオブジェクトも削除。（ファイルボディは再利用考慮のため消さずに残しておく）
                     const fileIds = contents.filter(content => content.linkId).map(content => content.linkId);
                     await transactionalEntityManager.delete(FileEntity,
-                        { tenantKey: req.info.user.tenantKey, id: In(fileIds) },
+                        { orgKey: req.info.user.orgKey, id: In(fileIds) },
                         // { status: 'deleted', updatedBy: req.info.user.id }
                     );
                 } else { }
@@ -3046,33 +3046,33 @@ export const deleteMessage = [
             await ds.transaction(async transactionalEntityManager => {
                 // メッセージの取得
                 const message = await transactionalEntityManager.findOneOrFail(MessageEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: messageId },
+                    where: { orgKey: req.info.user.orgKey, id: messageId },
                 });
 
                 // メッセージグループの取得
                 const messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: message.messageGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: message.messageGroupId }
                 });
 
                 // スレッドの取得
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+                    where: { orgKey: req.info.user.orgKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
                 });
 
                 // スレッドグループの取得
                 const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
                 });
 
                 // プロジェクトの取得
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                    where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                 });
 
                 // ユーザーの権限チェック
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: project.teamId,
                         userId: req.info.user.id
                     }
@@ -3090,14 +3090,14 @@ export const deleteMessage = [
 
                 // 関連するコンテンツパーツの論理削除
                 await transactionalEntityManager.delete(ContentPartEntity,
-                    { tenantKey: req.info.user.tenantKey, messageId: messageId },
+                    { orgKey: req.info.user.orgKey, messageId: messageId },
                     // { status: 'deleted', updatedBy: req.info.user.id }
                 );
 
                 // メッセージグループ内の他のメッセージをチェック
                 const remainingMessages = await transactionalEntityManager.count(MessageEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         messageGroupId: messageGroup.id,
                         // status: Not('deleted')  // 'deleted'以外のステータスをカウント
                     }
@@ -3106,7 +3106,7 @@ export const deleteMessage = [
                 // もし他のメッセージが存在しない場合、メッセージグループも論理削除
                 if (remainingMessages === 0) {
                     await transactionalEntityManager.delete(MessageGroupEntity,
-                        { tenantKey: req.info.user.tenantKey, id: messageGroup.id },
+                        { orgKey: req.info.user.orgKey, id: messageGroup.id },
                         // { status: 'deleted', updatedBy: req.info.user.id }
                     );
                 }
@@ -3140,38 +3140,38 @@ export const deleteContentPart = [
             await ds.transaction(async transactionalEntityManager => {
                 // コンテンツの取得
                 const contentPart = await transactionalEntityManager.findOneOrFail(ContentPartEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: contentPartId },
+                    where: { orgKey: req.info.user.orgKey, id: contentPartId },
                 });
 
                 // メッセージの取得
                 const message = await transactionalEntityManager.findOneOrFail(MessageEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: contentPart.messageId },
+                    where: { orgKey: req.info.user.orgKey, id: contentPart.messageId },
                 });
 
                 // メッセージグループの取得
                 const messageGroup = await transactionalEntityManager.findOneOrFail(MessageGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: message.messageGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: message.messageGroupId }
                 });
 
                 // スレッドの取得
                 const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
+                    where: { orgKey: req.info.user.orgKey, id: messageGroup.threadId, status: Not(ThreadStatus.Deleted) }
                 });
 
                 // スレッドグループの取得
                 const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: thread.threadGroupId }
+                    where: { orgKey: req.info.user.orgKey, id: thread.threadGroupId }
                 });
 
                 // プロジェクトの取得
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, {
-                    where: { tenantKey: req.info.user.tenantKey, id: threadGroup.projectId }
+                    where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId }
                 });
 
                 // ユーザーの権限チェック
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, {
                     where: {
-                        tenantKey: req.info.user.tenantKey,
+                        orgKey: req.info.user.orgKey,
                         teamId: project.teamId,
                         userId: req.info.user.id
                     }
@@ -3186,7 +3186,7 @@ export const deleteContentPart = [
 
                 // コンテンツパーツの論理削除
                 await transactionalEntityManager.delete(ContentPartEntity,
-                    { tenantKey: req.info.user.tenantKey, id: contentPartId },
+                    { orgKey: req.info.user.orgKey, id: contentPartId },
                     // { status: 'deleted', updatedBy: req.info.user.id }
                 );
 

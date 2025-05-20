@@ -91,7 +91,7 @@ export class LoginHistoryEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     userId!: string;
 
     @CreateDateColumn({ type: 'timestamptz' })
@@ -112,7 +112,7 @@ export class SessionEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;  // UUIDとしてセッションを一意に識別
 
-    @Column()
+    @Column({ type: 'uuid' })
     userId!: string;  // ユーザーID
 
     @CreateDateColumn({ type: 'timestamptz' })
@@ -143,7 +143,7 @@ export class UserAuditEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     userId!: string;
 
     @Column()
@@ -193,6 +193,8 @@ export class DepartmentEntity extends MyBaseEntity {
 }
 
 @Entity()
+@Index(['orgKey', 'departmentId'])
+@Index(['orgKey', 'departmentId', 'userId'])
 export class DepartmentMemberEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
@@ -212,6 +214,19 @@ export class DepartmentMemberEntity extends MyBaseEntity {
     @Column({ type: 'enum', enum: DepartmentRoleType, default: DepartmentRoleType.Member })
     departmentRole!: DepartmentRoleType;
 }
+
+// divisions.entity.ts
+@Entity()
+@Index(['orgKey'])
+@Index(['orgKey', 'name'], { unique: true })
+export class DivisionEntity extends MyBaseEntity {
+    @Column()
+    name!: string;
+
+    @Column()
+    label!: string;
+}
+
 export enum OAuthAccountStatus {
     // TODO ACTIVE以外のステータスは未作成
     ACTIVE = 'ACTIVE', // アクティブ状態で、トークンが有効で使用可能
@@ -223,7 +238,7 @@ export enum OAuthAccountStatus {
 }
 
 @Entity()
-@Index(['tenantKey', 'userId', 'provider', 'providerUserId'], { unique: true })
+@Index(['orgKey', 'userId', 'provider', 'providerUserId'], { unique: true })
 export class OAuthAccountEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
@@ -288,8 +303,8 @@ export interface OAuth2ConfigTemplate {
 }
 
 @Entity()
-// @Index(['tenantKey', 'type', 'uriBase'], { unique: true }) // テナントごとに一意
-@Index(['tenantKey', 'type', 'name'], { unique: true }) // テナントごとに一意
+// @Index(['orgKey', 'type', 'uriBase'], { unique: true }) // テナントごとに一意
+@Index(['orgKey', 'type', 'name'], { unique: true }) // テナントごとに一意
 export class ApiProviderEntity extends MyBaseEntity {
 
     @Column()
@@ -353,7 +368,7 @@ export class ApiProviderTemplateEntity extends MyBaseEntity {
     isDeleted!: boolean;
 }
 
-export interface SiteConfig {
+export interface OrganizationSiteConfig {
     theme?: string;
     logoUrl?: string;
     contactEmail?: string;
@@ -365,46 +380,53 @@ export interface SiteConfig {
 }
 
 @Entity()
-export class TenantEntity extends MyBaseEntity {
+export class OrganizationEntity extends MyBaseEntity {
+    @Column({ type: 'uuid', nullable: true })
+    parentId!: string | null;   // ここで多層化を実現
+
     @Column()
-    name!: string;
+    @Index({ unique: true })
+    key!: string;
+
+    @Column()
+    label!: string;
 
     @Column({ nullable: true })
     description?: string;
 
     @Column({ nullable: true, type: 'jsonb' })
-    siteConfig!: SiteConfig;
+    siteConfig!: OrganizationSiteConfig;
 
     @Column({ default: true })
     isActive!: boolean;
 }
 
-// 各Enumは適宜定義してください
-export enum PlanType { FREE = 'free', PRO = 'pro', ENTERPRISE = 'enterprise' }
+// // 各Enumは適宜定義してください
+// export enum PlanType { FREE = 'free', PRO = 'pro', ENTERPRISE = 'enterprise' }
 
-@Entity()
-export class OrganizationEntity extends MyBaseEntity {
-    @Column()
-    name!: string;
+// @Entity()
+// export class OrganizationEntity extends MyBaseEntity {
+//     @Column()
+//     name!: string;
 
-    @Column({ type: 'enum', enum: PlanType })
-    plan!: PlanType;
-}
+//     @Column({ type: 'enum', enum: PlanType })
+//     plan!: PlanType;
+// }
 
-@Entity()
-export class OrganizationMembershipEntity extends MyBaseEntity {
-    @Column()
-    organizationId!: string;
+// @Entity()
+// export class OrganizationMembershipEntity extends MyBaseEntity {
+//     @Column()
+//     organizationId!: string;
 
-    @Column()
-    userId!: string;
+//     @Column()
+//     userId!: string;
 
-    @Column({ type: 'enum', enum: UserRoleType })
-    role!: UserRoleType;
+//     @Column({ type: 'enum', enum: UserRoleType })
+//     role!: UserRoleType;
 
-    @Column({ type: 'timestamptz' })
-    joinedAt!: Date;
-}
+//     @Column({ type: 'timestamptz' })
+//     joinedAt!: Date;
+// }
 
 export interface AzureOpenAIMetadata {
     resource_name: string; // Azure上のリソース名
@@ -456,7 +478,10 @@ export enum AIProviderType {
     GEMINI = 'gemini',
 }
 
-export enum ScopeType { USER = 'user', DIVISION = 'division', ORGANIZATION = 'organization' }
+export enum ScopeType {
+    USER = 'USER', DIVISION = 'DIVISION', ORGANIZATION = 'ORGANIZATION',
+    PROJECT = 'PROJECT', TEAM = 'TEAM', GLOBAL = 'GLOBAL',
+}
 export class ScopeInfo {
     @Column({ type: 'enum', enum: ScopeType })
     scopeType!: ScopeType;
@@ -464,8 +489,36 @@ export class ScopeInfo {
     @Column({ type: 'uuid' })
     scopeId!: string;
 }
+
+export interface UserRole {
+    orgKey: string;
+    userId: string;
+    scopeInfo: ScopeInfo;
+    role: UserRoleType;
+}
+
 @Entity()
-@Index(['tenantKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
+@Index(['orgKey', 'userId'])
+@Index(['orgKey', 'userId', 'role', 'scopeInfo.scopeType', 'scopeInfo.scopeId'], { unique: true })
+export class UserRoleEntity extends MyBaseEntity implements UserRole {
+    @Column({ type: 'uuid' })
+    userId!: string;
+
+    @Column(type => ScopeInfo)
+    scopeInfo!: ScopeInfo;
+
+    @Column({ type: 'enum', enum: UserRoleType, default: UserRoleType.User })
+    role!: UserRoleType;       // 'ADMIN' | 'MEMBER' …
+
+    @Column({ type: 'enum', enum: UserStatus, default: UserStatus.Active })
+    status!: UserStatus;
+}
+// INSERT INTO ribbon.role_binding_entity(org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,role,scope_info_scope_type,scope_info_scope_id) 
+// SELECT org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,id,'ORGANIZATION','{95051ea1-c8f6-4485-a407-f5b19c3245bc}'FROM user_entity;
+
+
+@Entity()
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
 export class CredentialEntity extends MyBaseEntity {
     @Column({ type: 'enum', enum: CredentialType })
     credentialType!: CredentialType;
@@ -510,7 +563,7 @@ export enum AIModelPricingUnit {
     USD_1M_CHARS_PER_SECOND = 'USD/1MCHARS/sec', // 1M文字あたりの価格
 }
 @Entity()
-@Index(['tenantKey', 'modelId'])
+@Index(['orgKey', 'modelId'])
 export class AIModelPricingEntity extends MyBaseEntity {
     @Column({ type: 'uuid' })
     modelId!: string; // ModelのIDを参照する
@@ -529,8 +582,36 @@ export class AIModelPricingEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['tenantKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
-@Index(['tenantKey', 'modelId', 'scopeInfo.scopeType', 'scopeInfo.scopeId']) // モデル検索に備える
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
+@Index(['orgKey', 'provider']) // プロバイダ検索に備える
+export class AIProviderEntity extends MyBaseEntity {
+    @Column({ type: 'enum', enum: AIProviderType })
+    provider!: AIProviderType;
+
+    @Column(type => ScopeInfo)
+    scopeInfo!: ScopeInfo;
+
+    @Column()
+    label!: string;
+
+    @Column({ type: 'jsonb', nullable: true })
+    metadata?: CredentialMetadata;
+
+    // @Column({ type: 'timestamptz', nullable: true })
+    // validFrom?: Date; // 有効開始日
+    // @Column({ type: 'timestamptz', nullable: true })
+    // validTo?: Date; // 有効終了日
+    // @Column({ type: 'jsonb', nullable: true })
+    // credentialMetadata?: CredentialMetadata; // 認証情報のメタデータ
+
+    @Column({ default: true })
+    isActive!: boolean;
+}
+
+
+@Entity()
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
+@Index(['orgKey', 'modelId', 'scopeInfo.scopeType', 'scopeInfo.scopeId']) // モデル検索に備える
 export class AIModelOverrideEntity extends MyBaseEntity {
 
     @Column({ type: 'uuid' })
@@ -559,7 +640,7 @@ export class AIModelOverrideEntity extends MyBaseEntity {
 
 
 @Entity()
-@Index(['provider', 'providerModelId'], { unique: true })
+@Index(['orgKey', 'provider', 'providerModelId'], { unique: true })
 export class AIModelEntity extends MyBaseEntity {
 
     @Column({ type: 'enum', enum: AIProviderType })
@@ -645,11 +726,10 @@ export class AIModelEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['provider', 'alias'], { unique: true })
+@Index(['orgKey', 'provider', 'alias'], { unique: true })
 export class AIModelAlias extends MyBaseEntity {
 
     @Column({ type: 'uuid' })
-    @Index()
     modelId!: string;
 
     @Column({ type: 'enum', enum: AIProviderType })
