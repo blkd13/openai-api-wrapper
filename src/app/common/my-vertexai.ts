@@ -327,6 +327,10 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: 
         (req.generationConfig as any).thinking_config = { thinking_budget: 0 };
     } else if (args.model === 'gemini-2.5-flash-thinking-preview-04-17') {
         args.model = 'gemini-2.5-flash-preview-04-17';
+    } else if (args.model === 'gemini-2.5-flash-preview-05-20') {
+        (req.generationConfig as any).thinking_config = { thinking_budget: 0 };
+    } else if (args.model === 'gemini-2.5-flash-thinking-preview-05-20') {
+        args.model = 'gemini-2.5-flash-preview-05-20';
     }
 
     // コンテンツキャッシュ
