@@ -20,6 +20,9 @@ import { ds } from '../db.js';
 import { OAuthAccountEntity } from '../entity/auth.entity.js';
 import { getAxios, getPuppeteer } from '../../common/http-client.js';
 import { Browser } from 'puppeteer';
+import createDOMPurify from 'dompurify';
+import { JSDOM } from 'jsdom';
+import { uploadFiles } from '../controllers/file-manager.js';
 
 
 const turndownService = new TurndownService();
@@ -28,7 +31,66 @@ turndownService.remove(['script', 'style']); // 特定のHTML要素を削除
 // 待機用のヘルパー関数
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function fetchRenderedText(browser: Browser, url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML'): Promise<{ title: string, favicon: string, body: string }> {
+const window = new JSDOM('').window;
+const DOMPurify = createDOMPurify(window);
+
+export function sanitizeHTML(dirty: string): string {
+    return DOMPurify.sanitize(dirty, {
+        USE_PROFILES: { html: true },
+    });
+}
+
+export async function isPdfUrl(url: string): Promise<boolean> {
+    try {
+        const res = await fetch(url, { method: 'HEAD' });
+        const type = res.headers.get('content-type') || '';
+        if (type.toLowerCase().includes('application/pdf')) return true;
+    } catch (_) { }
+
+    // fallback: check file signature
+    try {
+        const res = await fetch(url);
+        const buffer = await res.arrayBuffer();
+        const signature = new Uint8Array(buffer.slice(0, 4));
+        return signature[0] === 0x25 && signature[1] === 0x50 && signature[2] === 0x44 && signature[3] === 0x46; // %PDF
+    } catch (_) {
+        return false;
+    }
+}
+
+/**
+ * PDFをダウンロードしてBufferで返す
+ */
+export async function downloadPdfAsBufferWithFilename(url: string): Promise<{ buffer: Buffer; filename: string | null }> {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch PDF: ${res.statusText}`);
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    const contentDisposition = res.headers.get('content-disposition');
+    const filename = extractFilenameFromContentDisposition(contentDisposition);
+
+    return { buffer, filename };
+}
+
+function extractFilenameFromContentDisposition(header: string | null): string | null {
+    if (!header) return null;
+    const match = header.match(/filename\*?=(?:UTF-8''|")?([^";\n]+)/i);
+    if (match && match[1]) {
+        return decodeURIComponent(match[1]);
+    }
+    return null;
+}
+
+/**
+ * Buffer → data: URL（base64）
+ */
+export function bufferToDataUrl(buffer: Buffer, mimeType = 'application/pdf'): string {
+    const base64 = buffer.toString('base64');
+    return `data:${mimeType};base64,${base64}`;
+}
+
+async function fetchRenderedText(browser: Browser, url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML'): Promise<{ type: 'TEXT' | 'MARKDOWN' | 'HTML' | 'PDF' | 'ERROR', title: string, favicon: string, body: string }> {
     try {
         console.log(`puppeteer url=${url}`);
         const page = await browser.newPage();
@@ -59,6 +121,12 @@ async function fetchRenderedText(browser: Browser, url: string, loadContentType:
         // page.setDefaultNavigationTimeout(60000); の代わりに
         try {
             // ページに移動し、ネットワークがアイドル状態になるまで待機
+            if (await isPdfUrl(url)) {
+                console.log(`[PDF] ${url}`);
+                const pdfObject = await downloadPdfAsBufferWithFilename(url);
+                const dataUrl = bufferToDataUrl(pdfObject.buffer, 'application/pdf');
+                return { type: 'PDF', title: pdfObject.filename || '', body: dataUrl, favicon: '' };
+            } else { }
             await page.goto(url, {
                 waitUntil: 'networkidle2',
                 timeout: 60000 // タイムアウトを60秒に設定
@@ -97,7 +165,7 @@ async function fetchRenderedText(browser: Browser, url: string, loadContentType:
             }
 
             // ページのテキストを取得
-            let result: { title: string, body: string, favicon: string };
+            let result: { type: 'TEXT' | 'HTML' | 'MARKDOWN', title: string, body: string, favicon: string };
 
             // コンテンツの読み込みタイプを設定（デフォルトは'TEXT'）
             ['TEXT', 'HTML', 'MARKDOWN'].includes((loadContentType || '').toUpperCase()) ? (loadContentType = loadContentType.toUpperCase() as any) : (loadContentType = 'TEXT');
@@ -105,10 +173,10 @@ async function fetchRenderedText(browser: Browser, url: string, loadContentType:
                 result = await page.evaluate(() => {
                     try {
                         const link = document.querySelector('link[rel~="icon"]') as HTMLLinkElement | null;
-                        return { title: document.title, body: document.body.innerText, favicon: link ? link.href : '' };
+                        return { type: loadContentType, title: document.title, body: document.body.innerText, favicon: link ? link.href : '' };
                     } catch (error) {
                         console.error('Error while extracting text content:', error);
-                        return { title: '', body: '', favicon: '' };
+                        return { type: loadContentType, title: '', body: '', favicon: '' };
                     }
                 });
             } else {
@@ -118,13 +186,14 @@ async function fetchRenderedText(browser: Browser, url: string, loadContentType:
                         return { title: document.title, body: document.documentElement.outerHTML, favicon: link ? link.href : '' };
                     } catch (error) {
                         console.error('Error while extracting HTML content:', error);
-                        return { title: '', body: '', favicon: '' };
+                        return { type: 'ERROR', title: '', body: '', favicon: '' };
                     }
                 });
                 if (loadContentType.toUpperCase() === 'HTML') {
-                    result = { title: html.title, body: html.body, favicon: html.favicon };
+                    result = { type: loadContentType, title: html.title, body: html.body, favicon: html.favicon };
                 } else {
                     result = {
+                        type: loadContentType,
                         title: html.title,
                         body: turndownService.turndown(html.body),
                         favicon: html.favicon,
@@ -162,7 +231,7 @@ export function commonFunctionDefinitions(
 ): MyToolType[] {
     return [
         {
-            info: { group: 'web', isActive: true, isInteractive: false, label: 'Web検索', },
+            info: { group: 'web', isActive: false, isInteractive: false, label: 'Web検索', },
             definition: {
                 type: 'function', function: {
                     name: 'web_search',
@@ -236,6 +305,148 @@ export function commonFunctionDefinitions(
                     await browser.close();
                     return res;
                 }
+            },
+        },
+        {
+            info: { group: 'web', isActive: true, isInteractive: false, label: 'Web検索エージェント', },
+            definition: {
+                type: 'function', function: {
+                    name: 'web_search_and_get_summary',
+                    description: `web検索して対象ページのサマリを取得する`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            query: { type: 'string', description: '検索クエリ' },
+                            num: { type: 'number', description: '検索結果の最大数', default: 30 },
+                            loadContentType: { type: 'string', description: `コンテンツの読込タイプ（'SNIPPET':検索にヒットしたスニペットのみ。情報が少ないので速い。/'BODY':コンテンツの要約を取得する）`, default: 'SNIPPET' },
+                            userPrompt: { type: 'string', description: 'htmlをAIに処理させる際のプロンプト。「情報の粒度・対象範囲」等を必要に応じて指定してください。', default: 'テキストに変換してください。文量が多すぎる場合は文意を損なわない程度に要約してもよいです。' },
+                        },
+                        required: ['query']
+                    }
+                }
+            },
+            handler: async (args: { query: string, num?: number, loadContentType: 'SNIPPET' | 'BODY', userPrompt?: string }): Promise<unknown[]> => {
+                const { query, num = 30, loadContentType = 'SNIPPET', userPrompt = 'テキストに変換してください。文量が多すぎる場合は文意を損なわない程度に要約してもよいです。' } = args;
+                const GOOGLE_CUSTOM_SEARCH_API_KEY = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY || '';
+                const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID || '';
+
+                // 10件ずつ分割してリクエストするための処理
+                const maxResultsPerRequest = 10; // Google APIの制限
+                const totalRequests = Math.min(Math.ceil(num / maxResultsPerRequest), 100); // 最大100リクエストまで
+                let allItems: any[] = [];
+
+                for (let i = 0; i < totalRequests; i++) {
+                    // 何件目から取得するか (1-indexed)
+                    const start = i * maxResultsPerRequest + 1;
+
+                    // 残りの取得件数が10件未満の場合は残り件数だけリクエスト
+                    const currentNum = Math.min(maxResultsPerRequest, num - (i * maxResultsPerRequest));
+
+                    if (currentNum <= 0) break; // 既に必要な件数を取得済みの場合
+
+                    const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(GOOGLE_CUSTOM_SEARCH_API_KEY)}&cx=${encodeURIComponent(GOOGLE_CSE_ID)}&q=${encodeURIComponent(query)}&num=${currentNum}&start=${start}`;
+                    console.log(`Google Custom Search API URL (${i + 1}/${totalRequests}): ${url}`);
+
+                    try {
+                        const response = await (await getAxios(url)).get<CustomSearchResponse>(url);
+                        const items = response.data.items || [];
+                        allItems = [...allItems, ...items];
+
+                        // 検索結果が期待より少ない場合は早期終了
+                        if (!items.length || items.length < currentNum) {
+                            console.log(`Received fewer results than requested (${items.length}/${currentNum}). Stopping pagination.`);
+                            break;
+                        }
+                    } catch (error) {
+                        console.error(`Error fetching search results for batch ${i + 1}:`, error);
+                        break; // エラーが発生した場合はループを中断
+                    }
+                }
+
+                // 指定された件数に制限
+                allItems = allItems.slice(0, num);
+
+                if (loadContentType === 'SNIPPET' || loadContentType.toUpperCase() === 'SNIPPET') {
+                    return allItems.map(item => ({ title: item.title, snippet: item.snippet, link: item.link, }));
+                } else { }
+
+                const browser = await getPuppeteer();
+                const res = await Promise.all(allItems.map(async (item, index) => {
+                    try {
+                        const html = await fetchRenderedText(browser, item.link, 'HTML');
+
+                        const sanitizedBody = sanitizeHTML(html.body);
+
+                        const systemPrompt = 'アシスタントAI';
+                        const model = 'gemini-2.5-flash-preview-05-20';
+
+                        const inDto = JSON.parse(JSON.stringify(obj.inDto)) as MessageArgsSet; // deep copy
+                        inDto.args.model = model || inDto.args.model; // modelが指定されていない場合は元のモデルを使う
+                        // console.log(`call_ai: model=${inDto.args.model}, type=${html.type} ${item.title} ${item.link}`);
+                        inDto.args.messages = [
+                            { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
+                            {
+                                role: 'user', content: [
+                                    { type: 'text', text: userPrompt },
+                                    html.type === 'PDF'
+                                        ? { type: 'image_url', image_url: { url: html.body } }
+                                        : { type: 'text', text: `\`\`\`html ${item.link}\n${sanitizedBody}\n\`\`\`` },
+                                ],
+                            },
+                        ];
+                        // toolは使わないので空にしておく
+                        delete inDto.args.tool_choice;
+                        delete inDto.args.tools;
+
+                        const aiProvider = providerPrediction(inDto.args.model);
+
+                        // const newLabel = `call_ai-${model}-${index}`;
+                        const newLabel = `${label}-call_ai`;
+
+                        // レスポンス返した後にゆるりとヒストリーを更新しておく。
+                        const history = new PredictHistoryWrapperEntity();
+                        history.orgKey = req.info.user.orgKey;
+                        history.connectionId = connectionId;
+                        history.streamId = streamId;
+                        history.messageId = message.id;
+                        history.label = newLabel;
+                        history.model = inDto.args.model;
+                        history.provider = aiProvider;
+                        history.createdBy = req.info.user.id;
+                        history.updatedBy = req.info.user.id;
+                        history.createdIp = req.info.ip;
+                        history.updatedIp = req.info.ip;
+                        await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+
+                        return new Promise((resolve, reject) => {
+                            let text = '';
+                            // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
+                            aiApi.chatCompletionObservableStream(
+                                inDto.args, { label: newLabel }, aiProvider,
+                            ).pipe(
+                                map(res => res.choices.map(choice => choice.delta.content).join('')),
+                                toArray(),
+                                map(res => res.join('')),
+                            ).subscribe({
+                                next: next => {
+                                    text += next;
+                                },
+                                error: error => {
+                                    reject(error);
+                                },
+                                complete: () => {
+                                    resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: text });
+                                },
+                            });;
+                        });
+                    } catch (error) {
+                        console.log('fetchRenderedTextError');
+                        console.error(error);
+                        return { title: item.title, snippet: item.snippet, link: item.link, favicon: '', body: Utils.errorFormat(error) };
+                    }
+                }));
+                await browser.close();
+                return res;
             },
         },
         {

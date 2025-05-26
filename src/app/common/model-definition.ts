@@ -8,6 +8,14 @@ export const VISION_MODELS = [
     'gemini-1.5-flash-001', 'gemini-1.5-pro-001', 'gemini-1.5-flash-002', 'gemini-1.5-pro-002', 'gemini-1.0-pro-vision-001', 'gemini-1.5-flash', 'gemini-1.5-pro',
     'gemini-flash-experimental', 'gemini-pro-experimental', 'gemini-1.0-pro-vision',
     'claude-3-haiku-20240307', 'claude-3-5-sonnet-20240229', 'claude-3-opus-20240229',
+    'claude-sonnet-4-20250514',
+    'claude-opus-4-20250514',
+    'claude-sonnet-4-thinking-20250514',
+    'claude-opus-4-thinking-20250514',
+    'claude-sonnet-4@20250514',
+    'claude-opus-4@20250514',
+    'claude-sonnet-4-thinking@20250514',
+    'claude-opus-4-thinking@20250514',
     'claude-3-5-sonnet-20240620', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet@20240620', 'claude-3-5-sonnet-v2@20241022',
     'o1-preview', 'o1', 'o1-pro', 'o3-mini', 'o3', 'o3-high', 'o4-mini', 'o4-mini-high', 'chatgpt-4o-latest',
     'gemini-2.0-flash-001', 'gemini-2.0-pro-exp-02-05', 'gemini-2.0-flash-lite-preview-02-05', 'gemini-2.0-flash-lite-001',
@@ -43,6 +51,7 @@ export type GPTModels = TiktokenModel
     | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b'
     | 'mistral-small-2312' | 'mistral-small' | 'mistral-small-2402' | 'mistral-small-latest' | 'mistral-medium-latest' | 'mistral-medium-2312' | 'mistral-medium' | 'mistral-large-latest' | 'mistral-large-2402' | 'mistral-embed'
     | 'claude-instant-1.2' | 'claude-2' | 'claude-2.1' | 'claude-3-haiku-20240307' | 'claude-3-5-sonnet-20240229' | 'claude-3-opus-20240229' | 'claude-3-5-sonnet-20240620' | 'claude-3-5-sonnet-20241022' | 'claude-3-5-sonnet@20240620' | 'claude-3-5-sonnet-v2@20241022' | 'claude-3-7-sonnet-20250219' | 'claude-3-7-sonnet-thinking-20250219' | 'claude-3-7-sonnet' | 'claude-3-7-sonnet-thinking@20250219'
+    | 'claude-sonnet-4-20250514' | 'claude-opus-4-20250514' | 'claude-sonnet-4-thinking-20250514' | 'claude-opus-4-thinking-20250514' | 'claude-sonnet-4@20250514' | 'claude-opus-4@20250514' | 'claude-sonnet-4-thinking@20250514' | 'claude-opus-4-thinking@20250514'
     | 'deepseek-coder' | 'deepseek-chat'
     | 'command-a-03-2025' | 'command-r' | 'command-r-plus' | 'c4ai-aya-expanse-32b' | 'c4ai-aya-expanse-8b' | 'c4ai-aya-vision-32b' | 'c4ai-aya-vision-8b'
     | 'o4-mini' | 'o3' | 'o3-high' | 'o4-mini-high' | 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-4.1-nano' | 'gpt-4.5-preview' | 'chatgpt-4o-latest'
@@ -80,6 +89,8 @@ export const COST_TABLE: { [key: string]: { prompt: number, completion: number }
     'cla-35s2': { prompt: 0.00300000, completion: 0.015000, },
     'cla-37sn': { prompt: 0.00300000, completion: 0.015000, },
     'cla-3-op': { prompt: 0.01500000, completion: 0.075000, },
+    'cla-sn4 ': { prompt: 0.00300000, completion: 0.015000, },
+    'cla-op4 ': { prompt: 0.01500000, completion: 0.075000, },
     'g-mxl-87': { prompt: 0.00027000, completion: 0.000270, },
     'g-lm2-70': { prompt: 0.00070000, completion: 0.000800, },
     'msl-7b  ': { prompt: 0.00025000, completion: 0.000250, },
@@ -202,6 +213,21 @@ export const SHORT_NAME: { [key: string]: string } = {
     'claude-3-opus-20240229': 'cla-3-op',
     'claude-3-5-sonnet-20240620': 'cla-35sn',
     'claude-3-5-sonnet-20241022': 'cla-35sn',
+    'claude-3-5-sonnet@20240620': 'cla-35sn',
+    'claude-3-5-sonnet-v2@20241022': 'cla-35s2',
+    'claude-3-7-sonnet-20250219': 'cla-37sn',
+    'claude-3-7-sonnet-thinking-20250219': 'cla-37sn',
+    'claude-3-7-sonnet@20250219': 'cla-37sn',
+    'claude-3-7-sonnet-thinking@20250219': 'cla-37sn',
+    'claude-3-7-sonnet': 'cla-37sn',
+    'claude-sonnet-4-20250514': 'cla-sn4 ',
+    'claude-opus-4-20250514': 'cla-op4 ',
+    'claude-sonnet-4-thinking-20250514': 'cla-sn4 ',
+    'claude-opus-4-thinking-20250514': 'cla-op4 ',
+    'claude-sonnet-4@20250514': 'cla-sn4 ',
+    'claude-opus-4@20250514': 'cla-op4 ',
+    'claude-sonnet-4-thinking@20250514': 'cla-sn4 ',
+    'claude-opus-4-thinking@20250514': 'cla-op4 ',
     'mistral-tiny-2312': 'msl-tiny',
     'mistral-tiny': 'msl-tiny',
     'open-mixtral-8x7b': 'msl-87b ',
@@ -246,13 +272,6 @@ export const SHORT_NAME: { [key: string]: string } = {
     'gemini-exp-1206': 'gem-ex12',
     'gemini-1.0-pro': 'gem-10pr',
     'gemini-1.0-pro-vision': 'gem-10pv',
-    'claude-3-5-sonnet@20240620': 'cla-35sn',
-    'claude-3-5-sonnet-v2@20241022': 'cla-35s2',
-    'claude-3-7-sonnet-20250219': 'cla-37sn',
-    'claude-3-7-sonnet-thinking-20250219': 'cla-37sn',
-    'claude-3-7-sonnet@20250219': 'cla-37sn',
-    'claude-3-7-sonnet-thinking@20250219': 'cla-37sn',
-    'claude-3-7-sonnet': 'cla-37sn',
     // cohere
     'command-a-03-2025': 'com-a   ',
     'command-r': 'com-r   ',
@@ -348,6 +367,8 @@ export const currentRatelimit: { [key: string]: Ratelimit } = {
     'cla-35s2': { maxTokens: 8192, limitRequests: 5, limitTokens: 100000, remainingRequests: 50, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
     'cla-37sn': { maxTokens: 64000, limitRequests: 5, limitTokens: 200000, remainingRequests: 50, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
     'cla-3-op': { maxTokens: 4096, limitRequests: 5, limitTokens: 100000, remainingRequests: 50, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+    'cla-sn4 ': { maxTokens: 64000, limitRequests: 5, limitTokens: 200000, remainingRequests: 50, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
+    'cla-op4 ': { maxTokens: 32000, limitRequests: 5, limitTokens: 200000, remainingRequests: 50, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },
 
     // deepseek
     'dps-code': { maxTokens: 4096, limitRequests: 5, limitTokens: 50000, remainingRequests: 10, remainingTokens: 50000, resetRequests: '1000ms', resetTokens: '60s', },

@@ -194,7 +194,7 @@ export const genApiToken = [
             // TODO でもよく考えたらAPIはAuthGenerationは無視したい。revoke管理は別途作り込む。
             // DBのユーザーEntityを持ってきてauthGeneartionを持ってくる
             // const userFromDb = await manager.getRepository(UserEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, id: req.info.user.id } });
-            const userFromDb = await getUserAndRoleList({ orgKey: req.info.user.orgKey, userId: req.info.user.id });
+            const userFromDb = await getUserAndRoleList({ orgKey: req.info.user.orgKey, id: req.info.user.id });
             if (!userFromDb || !userFromDb.user) {
                 throw new Error('ユーザー情報が取得できません。');
             } else { }
@@ -869,7 +869,7 @@ export const userLoginOAuth2Callback = [
     }
 ];
 
-const getUserAndRoleList = async (_where: { orgKey: string, userId: string } | { orgKey: string, email: string }, manager?: EntityManager): Promise<{ user: UserEntity | null, roleList: UserRole[] }> => {
+const getUserAndRoleList = async (_where: { orgKey: string, id: string } | { orgKey: string, email: string }, manager?: EntityManager): Promise<{ user: UserEntity | null, roleList: UserRole[] }> => {
     // const user = await (manager || ds).getRepository(UserEntity).findOne({ where, relations: ['roleBindings'] });
     const where = { ..._where, status: UserStatus.Active }; // activeユーザーじゃないと使えない
     const user = await (manager || ds).getRepository(UserEntity).findOne({ where });
@@ -920,7 +920,7 @@ export const oAuthEmailAuth = [
                         oAuthAccount.updatedIp = req.info.ip;
                         await manager.getRepository(OAuthAccountEntity).save(oAuthAccount);
                         // const user = await manager.getRepository(UserEntity).findOneOrFail({ where: { orgKey: req.info.invite.orgKey, id: userId } });
-                        const { user, roleList } = await getUserAndRoleList({ orgKey: req.info.invite.orgKey, userId }, manager);
+                        const { user, roleList } = await getUserAndRoleList({ orgKey: req.info.invite.orgKey, id: userId }, manager);
                         if (user) { } else { throw new Error('ユーザーが見つかりません。'); }
 
                         // トークン発行
@@ -1445,23 +1445,23 @@ export const getDepartment = [
         const memberMap = memberList.reduce((map, member) => { map[member.name] = member; return map; }, {} as { [key: string]: DepartmentMemberEntity });
 
         const totalCosts = await ds.query(`
-            SELECT TO_CHAR(created_at,'YYYY-MM') as yyyy_mm, created_by, model, sum(cost) as cost, sum(req_token) as req_token, sum(res_token) as res_token, COUNT(*)  
+            SELECT TO_CHAR(created_at,'YYYY-MM') as yyyy_mm, name, model, sum(cost) as cost, sum(req_token) as req_token, sum(res_token) as res_token, COUNT(*)  
             FROM predict_history_view 
-            GROUP BY created_by, model, ROLLUP(yyyy_mm)
-            ORDER BY created_by, model, yyyy_mm;
+            GROUP BY name, model, ROLLUP(yyyy_mm)
+            ORDER BY name, model, yyyy_mm;
           `);
-        type History = { created_by: string, yyyy_mm: string, model: string, cost: number, req_token: number, res_token: number };
+        type History = { name: string, yyyy_mm: string, model: string, cost: number, req_token: number, res_token: number };
         type HistorySummaryMap = { [createdBy: string]: { [yyyyMm: string]: { totalCost: number, totalReqToken: number, totalResToken: number, foreignModelReqToken: number, foreignModelResToken: number } } };
         const costMap = totalCosts.reduce((map: HistorySummaryMap, history: History) => {
             // ROLLUPを使っているのでyyyy_mmがnullの場合＝ALLということ。
             history.yyyy_mm = history.yyyy_mm || 'ALL';
-            if (history.created_by in map) {
+            if (history.name in map) {
             } else {
-                map[history.created_by] = {};
+                map[history.name] = {};
             }
-            if (history.created_by in map && history.yyyy_mm in map[history.created_by]) {
+            if (history.name in map && history.yyyy_mm in map[history.name]) {
             } else {
-                map[history.created_by][history.yyyy_mm] = {
+                map[history.name][history.yyyy_mm] = {
                     totalCost: 0,
                     totalReqToken: 0,
                     totalResToken: 0,
@@ -1469,9 +1469,9 @@ export const getDepartment = [
                     foreignModelResToken: 0,
                 };
             }
-            map[history.created_by][history.yyyy_mm].totalCost += Number(history.cost);
-            map[history.created_by][history.yyyy_mm].totalReqToken += Number(history.req_token);
-            map[history.created_by][history.yyyy_mm].totalResToken += Number(history.res_token);
+            map[history.name][history.yyyy_mm].totalCost += Number(history.cost);
+            map[history.name][history.yyyy_mm].totalReqToken += Number(history.req_token);
+            map[history.name][history.yyyy_mm].totalResToken += Number(history.res_token);
             // 海外リージョン
             if ([
                 'meta/llama3-405b-instruct-maas',
@@ -1484,6 +1484,10 @@ export const getDepartment = [
                 'gemini-2.5-pro',
                 'gemini-2.5-pro-exp',
                 'gemini-2.5-pro-preview',
+                'gemini-2.5-flash-thinking-preview-04-17',
+                'gemini-2.5-flash-thinking-preview-05-20',
+                'gemini-2.5-flash-preview-04-17',
+                'gemini-2.5-flash-preview-05-20',
                 'gemini-2.5-flash',
                 'gemini-2.5-pro-preview-05-06',
                 'gemini-2.0-flash',
@@ -1498,8 +1502,8 @@ export const getDepartment = [
                 'o3',
                 'o4-mini',
             ].includes(history.model)) {
-                map[history.created_by][history.yyyy_mm].foreignModelReqToken += Number(history.req_token);
-                map[history.created_by][history.yyyy_mm].foreignModelResToken += Number(history.res_token);
+                map[history.name][history.yyyy_mm].foreignModelReqToken += Number(history.req_token);
+                map[history.name][history.yyyy_mm].foreignModelResToken += Number(history.res_token);
             }
             return map;
         }, {} as HistorySummaryMap) as HistorySummaryMap;
@@ -1507,7 +1511,7 @@ export const getDepartment = [
         // 無理矢理userオブジェクトを埋め込む
         memberUserList.forEach(user => {
             (memberMap[user.name || ''] as any).user = { status: user.status, id: user.id, name: user.name, cost: costMap[user.id] };
-            (memberMap[user.name || ''] as any).cost = costMap[user.id];
+            (memberMap[user.name || ''] as any).cost = costMap[user.name || ''];
         });
 
         // 纏める
@@ -1621,11 +1625,12 @@ export const getDepartmentMemberForUser = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const userId = req.info.user.id;
+        const user = await ds.getRepository(UserEntity).findOneByOrFail({ orgKey: req.info.user.orgKey, id: userId, status: UserStatus.Active });
         const departmentMemberList = await ds.getRepository(DepartmentMemberEntity).find({
             select: ['departmentId', 'departmentRole', 'userId', 'name'],
             where: {
                 orgKey: req.info.user.orgKey,
-                userId: userId,
+                name: user.name,
             },
         });
         // 纏める

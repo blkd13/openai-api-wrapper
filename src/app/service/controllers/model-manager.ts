@@ -1,11 +1,209 @@
 import { Request, Response } from 'express';
 import { param, body, query } from 'express-validator';
-import { In, Not } from 'typeorm';
+import { In, Not, Or } from 'typeorm';
 
-import { AIProviderType, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIModelAlias, AIProviderEntity, ScopeType } from '../entity/auth.entity.js';
+import { AIProviderType, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIModelAlias, AIProviderEntity, ScopeType, OrganizationEntity, DivisionEntity, UserEntity, UserStatus, UserRoleType, AIProviderTemplateEntity } from '../entity/auth.entity.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { ds } from '../db.js';
 import { UserRequest } from '../models/info.js';
+
+/**
+ * [GET] AIProvider 一覧取得
+ */
+export const getAIProviderTemplates = [
+    query('provider').optional().isString(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        try {
+            const { provider, scopeType, providerId } = req.query as {
+                provider?: string,
+                scopeType?: string,
+                providerId?: string
+            };
+
+            const where: any = {
+                orgKey: req.info.user.orgKey,
+                isActive: true,
+            };
+
+            if (providerId) where.id = providerId;
+            if (provider) where.provider = provider;
+            if (scopeType) where['scopeInfo.scopeType'] = scopeType;
+
+            const providers = await ds.getRepository(AIProviderTemplateEntity).find({
+                where,
+                order: { createdAt: 'DESC' }
+            });
+
+            res.status(200).json(providers);
+        } catch (error) {
+            console.error('Error fetching AIProviders:', error);
+            res.status(500).json({ message: 'AIProvider一覧の取得に失敗しました' });
+        }
+    }
+];
+
+/**
+ * [POST/PUT] AIProvider 作成または更新 (Upsert)
+ */
+export const upsertAIProviderTemplate = [
+    param('providerId').optional({ nullable: true }).isUUID(),
+    body('provider').isIn(Object.values(AIProviderType)),
+    body('label').isString().notEmpty(),
+    body('scopeInfo.scopeType').isIn(Object.values(ScopeType)),
+    // body('scopeInfo.scopeId').isString().notEmpty(),
+    body('metadata').optional({ nullable: true }),
+    body('isActive').isBoolean(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        try {
+            const repo = ds.getRepository(AIProviderTemplateEntity);
+            const bodyData = req.body as AIProviderTemplateEntity;
+            console.dir('upsertAIProvider bodyData:');
+            console.dir(bodyData);
+            const { providerId } = req.params;
+            let entity: AIProviderTemplateEntity | null = null;
+            let isNew = true;
+
+            // 既存レコードチェック
+            if (providerId) {
+                entity = await repo.findOneBy({
+                    orgKey: req.info.user.orgKey,
+                    id: providerId,
+                });
+                if (entity) isNew = false;
+            } else { }
+
+            let scopeId;
+            if (bodyData.scopeInfo.scopeType === ScopeType.ORGANIZATION) {
+                const org = await ds.getRepository(OrganizationEntity).findOneBy({
+                    orgKey: req.info.user.orgKey,
+                });
+                if (!org) {
+                    return res.status(400).json({ message: '指定された組織が見つかりません' });
+                }
+                scopeId = org.id;
+            } else if (bodyData.scopeInfo.scopeType === ScopeType.DIVISION) {
+                const divisionRoles = req.info.user.roleList.filter(role => role.scopeInfo.scopeType === ScopeType.DIVISION && [UserRoleType.Admin, UserRoleType.Maintainer].includes(role.role));
+                const division = await ds.getRepository(DivisionEntity).findOneBy({
+                    orgKey: req.info.user.orgKey,
+                });
+
+                if (!division) {
+                    return res.status(400).json({ message: '指定された部門が見つかりません' });
+                }
+                scopeId = division.id;
+            } else if (bodyData.scopeInfo.scopeType === ScopeType.USER) {
+                scopeId = req.info.user.id;
+            }
+
+            // 一意制約チェック: organization + scopeInfo + provider
+            const conflict = await repo.findOneBy({
+                provider: bodyData.provider,
+                orgKey: req.info.user.orgKey,
+                scopeInfo: {
+                    scopeType: bodyData.scopeInfo.scopeType,
+                    scopeId: scopeId,
+                },
+                ...(isNew ? {} : { id: Not(providerId) })
+            });
+
+            if (conflict) {
+                return res.status(409).json({
+                    message: `同じスコープと${bodyData.provider}のプロバイダーが既に存在します`
+                });
+            } else { }
+
+            if (isNew) {
+                // 新規作成
+                entity = repo.create({
+                    provider: bodyData.provider,
+                    label: bodyData.label,
+                    scopeInfo: {
+                        scopeType: bodyData.scopeInfo.scopeType,
+                        scopeId: scopeId,
+                    },
+                    metadata: bodyData.metadata,
+                    isActive: bodyData.isActive ?? true,
+                });
+            } else {
+                // 更新 - 必須フィールド
+                Object.assign(entity!, {
+                    provider: bodyData.provider,
+                    label: bodyData.label,
+                    scopeInfo: {
+                        scopeType: bodyData.scopeInfo.scopeType,
+                        scopeId: scopeId,
+                    },
+                    isActive: bodyData.isActive,
+                });
+            }
+
+            // オプショナルフィールドの設定
+            if ('metadata' in bodyData) entity!.metadata = bodyData.metadata;
+
+            // 共通フィールドの設定
+            entity!.orgKey = req.info.user.orgKey;
+            entity!.updatedBy = req.info.user.id;
+            entity!.updatedIp = req.info.ip;
+
+            // createdBy, createdAtは新規作成時のみ設定
+            if (isNew) {
+                entity!.createdBy = req.info.user.id;
+                entity!.createdIp = req.info.ip;
+            }
+
+            const saved = await repo.save(entity!);
+            res.status(isNew ? 201 : 200).json(saved);
+        } catch (error) {
+            console.error('Error upserting AIProvider:', error);
+            res.status(500).json({ message: 'AIProviderの保存に失敗しました' });
+        }
+    }
+];
+
+/**
+ * [DELETE] AIProvider 論理削除
+ */
+export const deleteAIProviderTemplate = [
+    param('providerId').isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        try {
+            const { providerId } = req.params;
+            const repo = ds.getRepository(AIProviderTemplateEntity);
+            const entity = await repo.findOne({
+                where: {
+                    id: providerId,
+                    orgKey: req.info.user.orgKey
+                }
+            });
+
+            if (!entity) {
+                return res.status(404).json({ message: 'AIProviderが見つかりません' });
+            }
+
+            // 論理削除
+            entity.isActive = false;
+            entity.updatedBy = req.info.user.id;
+            entity.updatedIp = req.info.ip;
+            await repo.save(entity);
+
+            res.status(204).send();
+        } catch (error) {
+            console.error('Error deleting AIProvider:', error);
+            res.status(500).json({ message: 'AIProviderの削除に失敗しました' });
+        }
+    }
+];
+
+
+
+
+
 
 /**
  * [GET] AIProvider 一覧取得
@@ -52,7 +250,7 @@ export const upsertAIProvider = [
     body('provider').isIn(Object.values(AIProviderType)),
     body('label').isString().notEmpty(),
     body('scopeInfo.scopeType').isIn(Object.values(ScopeType)),
-    body('scopeInfo.scopeId').isString().notEmpty(),
+    // body('scopeInfo.scopeId').isString().notEmpty(),
     body('metadata').optional({ nullable: true }),
     body('isActive').isBoolean(),
     validationErrorHandler,
@@ -67,33 +265,52 @@ export const upsertAIProvider = [
 
             // 既存レコードチェック
             if (providerId) {
-                entity = await repo.findOne({
-                    where: {
-                        id: providerId,
-                        orgKey: req.info.user.orgKey
-                    }
+                entity = await repo.findOneBy({
+                    orgKey: req.info.user.orgKey,
+                    id: providerId,
                 });
                 if (entity) isNew = false;
+            } else { }
+
+            let scopeId;
+            if (bodyData.scopeInfo.scopeType === ScopeType.ORGANIZATION) {
+                const org = await ds.getRepository(OrganizationEntity).findOneBy({
+                    orgKey: req.info.user.orgKey,
+                });
+                if (!org) {
+                    return res.status(400).json({ message: '指定された組織が見つかりません' });
+                }
+                scopeId = org.id;
+            } else if (bodyData.scopeInfo.scopeType === ScopeType.DIVISION) {
+                const divisionRoles = req.info.user.roleList.filter(role => role.scopeInfo.scopeType === ScopeType.DIVISION && [UserRoleType.Admin, UserRoleType.Maintainer].includes(role.role));
+                const division = await ds.getRepository(DivisionEntity).findOneBy({
+                    orgKey: req.info.user.orgKey,
+                });
+
+                if (!division) {
+                    return res.status(400).json({ message: '指定された部門が見つかりません' });
+                }
+                scopeId = division.id;
+            } else if (bodyData.scopeInfo.scopeType === ScopeType.USER) {
+                scopeId = req.info.user.id;
             }
 
             // 一意制約チェック: organization + scopeInfo + provider
-            const conflict = await repo.findOne({
-                where: {
-                    provider: bodyData.provider,
-                    orgKey: req.info.user.orgKey,
-                    scopeInfo: {
-                        scopeType: bodyData.scopeInfo.scopeType,
-                        scopeId: bodyData.scopeInfo.scopeId
-                    },
-                    ...(isNew ? {} : { id: Not(providerId) })
-                }
+            const conflict = await repo.findOneBy({
+                provider: bodyData.provider,
+                orgKey: req.info.user.orgKey,
+                scopeInfo: {
+                    scopeType: bodyData.scopeInfo.scopeType,
+                    scopeId: scopeId,
+                },
+                ...(isNew ? {} : { id: Not(providerId) })
             });
 
             if (conflict) {
                 return res.status(409).json({
                     message: `同じスコープと${bodyData.provider}のプロバイダーが既に存在します`
                 });
-            }
+            } else { }
 
             if (isNew) {
                 // 新規作成
@@ -102,7 +319,7 @@ export const upsertAIProvider = [
                     label: bodyData.label,
                     scopeInfo: {
                         scopeType: bodyData.scopeInfo.scopeType,
-                        scopeId: bodyData.scopeInfo.scopeId
+                        scopeId: scopeId,
                     },
                     metadata: bodyData.metadata,
                     isActive: bodyData.isActive ?? true,
@@ -114,7 +331,7 @@ export const upsertAIProvider = [
                     label: bodyData.label,
                     scopeInfo: {
                         scopeType: bodyData.scopeInfo.scopeType,
-                        scopeId: bodyData.scopeInfo.scopeId
+                        scopeId: scopeId,
                     },
                     isActive: bodyData.isActive,
                 });
@@ -178,6 +395,11 @@ export const deleteAIProvider = [
         }
     }
 ];
+
+
+
+
+
 
 /**
  * [GET] BaseModel 一覧取得

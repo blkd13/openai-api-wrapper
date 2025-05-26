@@ -139,7 +139,7 @@ export const getOAuthApiProxy = [
                     proxyReq: async (proxyReq, req) => {
                         if (providerType === 'mattermost') {
                             proxyReq.setHeader('Cookie', `MMAUTHTOKEN=${MMAUTHTOKEN}`);
-                            console.log('mattermost-proxyReq', proxyReq.path, proxyReq.getHeader('Cookie'));
+                            // console.log('mattermost-proxyReq', proxyReq.path, proxyReq.getHeader('Cookie'));
                         } else {
                             // mattermostはAuthorizationを使わずにブラウザのCookieを使う
                             proxyReq.setHeader('Authorization', `Bearer ${accessToken}`);

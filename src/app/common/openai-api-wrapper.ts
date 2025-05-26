@@ -1148,7 +1148,7 @@ class RunBit {
                             const reader = response.data.toReadableStream().getReader();
 
                             let tokenBuilder: string = '';
-
+                            let isThinking = false;
                             const _that = this;
 
                             // ストリームからデータを読み取る非同期関数
@@ -1179,12 +1179,25 @@ class RunBit {
                                     // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
                                     // トークン数をカウント
                                     tokenCount.completion_tokens++;
-                                    const text = JSON.parse(content).choices[0].delta.content || '';
-                                    tokenBuilder += text;
-                                    tokenCount.tokenBuilder = tokenBuilder;
+                                    const obj = JSON.parse(content) as ChatCompletionChunk;
+                                    const text = obj.choices[0].delta.content || '';
 
+                                    // <think></think> タグがある場合は、isThinkingをtrueにする。
+                                    if (!tokenBuilder && text.trim() === '<think>') {
+                                        isThinking = true;
+                                        obj.choices.forEach(choice => delete choice.delta.content);
+                                    } else if (isThinking) {
+                                        if (text.trim() === '</think>') {
+                                            isThinking = false;
+                                        } else {
+                                            obj.choices.forEach(choice => {
+                                                delete choice.delta.content;
+                                                (choice.delta as any).thinking = text;
+                                            });
+                                        }
+                                    }
                                     // streamHandlerを呼び出す
-                                    observer.next(JSON.parse(content));
+                                    observer.next(obj);
                                 }
                                 return;
                             }
@@ -2631,6 +2644,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                         // テキストがあるか、画像があるか、どちらかがあればOKとする。
                         if (content.type === 'text') {
                             // テキストの場合は空白文字を削除してから長さが0より大きいかチェックする。
+                            content.text = content.text || '';
                             return content.text.trim().length > 0;
                         } else if (content.type === 'image_url') {
                             // 画像の場合はURLがあるかチェックする。

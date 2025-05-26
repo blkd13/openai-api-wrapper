@@ -515,7 +515,22 @@ export class UserRoleEntity extends MyBaseEntity implements UserRole {
 }
 // INSERT INTO ribbon.role_binding_entity(org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,role,scope_info_scope_type,scope_info_scope_id) 
 // SELECT org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,id,'ORGANIZATION','{95051ea1-c8f6-4485-a407-f5b19c3245bc}'FROM user_entity;
-
+export enum ProviderCategory {
+    AI = 'AI',
+    API = 'API', // APIプロバイダ（GitHub, GitLabなど）
+}
+@Entity()
+@Index(['orgKey', 'providerCategory'])
+export class ProviderCredentialRelationEntity extends MyBaseEntity {
+    @Column({ type: 'uuid' })
+    credentialId!: string; // CredentialEntityのIDを参照
+    @Column({ type: 'uuid' })
+    providerId!: string; // AIProviderEntity/APIProviderEntityのIDを参照
+    @Column({ type: 'enum', enum: ProviderCategory })
+    providerCategory!: ProviderCategory; // AIプロバイダのタイプ
+    @Column({ default: true })
+    isActive!: boolean; // 有効/無効フラグ
+}
 
 @Entity()
 @Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
@@ -584,6 +599,27 @@ export class AIModelPricingEntity extends MyBaseEntity {
 @Entity()
 @Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
 @Index(['orgKey', 'provider']) // プロバイダ検索に備える
+export class AIProviderTemplateEntity extends MyBaseEntity {
+    @Column({ type: 'enum', enum: AIProviderType })
+
+    provider!: AIProviderType;
+
+    @Column(type => ScopeInfo)
+    scopeInfo!: ScopeInfo;
+
+    @Column()
+    label!: string;
+
+    @Column({ type: 'jsonb', nullable: true })
+    metadata?: CredentialMetadata;
+
+    @Column({ default: true })
+    isActive!: boolean;
+}
+
+@Entity()
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
+@Index(['orgKey', 'provider']) // プロバイダ検索に備える
 export class AIProviderEntity extends MyBaseEntity {
     @Column({ type: 'enum', enum: AIProviderType })
     provider!: AIProviderType;
@@ -596,13 +632,6 @@ export class AIProviderEntity extends MyBaseEntity {
 
     @Column({ type: 'jsonb', nullable: true })
     metadata?: CredentialMetadata;
-
-    // @Column({ type: 'timestamptz', nullable: true })
-    // validFrom?: Date; // 有効開始日
-    // @Column({ type: 'timestamptz', nullable: true })
-    // validTo?: Date; // 有効終了日
-    // @Column({ type: 'jsonb', nullable: true })
-    // credentialMetadata?: CredentialMetadata; // 認証情報のメタデータ
 
     @Column({ default: true })
     isActive!: boolean;

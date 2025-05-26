@@ -47,7 +47,7 @@ import * as gitlab from './api/api-gitlab.js';
 import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
 import { registApiKey, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId } from './controllers/tool-call.js';
-import { deleteBaseModel, deleteModelPricing, getBaseModels, getModelPricings, upsertBaseModel, upsertModelPricing } from './controllers/model-manager.js';
+import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, getAIProviders, getAIProviderTemplates, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing } from './controllers/model-manager.js';
 
 // routers/index.ts
 
@@ -250,6 +250,16 @@ authMaintainerRouter.post('/ext-api-provider-template', upsertApiProviderTemplat
 authMaintainerRouter.put('/ext-api-provider-template/:id', upsertApiProviderTemplate); //
 authMaintainerRouter.delete('/ext-api-provider-template/:id', deleteApiProviderTemplate); //
 
+authMaintainerRouter.get('/ai-provider-templates', getAIProviderTemplates);
+authMaintainerRouter.post('/ai-provider-template', upsertAIProviderTemplate);
+authMaintainerRouter.put('/ai-provider-template/:providerId', upsertAIProviderTemplate);
+authMaintainerRouter.delete('/ai-provider-template/:providerId', deleteAIProviderTemplate);
+
+authMaintainerRouter.get('/ai-providers', getAIProviders);
+authMaintainerRouter.post('/ai-provider', upsertAIProvider);
+authMaintainerRouter.put('/ai-provider/:providerId', upsertAIProvider);
+authMaintainerRouter.delete('/ai-provider/:providerId', deleteAIProvider);
+
 authUserRouter.get('/ai-models', getBaseModels);
 authMaintainerRouter.post('/ai-model', upsertBaseModel);
 authMaintainerRouter.put('/ai-model/:modelId', upsertBaseModel);
@@ -259,7 +269,7 @@ authMaintainerRouter.post('/ai-model/:modelId/pricing', upsertModelPricing);
 authMaintainerRouter.put('/ai-model/:modelId/pricing/:id?', upsertModelPricing);
 authMaintainerRouter.delete('/ai-model/:modelId/pricing/:id', deleteModelPricing);
 
-authMaintainerRouter.get('/organizations', getOrganizations); // テナント一覧取得
-authMaintainerRouter.post('/organizations', upsertOrganization); // テナント登録・更新
-authMaintainerRouter.put('/organizations/:orgKey', upsertOrganization); // テナント登録・更新
-authMaintainerRouter.delete('/organizations/:orgKey', deactivateOrganization); // テナント無効化
+authMaintainerRouter.get('/organizations', getOrganizations); // 組織一覧取得
+authMaintainerRouter.post('/organizations', upsertOrganization); // 組織登録・更新
+authMaintainerRouter.put('/organizations/:orgKey', upsertOrganization); // 組織登録・更新
+authMaintainerRouter.delete('/organizations/:orgKey', deactivateOrganization); // 組織無効化

@@ -155,7 +155,7 @@ export async function boxFunctionDefinitions(
                 history.messageId = message.id;
                 history.label = newLabel;
                 history.model = inDto.args.model;
-                history.provider = provider;
+                history.provider = aiProvider;
                 history.createdBy = req.info.user.id;
                 history.updatedBy = req.info.user.id;
                 history.createdIp = req.info.ip;
