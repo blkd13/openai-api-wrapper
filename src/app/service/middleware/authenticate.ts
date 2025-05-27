@@ -287,12 +287,13 @@ export const authenticateOAuthUser = async (_req: Request, res: Response, next: 
 export const authenticateUserTokenWsMiddleGenerator = (roleType?: UserRoleType) =>
     (req: Request, socket: any, header: any, next: any) => {
         try {
+            const xRealIp = req.headers['x-real-ip'] as string || req.ip || '0.0.0.0';
             new Promise((resolve, reject) => {
                 // JWT認証ロジック
                 // console.log(`req.cookies.access_token=` + req.cookies.access_token);
                 const parsedCookies = cookie.parse(req.headers?.cookie || '');
                 if (!(req.headers && parsedCookies.access_token)) {
-                    reject(new Error('cookie not found'));
+                    reject(new Error(`cookie not found ${xRealIp}`));
                     return;
                 }
                 const token = parsedCookies.access_token;
@@ -315,7 +316,7 @@ export const authenticateUserTokenWsMiddleGenerator = (roleType?: UserRoleType) 
                         ds.getRepository(UserEntity).findOne({ where }).then((user: UserEntity | null) => {
                             if (user == null) {
                                 // res.status(401).json({ message: 'ユーザーが見つかりませんでした。' });
-                                reject(new Error('user not found'));
+                                reject(new Error(`user not found ${xRealIp}`));
                                 return;
                             } else {
                                 ds.getRepository(UserRoleEntity).find({ where: { orgKey: user.orgKey, userId: user.id, status: UserStatus.Active } }).then(roleList => {
@@ -344,7 +345,7 @@ export const authenticateUserTokenWsMiddleGenerator = (roleType?: UserRoleType) 
                             }
                         });
                     } else {
-                        reject(new Error('invalid token'));
+                        reject(new Error(`invalid token ${xRealIp}`));
                         return;
                     }
                 })

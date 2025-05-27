@@ -199,10 +199,10 @@ export class DepartmentMemberEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     departmentId!: string;
 
-    @Column({ nullable: true })
+    @Column({ nullable: true, type: 'uuid' })
     userId?: string; // 登録する経路が無いから最初は空である。。。
 
     @Column()
@@ -243,7 +243,7 @@ export class OAuthAccountEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
     // id!: string;
 
-    @Column()
+    @Column({ type: 'uuid' })
     userId!: string;
 
     @Column({ nullable: true })

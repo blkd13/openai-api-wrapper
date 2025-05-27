@@ -499,3 +499,6 @@ export class ContentPartEntity extends MyBaseEntity {
 // ALTER TABLE user_setting_Entity ALTER COLUMN user_id TYPE uuid USING user_id::uuid;
 // ALTER TABLE thread_Entity ALTER COLUMN in_dto_json TYPE jsonb USING in_dto_json::jsonb;
 // ALTER TABLE thread_Entity RENAME COLUMN in_dto_json TO in_dto;
+// ALTER TABLE department_member_Entity ALTER COLUMN department_id TYPE uuid USING department_id::uuid;
+// ALTER TABLE department_member_Entity ALTER COLUMN user_id TYPE uuid USING user_id::uuid;
+// ALTER TABLE o_auth_account_Entity ALTER COLUMN user_id TYPE uuid USING user_id::uuid;

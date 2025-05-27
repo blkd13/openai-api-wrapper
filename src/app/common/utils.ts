@@ -1128,7 +1128,7 @@ export class EnhancedRequestLimiter extends RequestLimiter {
     }
 }
 
-export const requestLimitation = new EnhancedRequestLimiter(300);
+
 
 // const code = `
 // Here is the JSON format for the Entities of the "User Management" Bounded Context:

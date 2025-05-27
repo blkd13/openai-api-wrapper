@@ -209,7 +209,7 @@ export const updateTeam = [
                     orgKey: req.info.user.orgKey,
                     teamId: teamId,
                     userId: req.info.user.id,
-                    role: TeamMemberRoleType.Owner // オーナーのみ許可
+                    role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer])
                 }
             });
 
@@ -274,7 +274,7 @@ export const deleteTeam = [
                         orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: req.info.user.id,
-                        role: TeamMemberRoleType.Owner
+                        role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer])
                     }
                 });
 
@@ -334,7 +334,7 @@ export const addTeamMember = [
                         orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: req.info.user.id,
-                        role: TeamMemberRoleType.Owner
+                        role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer])
                     }
                 });
 
@@ -452,7 +452,7 @@ export const updateTeamMember = [
                         orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: req.info.user.id,
-                        role: TeamMemberRoleType.Owner
+                        role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer])
                     }
                 });
 
@@ -530,7 +530,7 @@ export const removeTeamMember = [
                         orgKey: req.info.user.orgKey,
                         teamId: teamId,
                         userId: req.info.user.id,
-                        role: TeamMemberRoleType.Owner
+                        role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer])
                     }
                 });
 
@@ -629,7 +629,7 @@ export const createProject = [
             });
         }
         // 権限チェック（チームメンバーかつオーナーであること）
-        ds.getRepository(TeamMemberEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, teamId: req.body.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then((teamMember) => {
+        ds.getRepository(TeamMemberEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, teamId: req.body.teamId, userId: req.info.user.id, role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer]) } }).then((teamMember) => {
             // プロジェクトにチームIDをセット            
             project.teamId = req.body.teamId;
             if (project.visibility === ProjectVisibility.Default) {
@@ -745,7 +745,7 @@ export const updateProject = [
         ds.transaction(tx => {
             return tx.findOneOrFail(ProjectEntity, { where: { orgKey: req.info.user.orgKey, id: req.params.id } }).then(project => {
                 // 権限チェック（チームメンバーかつオーナーであること）
-                return tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then(() => {
+                return tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id, role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer]) } }).then(() => {
                     if (req.body.name) {
                         project.name = req.body.name;
                     }
@@ -765,7 +765,7 @@ export const updateProject = [
                     project.updatedIp = req.info.ip;
                     if (req.body.teamId) {
                         // TODO 権限持ってないチームに渡してしまうのを防ぐチェック
-                        return tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: req.body.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then(() => {
+                        return tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: req.body.teamId, userId: req.info.user.id, role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member]) } }).then(() => {
                             project.teamId = req.body.teamId;
                             return tx.save(ProjectEntity, project);
                         });
@@ -799,7 +799,7 @@ export const deleteProject = [
         ds.transaction(tx => {
             return tx.findOneOrFail(ProjectEntity, { where: { orgKey: req.info.user.orgKey, id: req.params.id } }).then(project => {
                 // 権限チェック（チームメンバーかつオーナーであること）
-                tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id, role: TeamMemberRoleType.Owner } }).then((teamMember) => {
+                tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id, role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer]) } }).then((teamMember) => {
                     project.status = ProjectStatus.Deleted;
                     project.updatedBy = req.info.user.id;
                     project.updatedIp = req.info.ip;
@@ -862,7 +862,7 @@ export const updateThreadGroupTitleAndDescription = [
                             }
                         });
 
-                        if (teamMember && (teamMember.role === TeamMemberRoleType.Owner || teamMember.role === TeamMemberRoleType.Member)) {
+                        if (teamMember && ([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role))) {
                             hasPermission = true;
                         }
                         break;
@@ -935,7 +935,7 @@ export const upsertThreadGroup = [
                             }
                         });
 
-                        if (teamMember && (teamMember.role === TeamMemberRoleType.Owner || teamMember.role === TeamMemberRoleType.Member)) {
+                        if (teamMember && ([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role))) {
                             if (visibility !== ThreadGroupVisibility.Team && teamMember.role == TeamMemberRoleType.Member) {
                                 // チームメンバーであっても、ロールがMemberの場合はチームスレッドのみ作成可能
                                 throw new Error('不正なスレッド公開設定です');
@@ -1171,8 +1171,8 @@ export const moveThreadGroup = [
                     }
                 });
 
-                if ((!teamMemberFm || (teamMemberFm.role !== TeamMemberRoleType.Owner && teamMemberFm.role !== TeamMemberRoleType.Member)) ||
-                    (!teamMemberTo || (teamMemberTo.role !== TeamMemberRoleType.Owner && teamMemberTo.role !== TeamMemberRoleType.Member))) {
+                if ((!teamMemberFm || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMemberFm.role)) ||
+                    (!teamMemberTo || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMemberTo.role))) {
                     throw new Error('このスレッドを更新する権限がありません');
                 }
 
@@ -1226,7 +1226,7 @@ export const deleteThreadGroup = [
                     }
                 });
 
-                if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                     throw new Error('このスレッドを削除する権限がありません');
                 }
 
@@ -1302,7 +1302,7 @@ export const upsertMessageWithContents = [
                     }
                 });
 
-                if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                     throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
                 }
 
@@ -1525,7 +1525,7 @@ export const upsertMessageWithContents2 = [
                     }
                 });
 
-                if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                     throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
                 }
 
@@ -1740,7 +1740,7 @@ export const upsertMessageWithContents3 = [
                     }
                 });
 
-                if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                     throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
                 }
 
@@ -2006,7 +2006,7 @@ export const editMessageWithContents = [
                     }
                 });
 
-                if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                     throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
                 }
 
@@ -2344,7 +2344,7 @@ export const threadClone = [
                 // アクセス権限チェック
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, { where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId } });
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id } });
-                if (!teamMember || ([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer, TeamMemberRoleType.Member].indexOf(teamMember.role) === -1)) {
+                if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                     throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
                 }
 
@@ -2383,7 +2383,7 @@ export const threadGroupClone = [
                 // アクセス権限チェック
                 const project = await transactionalEntityManager.findOneOrFail(ProjectEntity, { where: { orgKey: req.info.user.orgKey, id: threadGroup.projectId } });
                 const teamMember = await transactionalEntityManager.findOne(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id } });
-                if (!teamMember || ([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer, TeamMemberRoleType.Member].indexOf(teamMember.role) === -1)) {
+                if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                     throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
                 }
 
@@ -2470,7 +2470,7 @@ export const updateMessageOrMessageGroupTimestamp = [
                         }
                     });
 
-                    if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                    if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                         throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
                     } else { }
 
@@ -2508,7 +2508,7 @@ export const updateMessageOrMessageGroupTimestamp = [
                         }
                     });
 
-                    if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                    if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                         throw new Error('このスレッドにメッセージを作成または更新する権限がありません');
                     } else { }
 
@@ -2954,7 +2954,7 @@ export const deleteMessageGroup = [
                     }
                 });
 
-                if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                     throw new Error('このメッセージグループを削除する権限がありません');
                 }
 
@@ -3078,7 +3078,7 @@ export const deleteMessage = [
                     }
                 });
 
-                if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                     throw new Error('このメッセージを削除する権限がありません');
                 }
 
@@ -3177,7 +3177,7 @@ export const deleteContentPart = [
                     }
                 });
 
-                if (!teamMember || (teamMember.role !== TeamMemberRoleType.Owner && teamMember.role !== TeamMemberRoleType.Member)) {
+                if (!teamMember || ![TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member].includes(teamMember.role)) {
                     throw new Error('このメッセージを削除する権限がありません');
                 }
 

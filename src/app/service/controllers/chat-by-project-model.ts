@@ -29,7 +29,7 @@ import { countChars, GenerateContentRequestForCache, mapForGemini, TokenCharCoun
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
 import { ContentPartType, MessageGroupType, MessageClusterType, PredictHistoryStatus, TeamMemberRoleType, ThreadStatus, ThreadGroupStatus, ContentPartStatus } from '../models/values.js';
 import { FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
-import { EntityManager, In, Not } from 'typeorm';
+import { EntityManager, In, IsNull, Not } from 'typeorm';
 import { clients } from './chat.js';
 import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
 import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus } from '../entity/auth.entity.js';
@@ -1482,7 +1482,7 @@ async function getCountTokenListByFileGroupIdList(orgKey: string, fileGroupIdLis
                 .where('file.fileGroupId IN (:...fileGroupIds) AND file.isActive = true')
                 .getQuery();
             return 'fileBody.id IN ' + subQuery +
-                ' AND fileBody.fileType NOT IN (:...invalidMimeList) AND fileBody.orgKey = :orgKey';
+                ' AND fileBody.fileType NOT IN (:...invalidMimeList) AND fileBody.orgKey = :orgKey AND fileBody.tokenCount IS NOT NULL';
         })
         .setParameter('orgKey', orgKey)
         .setParameter('fileGroupIds', fileGroupIdList)
@@ -1504,6 +1504,7 @@ async function getCountTokenListByToolGroupIdList(orgKey: string, toolGroupIdLis
         where: {
             orgKey: orgKey,
             toolCallGroupId: In(toolGroupIdList),
+            tokenCount: Not(IsNull()),
         },
     });
     return toolTokenCountList.map(toolTokenCount => {
@@ -1864,7 +1865,7 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
                 // gemini系以外は画像化したものとテキスト抽出したものを組合せる。
                 const jsonString = await fs.readFile(`${basePath}.json`, 'utf-8').catch(() => {
                     console.error(`Error: PDF file has no pages: ${file.fileBodyEntity.fileType} ${file.fileBodyEntity.innerPath} ${JSON.stringify(file.fileBodyEntity.metaJson)}`);
-                    return '{"pdfMetaData":{"textPages":""}}';
+                    return '{"pdfMetaData":{"textPages":[""]}}';
                 });
                 const pdfMetaData = JSON.parse(jsonString) as PdfMetaData;
                 let metaText = '';
