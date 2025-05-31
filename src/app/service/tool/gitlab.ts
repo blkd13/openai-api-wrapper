@@ -1,6 +1,6 @@
 import { map, toArray } from "rxjs";
 
-import { MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
+import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
 import { UserRequest } from "../models/info.js";
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
 import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
@@ -727,7 +727,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                     delete inDto.args.tool_choice;
                     delete inDto.args.tools;
 
-                    const aiProvider = providerPrediction(inDto.args.model);
+                    const aiProvider = genClientByProvider(inDto.args.model);
 
                     const newLabel = `${label}-call_ai-${inDto.args.model}`;
                     // レスポンス返した後にゆるりとヒストリーを更新しておく。
@@ -738,7 +738,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                     history.messageId = message.id;
                     history.label = newLabel;
                     history.model = inDto.args.model;
-                    history.provider = provider;
+                    history.provider = aiProvider.type;
                     history.createdBy = req.info.user.id;
                     history.updatedBy = req.info.user.id;
                     history.createdIp = req.info.ip;

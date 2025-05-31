@@ -428,37 +428,71 @@ export class OrganizationEntity extends MyBaseEntity {
 //     joinedAt!: Date;
 // }
 
-export interface AzureOpenAIMetadata {
-    resource_name: string; // Azure上のリソース名
-    deployments: {
-        [modelAlias: string]: {
-            deployment_id: string;
-            api_version: string;
-        };
-    };
-    default_deployment?: string; // オプション：省略時のデフォルト
+export interface OpenAIConfig {
+    apiKey: string; // OpenAI APIキー
+    baseURL?: string; // オプション：カスタムベースURL（例：https://api.openai.com/v1/）
+    apiVersion?: string; // オプション：APIバージョン（例：2023-05-15）
+    // modelIds?: { [modelAlias: string]: string }; // 任意のモデルエイリアスとOpenAIモデル名の対応
+    httpAgent?: any; // オプション：HTTPエージェント（例：プロキシ設定など）
+    // proxy?: {
+    //     host: string; // プロキシホスト
+    //     port: number; // プロキシポート
+    //     auth?: {
+    //         username: string; // プロキシ認証ユーザー名
+    //         password: string; // プロキシ認証パスワード
+    //     };
+    // };
 }
 
-export interface VertexAIMetadata {
-    project_id: string;               // GCP プロジェクトID
+export interface AzureOpenAIConfig {
+    // resource_name: string; // Azure上のリソース名
+    // default_deployment?: string; // オプション：省略時のデフォルト
+    resources: {
+        baseURL: string; // オプション：カスタムベースURL（例：https://<resource_name>.openai.azure.com/）
+        apiKey: string; // オプション：APIキー（あれば）
+        apiVersion: string; // APIバージョン（例：2023-05-15）
+        deployments: { [modelAlias: string]: string };
+        // deployments: {
+        //     [modelAlias: string]: {
+        //         deployment_id: string;
+        //         api_version: string;
+        //     };
+        // };
+    }[];
+}
+
+export interface VertexAIConfig {
+    project: string;               // GCP プロジェクトID
     location: string;                 // リージョン（例：us-central1）
-    model_ids?: {
-        [modelAlias: string]: string; // 任意のモデルエイリアスとVertexモデル名の対応
-    };
-    service_account_email?: string;   // サービスアカウントEmail（あれば）
+    // model_ids?: {
+    //     [modelAlias: string]: string; // 任意のモデルエイリアスとVertexモデル名の対応
+    // };
+    apiEndpoint: string; // APIエンドポイント（例：us-central1-aiplatform.googleapis.com）
+    httpAgent?: any; // オプション：HTTPエージェント（例：プロキシ設定など）
+}
+
+export interface AnthropicVertexAIConfig {
+    projectId: string;               // GCP プロジェクトID
+    region: string;                   // リージョン（例：us-central1）
+    // model_ids?: {
+    //     [modelAlias: string]: string; // 任意のモデルエイリアスとVertexモデル名の対応
+    // };
+    baseURL?: string; // オプション：カスタムベースURL（例：https://us-central1-aiplatform.googleapis.com/）
+    httpAgent?: any;
 }
 
 export type CredentialMetadata =
-    | AzureOpenAIMetadata
-    | VertexAIMetadata
+    | AzureOpenAIConfig
+    | VertexAIConfig
+    | AnthropicVertexAIConfig
     | Record<string, any>; // その他（未定義プロバイダやローカルLLM）
 
-export function isAzureMetadata(meta: CredentialMetadata): meta is AzureOpenAIMetadata {
-    return (meta as AzureOpenAIMetadata).resource_name !== undefined;
+export function isAzureMetadata(meta: CredentialMetadata): meta is AzureOpenAIConfig {
+    return (meta as AzureOpenAIConfig).resources !== undefined;
 }
 
-export function isVertexMetadata(meta: CredentialMetadata): meta is VertexAIMetadata {
-    return (meta as VertexAIMetadata).project_id !== undefined;
+export function isVertexMetadata(meta: CredentialMetadata): meta is VertexAIConfig {
+    return (meta as VertexAIConfig).project !== undefined;
 }
 export enum CredentialType { API_KEY = 'api_key', SERVICE_ACCOUNT = 'service_account', OAUTH_TOKEN = 'oauth_token' }
 export enum AIProviderType {
@@ -470,6 +504,7 @@ export enum AIProviderType {
     ANTHROPIC = 'anthropic',
     DEEPSEEK = 'deepseek',
     LOCAL = 'local',
+    OPENAI_COMPATIBLE = 'openai_compatible', // OpenAI互換のローカルLLM
     VERTEXAI = 'vertexai',
     ANTHROPIC_VERTEXAI = 'anthropic_vertexai',
     OPENAPI_VERTEXAI = 'openapi_vertexai',
@@ -509,6 +544,9 @@ export class UserRoleEntity extends MyBaseEntity implements UserRole {
 
     @Column({ type: 'enum', enum: UserRoleType, default: UserRoleType.User })
     role!: UserRoleType;       // 'ADMIN' | 'MEMBER' …
+
+    @Column({ default: 0 })
+    priority!: number; // 複数divisionのroleを持つことがあるのでその優先度。数値が大きいほど優先される。
 
     @Column({ type: 'enum', enum: UserStatus, default: UserStatus.Active })
     status!: UserStatus;
@@ -617,12 +655,36 @@ export class AIProviderTemplateEntity extends MyBaseEntity {
     isActive!: boolean;
 }
 
+type AIProviderConfigMap = {
+    [AIProviderType.OPENAI]: OpenAIConfig;
+    [AIProviderType.AZURE_OPENAI]: AzureOpenAIConfig;
+    [AIProviderType.GROQ]: OpenAIConfig;
+    [AIProviderType.MISTRAL]: OpenAIConfig;
+    [AIProviderType.ANTHROPIC]: OpenAIConfig;
+    [AIProviderType.DEEPSEEK]: OpenAIConfig;
+    [AIProviderType.LOCAL]: OpenAIConfig; // ローカルLLMの設定
+    [AIProviderType.OPENAI_COMPATIBLE]: { apiKey: string, baseURL: string }; // OpenAI互換のローカルLLM
+    [AIProviderType.VERTEXAI]: VertexAIConfig;
+    [AIProviderType.ANTHROPIC_VERTEXAI]: AnthropicVertexAIConfig; // Vertex AI上のAnthropicモデル
+    [AIProviderType.OPENAPI_VERTEXAI]: VertexAIConfig; // Vertex AI上のOpenAI互換モデル
+    [AIProviderType.CEREBRAS]: OpenAIConfig; // Cerebrasの設定
+    [AIProviderType.COHERE]: OpenAIConfig; // Cohereの設定
+    [AIProviderType.GEMINI]: OpenAIConfig; // Geminiの設定
+};
+
+export type AIProviderConfig = AIProviderConfigMap[keyof AIProviderConfigMap];
+
 @Entity()
 @Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
-@Index(['orgKey', 'provider']) // プロバイダ検索に備える
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId', 'name'], { unique: true })
+@Index(['orgKey', 'type'])
+@Index(['orgKey', 'name'])
 export class AIProviderEntity extends MyBaseEntity {
     @Column({ type: 'enum', enum: AIProviderType })
-    provider!: AIProviderType;
+    type!: AIProviderType;
+
+    @Column()
+    name!: string;
 
     @Column(type => ScopeInfo)
     scopeInfo!: ScopeInfo;
@@ -630,11 +692,18 @@ export class AIProviderEntity extends MyBaseEntity {
     @Column()
     label!: string;
 
-    @Column({ type: 'jsonb', nullable: true })
-    metadata?: CredentialMetadata;
+    @Column({ type: 'jsonb' })
+    config!: AIProviderConfig[]; // 複数ある時はラウンドロビン
 
     @Column({ default: true })
     isActive!: boolean;
+}
+// 型ガードを単独関数に分離
+export function getAIProviderConfig<T extends AIProviderType>(
+    provider: AIProviderEntity,
+    type: T
+): AIProviderConfigMap[T][] {
+    return provider.config as AIProviderConfigMap[T][];
 }
 
 

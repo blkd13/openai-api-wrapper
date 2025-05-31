@@ -8,13 +8,15 @@ import { ToolCallPartType } from '../../service/entity/tool-call.entity.js';
 import { ContentPartEntity } from '../../service/entity/project-models.entity.js';
 import { ContentPartType } from '../../service/models/values.js';
 import { FileBodyEntity } from '../../service/entity/file-models.entity.js';
-import { getTiktokenEncoder, invalidMimeList, plainExtensions, plainMime, vertex_ai } from '../../common/openai-api-wrapper.js';
+import { genClientByProvider, getTiktokenEncoder, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
 import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL, geminiCountTokensByFile } from '../../service/controllers/chat-by-project-model.js';
 import { detect } from 'jschardet/index.js';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { convertToPdfMimeList, extractPdfData } from '../../common/pdf-funcs.js';
 import { convertPptxToPdf } from '../../common/media-funcs.js';
+import { MyVertexAiClient } from '../../common/my-vertexai.js';
+import { VertexAI } from '@google-cloud/vertexai/build/src/vertex_ai.js';
 
 /**
  * 必ず main() という関数を定義する。
@@ -225,7 +227,9 @@ export async function main() {
             });
         }
 
-        const generativeModel = vertex_ai.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
+        const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
+        const client = my_vertexai.client as VertexAI;
+        const generativeModel = client.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
         // toolCallPartListの取得
         const toolCallPartList = await ds.getRepository(ToolCallPartEntity).findBy({

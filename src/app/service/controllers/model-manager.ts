@@ -251,7 +251,7 @@ export const upsertAIProvider = [
     body('label').isString().notEmpty(),
     body('scopeInfo.scopeType').isIn(Object.values(ScopeType)),
     // body('scopeInfo.scopeId').isString().notEmpty(),
-    body('metadata').optional({ nullable: true }),
+    body('config').optional({ nullable: true }),
     body('isActive').isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
@@ -297,7 +297,8 @@ export const upsertAIProvider = [
 
             // 一意制約チェック: organization + scopeInfo + provider
             const conflict = await repo.findOneBy({
-                provider: bodyData.provider,
+                type: bodyData.type,
+                name: bodyData.name,
                 orgKey: req.info.user.orgKey,
                 scopeInfo: {
                     scopeType: bodyData.scopeInfo.scopeType,
@@ -308,26 +309,28 @@ export const upsertAIProvider = [
 
             if (conflict) {
                 return res.status(409).json({
-                    message: `同じスコープと${bodyData.provider}のプロバイダーが既に存在します`
+                    message: `同じスコープと${bodyData.type},${bodyData.name}のプロバイダーが既に存在します`
                 });
             } else { }
 
             if (isNew) {
                 // 新規作成
                 entity = repo.create({
-                    provider: bodyData.provider,
+                    type: bodyData.type,
+                    name: bodyData.name,
                     label: bodyData.label,
                     scopeInfo: {
                         scopeType: bodyData.scopeInfo.scopeType,
                         scopeId: scopeId,
                     },
-                    metadata: bodyData.metadata,
+                    config: bodyData.config,
                     isActive: bodyData.isActive ?? true,
                 });
             } else {
                 // 更新 - 必須フィールド
                 Object.assign(entity!, {
-                    provider: bodyData.provider,
+                    type: bodyData.type,
+                    name: bodyData.name,
                     label: bodyData.label,
                     scopeInfo: {
                         scopeType: bodyData.scopeInfo.scopeType,
@@ -338,7 +341,7 @@ export const upsertAIProvider = [
             }
 
             // オプショナルフィールドの設定
-            if ('metadata' in bodyData) entity!.metadata = bodyData.metadata;
+            if ('config' in bodyData) entity!.config = bodyData.config;
 
             // 共通フィールドの設定
             entity!.orgKey = req.info.user.orgKey;

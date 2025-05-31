@@ -57,8 +57,6 @@ export type GPTModels = TiktokenModel
     | 'o4-mini' | 'o3' | 'o3-high' | 'o4-mini-high' | 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-4.1-nano' | 'gpt-4.5-preview' | 'chatgpt-4o-latest'
     ;
 
-export type AiProvider = 'openai' | 'azure' | 'groq' | 'mistral' | 'anthropic' | 'deepseek' | 'local' | 'vertexai' | 'anthropic_vertexai' | 'openapi_vertexai' | 'cerebras' | 'cohere' | 'gemini';
-
 // モデル名とコストの対応表
 export const COST_TABLE: { [key: string]: { prompt: number, completion: number } } = {
     'all     ': { prompt: 0.00000000, completion: 0.000000, },

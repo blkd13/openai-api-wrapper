@@ -28,24 +28,6 @@ Utils.requiredEnvVarsCheck({
 import { getAccessToken } from '../api/api-proxy.js';
 import { decrypt, encrypt } from './tool-call.js';
 import { getAxios } from '../../common/http-client.js';
-// import { HttpsProxyAgent } from 'https-proxy-agent';
-// export const agent = new HttpsProxyAgent(`${AXIOS_EXTERNAL_PROXY_PROTOCOL}://${AXIOS_EXTERNAL_PROXY_HOST}:${AXIOS_EXTERNAL_PROXY_PORT}`);
-// // export const agent = new https.Agent({});
-
-// // プロキシ無しaxios
-// export const axiosWithoutProxy = axios.create({ httpAgent: false, httpsAgent: false, proxy: false, });
-// // export const axiosWithProxy = axios.create({ httpAgent: agent, httpsAgent: agent, proxy: { host: AXIOS_EXTERNAL_PROXY_HOST, port: Number(AXIOS_EXTERNAL_PROXY_PORT), }, });
-// export const axiosWithProxy = axios.create({ httpAgent: agent, httpsAgent: agent, proxy: false, });
-// // export const axiosWithProxy = axios.create({
-// //     httpAgent: false, httpsAgent: agent, proxy: {
-// //         host: AXIOS_EXTERNAL_PROXY_HOST,
-// //         port: Number(AXIOS_EXTERNAL_PROXY_PORT),
-// //         auth: {
-// //             username: AXIOS_EXTERNAL_PROXY_USER || '',
-// //             password: AXIOS_EXTERNAL_PROXY_PASSWORD || '',
-// //         },
-// //     },
-// // });
 
 export type OAuth2TokenDto = { access_token: string, token_type: string, expires_in: number, scope: string, refresh_token: string, id_token: string, };
 
@@ -745,7 +727,7 @@ export const userLoginOAuth2Callback = [
 
                     // 本当はメール認証できてないのにユーザー登録してしまうのはいかがなものか、、だけどそんなに害もないし、難しくなるのでこのままにする。
                     user = await manager.getRepository(UserEntity).save(user);
-                    await createUserInitial(ipAddress, user, manager); // ユーザー初期作成に伴う色々作成
+                    roleList = (await createUserInitial(ipAddress, user, manager)).roleList; // ユーザー初期作成に伴う色々作成
                 }
                 // oAuthの一意キー
                 const oAuthKey = { orgKey, provider, userId: user.id, providerUserId: oAuthUserInfo.id };
@@ -1185,7 +1167,7 @@ export const passwordReset = [
 
             userAndRoleList.user = await manager.getRepository(UserEntity).save(userAndRoleList.user);
             if (isCreate) {
-                await createUserInitial(req.info.ip, userAndRoleList.user, manager);
+                userAndRoleList.roleList = (await createUserInitial(req.info.ip, userAndRoleList.user, manager)).roleList; // ユーザー初期作成に伴う色々作成
             } else {
             }
             const invite = await manager.getRepository(InviteEntity).findOne({ where: { orgKey: req.info.invite.orgKey, id: req.info.invite.id } });
@@ -1718,11 +1700,12 @@ export const getUserList = [
     }
 ];
 
-async function createUserInitial(ip: string, user: UserEntity, manager: EntityManager): Promise<UserEntity> {
+async function createUserInitial(ip: string, user: UserEntity, manager: EntityManager): Promise<{ user: UserEntity, roleList: UserRoleEntity[] }> {
+    const organization = await manager.getRepository(OrganizationEntity).findOneOrFail({ where: { orgKey: user.orgKey } });
     const role = new UserRoleEntity();
     role.userId = user.id;
     role.scopeInfo = {
-        scopeId: user.id,
+        scopeId: organization.id,
         scopeType: ScopeType.ORGANIZATION,
     };
     role.role = UserRoleType.User;
@@ -1794,7 +1777,7 @@ async function createUserInitial(ip: string, user: UserEntity, manager: EntityMa
             manager.getRepository(TeamMemberEntity).save(teamMember),
             manager.getRepository(ProjectEntity).save(projectDef),
             manager.getRepository(ProjectEntity).save(projectArch),
-        ]).then(() => user); // 最後userに戻して返す。  
+        ]).then(() => ({ user, roleList: [role] }));
     })
 }
 

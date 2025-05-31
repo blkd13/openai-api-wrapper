@@ -3,11 +3,11 @@ import { Request, Response } from "express";
 import { body, query } from "express-validator";
 import axios from 'axios';
 
-import { OpenAIApiWrapper, aiApi, my_vertexai, normalizeMessage, providerPrediction, vertex_ai } from '../../common/openai-api-wrapper.js';
+import { OpenAIApiWrapper, aiApi, genClientByProvider, normalizeMessage, providerPrediction } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ChatCompletion, ChatCompletionChunk, ChatCompletionCreateParams, ChatCompletionCreateParamsStreaming, ChatCompletionMessage } from "openai/resources/index.js";
-import { GenerateContentRequest, HarmBlockThreshold, HarmCategory } from '@google-cloud/vertexai';
+import { GenerateContentRequest, HarmBlockThreshold, HarmCategory, VertexAI } from '@google-cloud/vertexai';
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
 const { GCP_PROJECT_ID, GCP_CONTEXT_CACHE_LOCATION, GCP_API_BASE_PATH } = process.env;
@@ -21,9 +21,10 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
     // axios.defaults.httpsAgent = httpsAgent;
 } else { }
 
-import { countChars, GenerateContentRequestForCache, mapForGemini } from '../../common/my-vertexai.js';
+import { countChars, GenerateContentRequestForCache, mapForGemini, MyVertexAiClient } from '../../common/my-vertexai.js';
 import { Utils } from '../../common/utils.js';
 import { Observer } from 'rxjs/dist/types/index.js';
+import { COUNT_TOKEN_MODEL } from './chat-by-project-model.js';
 
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
@@ -107,7 +108,7 @@ export const chatCompletionStream = [
 
         const label = inDto.options?.idempotencyKey || `api-${clientId}`;
 
-        const provider = providerPrediction(inDto.args.model);
+        const provider = genClientByProvider(inDto.args.model);
 
         let subscriber: Partial<Observer<ChatCompletionChunk>> | ((value: ChatCompletionChunk) => void) | undefined;
 
@@ -215,7 +216,7 @@ export const codegenCompletion = [
         let text = '';
         const label = req.body.options?.idempotencyKey || `chat-${req.info.user.id}`;
         const aiApi = new OpenAIApiWrapper();
-        const provider = providerPrediction(inDto.args.model);
+        const provider = genClientByProvider(inDto.args.model);
 
         aiApi.chatCompletionObservableStream(
             inDto.args, { label }, provider
@@ -277,7 +278,7 @@ export const chatCompletion = [
 
         const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.streamId}`;
         // const aiApi = new OpenAIApiWrapper();
-        const provider = providerPrediction(inDto.args.model);
+        const provider = genClientByProvider(inDto.args.model);
 
         // console.log(aiApi.wrapperOptions.provider);
         aiApi.chatCompletionObservableStream(
@@ -313,7 +314,9 @@ export const geminiCountTokens = [
     (_req: Request, res: Response) => {
         const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
         const args = inDto.args;
-        const generativeModel = vertex_ai.preview.getGenerativeModel({
+        const my_vertexai = (genClientByProvider(args.model).client as MyVertexAiClient);
+        const client = my_vertexai.client as VertexAI;
+        const generativeModel = client.preview.getGenerativeModel({
             model: 'gemini-1.5-flash',
             safetySettings: [
                 // { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
@@ -399,6 +402,8 @@ export const geminiCreateContextCache = [
                 }
                 // fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
 
+                const my_vertexai = (genClientByProvider(args.model).client as MyVertexAiClient);
+                const client = my_vertexai.client as VertexAI;
                 // アクセストークンを取得してリクエスト
                 my_vertexai.getAuthorizedHeaders().then(headers =>
                     axios.post(url, requestBody, headers)
@@ -423,6 +428,9 @@ export const geminiUpdateContextCache = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const inDto = _req.body as { expire_time: string, cache_name: string };
+        // myVertex取るために仕方なくCOUNT_TOKEN_MODELを使う
+        const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
+        const client = my_vertexai.client as VertexAI;
         my_vertexai.getAuthorizedHeaders().then(headers =>
             axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${inDto.cache_name}`, { expire_time: inDto.expire_time }, headers)
         ).then(response => {
@@ -442,6 +450,9 @@ export const geminiDeleteContextCache = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const inDto = _req.body as { cache_name: string };
+        // myVertex取るために仕方なくCOUNT_TOKEN_MODELを使う
+        const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
+        const client = my_vertexai.client as VertexAI;
         my_vertexai.getAuthorizedHeaders().then(headers =>
             axios.delete(`${CONTEXT_CACHE_API_ENDPOINT}/${inDto.cache_name}`, headers)
         ).then(response => {
@@ -458,6 +469,9 @@ export const geminiDeleteContextCache = [
 export const geminiGetContextCache = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
+        // myVertex取るために仕方なくCOUNT_TOKEN_MODELを使う
+        const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
+        const client = my_vertexai.client as VertexAI;
         my_vertexai.getAuthorizedHeaders().then(headers =>
             axios.get(`${CONTEXT_CACHE_API_ENDPOINT}/projects/${GCP_PROJECT_ID}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`, headers)
         ).then(response => {

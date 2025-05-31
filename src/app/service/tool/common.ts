@@ -10,7 +10,7 @@ import TurndownService from 'turndown';
 // import * as cheerio from 'cheerio';
 import { AxiosInstance } from 'axios';
 
-import { MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
+import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
 import { UserRequest } from '../models/info.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
 import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
@@ -90,9 +90,9 @@ export function bufferToDataUrl(buffer: Buffer, mimeType = 'application/pdf'): s
     return `data:${mimeType};base64,${base64}`;
 }
 
-async function fetchRenderedText(browser: Browser, url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML'): Promise<{ type: 'TEXT' | 'MARKDOWN' | 'HTML' | 'PDF' | 'ERROR', title: string, favicon: string, body: string }> {
+async function fetchRenderedText(browser: Browser, url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML' = 'TEXT'): Promise<{ type: 'TEXT' | 'MARKDOWN' | 'HTML' | 'PDF' | 'ERROR', title: string, favicon: string, body: string }> {
     try {
-        console.log(`puppeteer url=${url}`);
+        console.log(`puppeteer loadContentType=${loadContentType} url=${url}`);
         const page = await browser.newPage();
 
         // ユーザーエージェントを設定（より実際のブラウザに近いものを使用）
@@ -168,17 +168,17 @@ async function fetchRenderedText(browser: Browser, url: string, loadContentType:
             let result: { type: 'TEXT' | 'HTML' | 'MARKDOWN', title: string, body: string, favicon: string };
 
             // コンテンツの読み込みタイプを設定（デフォルトは'TEXT'）
-            ['TEXT', 'HTML', 'MARKDOWN'].includes((loadContentType || '').toUpperCase()) ? (loadContentType = loadContentType.toUpperCase() as any) : (loadContentType = 'TEXT');
-            if (loadContentType.toUpperCase() === 'TEXT') {
-                result = await page.evaluate(() => {
+            if (loadContentType === 'TEXT') {
+                const text = await page.evaluate(() => {
                     try {
                         const link = document.querySelector('link[rel~="icon"]') as HTMLLinkElement | null;
-                        return { type: loadContentType, title: document.title, body: document.body.innerText, favicon: link ? link.href : '' };
+                        return { title: document.title, body: document.body.innerText, favicon: link ? link.href : '' };
                     } catch (error) {
                         console.error('Error while extracting text content:', error);
-                        return { type: loadContentType, title: '', body: '', favicon: '' };
+                        return { title: '', body: '', favicon: '' };
                     }
                 });
+                result = { type: loadContentType, title: text.title, body: text.body, favicon: text.favicon };
             } else {
                 const html = await page.evaluate(() => {
                     try {
@@ -189,7 +189,7 @@ async function fetchRenderedText(browser: Browser, url: string, loadContentType:
                         return { type: 'ERROR', title: '', body: '', favicon: '' };
                     }
                 });
-                if (loadContentType.toUpperCase() === 'HTML') {
+                if (loadContentType === 'HTML') {
                     result = { type: loadContentType, title: html.title, body: html.body, favicon: html.favicon };
                 } else {
                     result = {
@@ -398,7 +398,7 @@ export function commonFunctionDefinitions(
                         delete inDto.args.tool_choice;
                         delete inDto.args.tools;
 
-                        const aiProvider = providerPrediction(inDto.args.model);
+                        const aiProvider = genClientByProvider(inDto.args.model);
 
                         // const newLabel = `call_ai-${model}-${index}`;
                         const newLabel = `${label}-call_ai`;
@@ -411,7 +411,7 @@ export function commonFunctionDefinitions(
                         history.messageId = message.id;
                         history.label = newLabel;
                         history.model = inDto.args.model;
-                        history.provider = aiProvider;
+                        history.provider = aiProvider.type;
                         history.createdBy = req.info.user.id;
                         history.updatedBy = req.info.user.id;
                         history.createdIp = req.info.ip;
@@ -711,7 +711,7 @@ export function commonFunctionDefinitions(
                 delete inDto.args.tool_choice;
                 delete inDto.args.tools;
 
-                const provider = providerPrediction(inDto.args.model);
+                const provider = genClientByProvider(inDto.args.model);
 
                 const newLabel = `${label}-call_ai-${model}`;
                 // レスポンス返した後にゆるりとヒストリーを更新しておく。
@@ -722,7 +722,7 @@ export function commonFunctionDefinitions(
                 history.messageId = message.id;
                 history.label = newLabel;
                 history.model = inDto.args.model;
-                history.provider = provider;
+                history.provider = provider.type;
                 history.createdBy = req.info.user.id;
                 history.updatedBy = req.info.user.id;
                 history.createdIp = req.info.ip;

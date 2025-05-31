@@ -1,4 +1,4 @@
-import { Content, CountTokensResponse, FunctionCallingMode, FunctionDeclaration, FunctionDeclarationSchema, FunctionDeclarationSchemaType, GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, SchemaType, Tool, UsageMetadata } from "@google-cloud/vertexai";
+import { Content, CountTokensResponse, FunctionCallingMode, FunctionDeclaration, FunctionDeclarationSchema, FunctionDeclarationSchemaType, GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, SchemaType, Tool, UsageMetadata, VertexAI } from "@google-cloud/vertexai";
 import { exec, execSync } from "child_process";
 import { promisify } from 'util';
 import { detect } from "jschardet";
@@ -6,6 +6,7 @@ import { ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompleti
 
 import { plainMime } from "./openai-api-wrapper.js";
 import { CompletionUsage } from "openai/resources/completions.js";
+import { VertexAIConfig } from "../service/entity/auth.entity.js";
 
 const execPromise = promisify(exec);
 interface CommandResult {
@@ -49,9 +50,25 @@ export interface GenerateContentRequestForCache {
 
 export class MyVertexAiClient {
 
+    counter: number = 0;
+
     private accessToken: string | undefined;
     private expire: number = Date.now();
     private accessTokenStock: string | undefined;
+
+    private clients: VertexAI[] = [];
+
+    constructor(public params: VertexAIConfig[]) {
+        // this.client = new VertexAI({ project: this.params.projectId, location: this.params.region, apiEndpoint: this.params.baseURL, httpAgent: this.params.httpAgent });
+        this.params.forEach(param => {
+            // console.log(`param:${JSON.stringify(param)}`);
+            this.clients.push(new VertexAI(param));
+        });
+    }
+
+    get client(): VertexAI {
+        return this.clients[this.counter++ % this.clients.length];
+    }
 
     async getAccessToken(force: boolean = false): Promise<string> {
         const now = Date.now();

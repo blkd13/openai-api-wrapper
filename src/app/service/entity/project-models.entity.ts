@@ -462,6 +462,50 @@ export class ContentPartEntity extends MyBaseEntity {
 
 // SELECT COUNT(*) FROM Team_Member_Entity WHERE NOT (user_Id IS NULL OR user_Id ~* '^[0-9a-fA-F-]{36}$' AND user_Id::uuid IS NOT NULL);
 
+// ALTER TABLE api_provider_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE api_provider_template_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE tenant_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE user_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE tool_call_group_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE tool_call_part_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE invite_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE login_history_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE session_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE department_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE department_member_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE o_auth_account_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE team_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE team_member_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE predict_history_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE predict_history_wrapper_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE project_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE thread_group_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE thread_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE message_cluster_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE message_group_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE message_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE content_part_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE box_item_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE box_collection_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE box_file_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE box_file_body_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE file_group_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE file_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE file_body_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE file_tag_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE file_version_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE file_access_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE vertex_cached_content_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE user_setting_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE git_project_commit_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE git_project_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE mm_user_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE mm_user_pre_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE mm_post_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE mm_timeline_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE mm_timeline_channel_entity RENAME COLUMN tenant_key TO org_key;
+// ALTER TABLE mm_file_entity RENAME COLUMN tenant_key TO org_key;
+
 // ALTER TABLE Team_Member_Entity ALTER COLUMN user_Id TYPE uuid USING user_Id::uuid;
 // ALTER TABLE Team_Member_Entity ALTER COLUMN team_Id TYPE uuid USING team_Id::uuid;
 // ALTER TABLE git_project_commit_Entity ALTER COLUMN file_group_Id TYPE uuid USING file_group_Id::uuid;
@@ -501,4 +545,6 @@ export class ContentPartEntity extends MyBaseEntity {
 // ALTER TABLE thread_Entity RENAME COLUMN in_dto_json TO in_dto;
 // ALTER TABLE department_member_Entity ALTER COLUMN department_id TYPE uuid USING department_id::uuid;
 // ALTER TABLE department_member_Entity ALTER COLUMN user_id TYPE uuid USING user_id::uuid;
+// ALTER TABLE login_history_Entity ALTER COLUMN user_id TYPE uuid USING user_id::uuid;
+// ALTER TABLE session_Entity ALTER COLUMN user_id TYPE uuid USING user_id::uuid;
 // ALTER TABLE o_auth_account_Entity ALTER COLUMN user_id TYPE uuid USING user_id::uuid;

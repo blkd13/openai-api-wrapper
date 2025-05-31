@@ -1,22 +1,25 @@
 import { fileURLToPath } from 'url';
 import _ from 'lodash';
-import { invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
+import { promises as fs } from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
+import { detect } from 'jschardet/index.js';
 import { DataSource, In, IsNull, Not } from 'typeorm';
+import { VertexAI } from '@google-cloud/vertexai';
+
+import { genClientByProvider, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../../service/entity/project-models.entity.js';
 import { ds } from '../../service/db.js';
 import { ContentPartType } from '../../service/models/values.js';
 import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../../service/controllers/chat-by-project-model.js';
 import { FileBodyEntity } from '../../service/entity/file-models.entity.js';
-import { promises as fs } from 'fs';
-import * as path from 'path';
-import * as crypto from 'crypto';
-import { detect } from 'jschardet/index.js';
 import { convertPptxToPdf } from '../../common/media-funcs.js';
 import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
 
 import { ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartResultBody } from '../../service/entity/tool-call.entity.js';
 import { ToolCallPartType } from '../../service/entity/tool-call.entity.js';
-import { getTiktokenEncoder, vertex_ai } from '../../common/openai-api-wrapper.js';
+import { getTiktokenEncoder } from '../../common/openai-api-wrapper.js';
+import { MyVertexAiClient } from '../../common/my-vertexai.js';
 import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL } from '../../service/controllers/chat-by-project-model.js';
 
 
@@ -187,7 +190,9 @@ async function fileEntity() {
 
     // tool
     // toolCallPartListの取得
-    const generativeModel = vertex_ai.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
+    const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
+    const client = my_vertexai.client as VertexAI;
+    const generativeModel = client.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
     let toolCallPartList = await ds.getRepository(ToolCallPartEntity).findBy({
         type: In([ToolCallPartType.CALL, ToolCallPartType.COMMAND, ToolCallPartType.RESULT]),
     }) as ToolCallPartEntity[];

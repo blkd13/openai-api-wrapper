@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 
 import { PathOrFileDescriptor, WriteFileOptions, NoParamCallback } from 'fs';
 
@@ -50,7 +51,8 @@ class FsSafeImpl {
     };
 
     addQ = (type: 'writeFile' | 'appendFile', file: PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView | Uint8Array, options?: WriteFileOptions | NoParamCallback, callback?: NoParamCallback): void => {
-        const filepath = file.toString();
+        const filepath = os.platform() === 'win32' ? `${'\\\\?\\'}${path.resolve(file.toString()).replace(/\//g, '\\')}` : file.toString();
+        // console.log(`addQ: ${filepath} : ${type}`);
         // console.log(`addQ:${callback}`);
         // qMapの初期化
         if (!this.qMap[filepath]) {
@@ -84,12 +86,14 @@ class FsSafeImpl {
 
     writeFileSync(file: PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: WriteFileOptions): void {
         this.initDirectory(file.toString());
-        fs.writeFileSync(file, data, options);
+        const filePath = `${os.platform() === 'win32' ? '\\\\?\\' : ''}${file}`
+        fs.writeFileSync(filePath, data, options);
     }
 
     appendFileSync(path: PathOrFileDescriptor, data: string | Uint8Array, options?: WriteFileOptions): void {
         this.initDirectory(path.toString());
-        fs.appendFileSync(path, data, options);
+        const filePath = `${os.platform() === 'win32' ? '\\\\?\\' : ''}${path}`
+        fs.appendFileSync(filePath, data, options);
     }
 
     mkdirSync(path: fs.PathLike, options: fs.MakeDirectoryOptions & { recursive: true; } | (fs.MakeDirectoryOptions & { recursive?: false | undefined; }) | null): string | undefined {

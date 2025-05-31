@@ -4,13 +4,13 @@ import { Request, Response } from "express";
 import { body, query } from "express-validator";
 import axios from 'axios';
 import { concat, concatMap, from, map, Observable, of, retry, tap, toArray } from 'rxjs';
-import { ChatCompletionAssistantMessageParam, ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionContentPartText, ChatCompletionCreateParams, ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam, ChatCompletionMessageToolCall, ChatCompletionTool, ChatCompletionToolMessageParam, FileContent } from "openai/resources";
+import { ChatCompletionAssistantMessageParam, ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionMessageParam, ChatCompletionMessageToolCall, ChatCompletionTool, ChatCompletionToolMessageParam, FileContent } from "openai/resources";
 
-import { MyToolType, aiApi, calculateTokenCost, getTiktokenEncoder, invalidMimeList, my_vertexai, normalizeMessage, providerPrediction, vertex_ai } from '../../common/openai-api-wrapper.js';
+import { AIProviderClient, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyGemini, MyOpenAI, MyToolType, aiApi, calculateTokenCost, genClientByProvider, getTiktokenEncoder, invalidMimeList, normalizeMessage, providerPrediction } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ds } from '../db.js';
-import { Content, CountTokensResponse, GenerateContentRequest, HarmBlockThreshold, HarmCategory } from '@google-cloud/vertexai';
+import { Content, CountTokensResponse, GenerateContentRequest, HarmBlockThreshold, HarmCategory, SafetyRating, VertexAI } from '@google-cloud/vertexai';
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
 const { GCP_PROJECT_ID, GCP_CONTEXT_CACHE_LOCATION, GCP_API_BASE_PATH } = process.env;
@@ -25,19 +25,22 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
     axios.defaults.proxy = false; // httpsAgentを使ってプロキシするので、axiosの元々のproxyはoffにしておかないと変なことになる。
 } else { }
 
-import { countChars, GenerateContentRequestForCache, mapForGemini, TokenCharCount, CachedContent } from '../../common/my-vertexai.js';
+import { countChars, GenerateContentRequestForCache, mapForGemini, TokenCharCount, CachedContent, MyVertexAiClient } from '../../common/my-vertexai.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
 import { ContentPartType, MessageGroupType, MessageClusterType, PredictHistoryStatus, TeamMemberRoleType, ThreadStatus, ThreadGroupStatus, ContentPartStatus } from '../models/values.js';
 import { FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
 import { EntityManager, In, IsNull, Not } from 'typeorm';
 import { clients } from './chat.js';
 import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
-import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus } from '../entity/auth.entity.js';
+import { AIProviderEntity, AIProviderType, AzureOpenAIConfig, DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, getAIProviderConfig, OAuthAccountEntity, OAuthAccountStatus, OpenAIConfig, ScopeType, UserEntity, UserRoleEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
 import { Utils, EnhancedRequestLimiter } from '../../common/utils.js';
 import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
 import { functionDefinitions } from '../tool/_index.js';
 import { ToolCallPart, ToolCallPartBody, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallGroupEntity, ToolCallPartInfo, ToolCallPartInfoBody, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
 import { appendToolCallPart } from './tool-call.js';
+import { UserTokenPayload } from '../middleware/authenticate.js';
+import { CohereClientV2 } from 'cohere-ai/ClientV2.js';
+import Anthropic from '@anthropic-ai/sdk/index.js';
 
 export const COUNT_TOKEN_MODEL = 'gemini-1.5-flash' as const;
 export const COUNT_TOKEN_OPENAI_MODEL = 'gpt-4o' as const;
@@ -138,10 +141,9 @@ async function buildFileGroupBodyMap(
  */
 export type ArgsBuildType = 'threadGroup' | 'thread' | 'messageGroup' | 'message' | 'contentPart';
 export type MessageSet = { threadGroup: ThreadGroupEntity, thread: ThreadEntity, messageGroup: MessageGroupEntity, message: MessageEntity, contentPartList: ContentPartEntity[] };
-export type MessageArgsSet = MessageSet & { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, } & { totalTokens?: number, totalBillableCharacters?: number };
+export type MessageArgsSet = MessageSet & { args: MyChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, } & { totalTokens?: number, totalBillableCharacters?: number } & { aiProviderClient: AIProviderClient };
 async function buildArgs(
-    orgKey: string,
-    userId: string,
+    user: UserTokenPayload,
     type: ArgsBuildType,
     idList: string[],
     mode: 'countOnly' | 'createCache' | undefined = undefined,
@@ -161,7 +163,7 @@ async function buildArgs(
             .createQueryBuilder("t")
             .select("t.*") // ここは性能が悪化してきたら絞った方がいいかもしれない。少なくともlabelは要らないので。
             .addSelect("ROW_NUMBER() OVER (PARTITION BY COALESCE(t.edited_root_message_id, t.id) ORDER BY t.last_update DESC)", "rn")
-            .where("t.org_key =:orgKey AND t.message_group_id IN (:...ids)", { orgKey, ids: messageGroupIds })
+            .where("t.org_key =:orgKey AND t.message_group_id IN (:...ids)", { orgKey: user.orgKey, ids: messageGroupIds })
             .getRawMany()
             .then(rawData => rawData.filter(row => row.rn === '1')); // フィルタリングをアプリケーション側で実施;
         return convertKeysToCamelCase(activeMessage);
@@ -173,7 +175,7 @@ async function buildArgs(
                 "t.*",
                 "ROW_NUMBER() OVER (PARTITION BY COALESCE(t.thread_id, t.id) ORDER BY t.last_update DESC) AS rn"
             ])
-            .where("t.org_key = :orgKey AND t.thread_id IN (:...ids)", { orgKey, ids: threadIds });
+            .where("t.org_key = :orgKey AND t.thread_id IN (:...ids)", { orgKey: user.orgKey, ids: threadIds });
 
         const activeGroups = await ds.createQueryBuilder()
             .select("*")
@@ -187,17 +189,17 @@ async function buildArgs(
     };
     const getActiveMessageGroupsByMessageGroupIds = async (ids: string[]): Promise<MessageGroupEntity[]> => {
         return ds.getRepository(MessageGroupEntity).find({
-            where: { orgKey, id: In(ids) }
+            where: { orgKey: user.orgKey, id: In(ids) }
         });
     };
     const getActiveThreadsByThreadIds = async (ids: string[]): Promise<ThreadEntity[]> => {
         return ds.getRepository(ThreadEntity).find({
-            where: { orgKey, id: In(ids), status: Not(ThreadStatus.Deleted) }
+            where: { orgKey: user.orgKey, id: In(ids), status: Not(ThreadStatus.Deleted) }
         });
     };
     const getActiveThreadGroupsByThreadGroupIds = async (ids: string[]): Promise<ThreadGroupEntity[]> => {
         return ds.getRepository(ThreadGroupEntity).find({
-            where: { orgKey, id: In(ids), status: Not(ThreadGroupStatus.Deleted) }
+            where: { orgKey: user.orgKey, id: In(ids), status: Not(ThreadGroupStatus.Deleted) }
         });
     };
 
@@ -226,18 +228,18 @@ async function buildArgs(
             // console.log('contentPart');
             // console.log(idList);
             const contentpartList = await ds.getRepository(ContentPartEntity).find({
-                where: { orgKey, id: In(idList), status: Not(ContentPartStatus.Deleted) },
+                where: { orgKey: user.orgKey, id: In(idList), status: Not(ContentPartStatus.Deleted) },
             })
             // console.log(contentpartList);
             tailMessageList = await ds.getRepository(MessageEntity).find({
-                where: { orgKey, id: In(contentpartList.map(cp => cp.messageId)) },
+                where: { orgKey: user.orgKey, id: In(contentpartList.map(cp => cp.messageId)) },
             });
             messageGroupList = await getActiveMessageGroupsByMessageGroupIds(tailMessageList.map(m => m.messageGroupId));
             threadList = await getActiveThreadsByThreadIds(messageGroupList.map(mg => mg.threadId));
             threadGroupList = await getActiveThreadGroupsByThreadGroupIds(threadList.map(t => t.threadGroupId));
         } else if (type === 'message') {
             tailMessageList = await ds.getRepository(MessageEntity).find({
-                where: { orgKey, id: In(idList) },
+                where: { orgKey: user.orgKey, id: In(idList) },
             });
             messageGroupList = await getActiveMessageGroupsByMessageGroupIds(tailMessageList.map(m => m.messageGroupId));
             threadList = await getActiveThreadsByThreadIds(messageGroupList.map(mg => mg.threadId));
@@ -262,7 +264,7 @@ async function buildArgs(
         } else if (type === 'threadGroup') {
             threadGroupList = await getActiveThreadGroupsByThreadGroupIds(idList);
             threadList = await ds.getRepository(ThreadEntity).find({
-                where: { orgKey, threadGroupId: In(threadGroupList.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
+                where: { orgKey: user.orgKey, threadGroupId: In(threadGroupList.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
             });
             messageGroupList = await getLatestMessageGroupsByThreadIds(threadList.map(t => t.id));
             tailMessageList = await getLatestMessagesByMessageGroupIds(messageGroupList.map(mg => mg.id));
@@ -295,12 +297,12 @@ async function buildArgs(
 
     // プロジェクトの取得と権限チェック
     const projectList = await ds.getRepository(ProjectEntity).find({
-        where: { orgKey, id: In(threadGroupList.map(message => message.projectId)) }
+        where: { orgKey: user.orgKey, id: In(threadGroupList.map(message => message.projectId)) }
     });
 
     // メンバーチェック
     const teamMemberList = await ds.getRepository(TeamMemberEntity).find({
-        where: { orgKey, teamId: In(projectList.map(project => project.teamId)), userId: userId || '' }
+        where: { orgKey: user.orgKey, teamId: In(projectList.map(project => project.teamId)), userId: user.id || '' }
     });
 
     // 権限チェック
@@ -312,14 +314,14 @@ async function buildArgs(
 
     // メッセージグループ全量取得->マップ化
     const messageGroupListAll = await ds.getRepository(MessageGroupEntity).find({
-        where: { orgKey, threadId: In(threadList.map(thread => thread.id)) },
+        where: { orgKey: user.orgKey, threadId: In(threadList.map(thread => thread.id)) },
         order: { updatedAt: 'ASC' }
     });
     const messageGroupMap = Object.fromEntries(messageGroupListAll.map(messageGroup => [messageGroup.id, messageGroup]));
 
     // メッセージ全量マップ取得->マップ化
     const messageListAll = await ds.getRepository(MessageEntity).find({
-        where: { orgKey, messageGroupId: In(Object.keys(messageGroupMap)) },
+        where: { orgKey: user.orgKey, messageGroupId: In(Object.keys(messageGroupMap)) },
     });
     const messageMap = Object.fromEntries(messageListAll.map(message => [message.id, message]));
     const messageMapByMessageGroupId = messageListAll.reduce((prev, curr) => {
@@ -354,7 +356,7 @@ async function buildArgs(
         // console.log(messageSetList.map(messageSet => messageSet.message.id));
         // console.log(messageSet.thread.inDto)
 
-        const inDto = messageSet.thread.inDto as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
+        const inDto = messageSet.thread.inDto as { args: MyChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
 
         if (mode === 'createCache') {
             // キャッシュ作成の時はゴミが残ってても上から更新する。
@@ -375,7 +377,7 @@ async function buildArgs(
         // console.log('messageSetList=', messageSetList.map(messageSet => messageSet));
         const messageIdList = messageSetList.map(messageSet => messageSet.message.id);
         const contentPartList = await ds.getRepository(ContentPartEntity).find({
-            where: { orgKey, messageId: In(messageIdList), status: Not(ContentPartStatus.Deleted) },
+            where: { orgKey: user.orgKey, messageId: In(messageIdList), status: Not(ContentPartStatus.Deleted) },
             order: { seq: 'ASC' },
         });
 
@@ -405,8 +407,8 @@ async function buildArgs(
             const fileGroupIdList = contentPartList.filter(contentPart => contentPart.type === 'file').map(contentPart => contentPart.linkId).filter(Boolean) as string[];
             const toolGroupIdList = contentPartList.filter(contentPart => contentPart.type === 'tool').map(contentPart => contentPart.linkId).filter(Boolean) as string[];
 
-            const fileTokenCountList = await getCountTokenListByFileGroupIdList(orgKey, fileGroupIdList);
-            const toolTokenCountList = await getCountTokenListByToolGroupIdList(orgKey, toolGroupIdList);
+            const fileTokenCountList = await getCountTokenListByFileGroupIdList(user.orgKey, fileGroupIdList);
+            const toolTokenCountList = await getCountTokenListByToolGroupIdList(user.orgKey, toolGroupIdList);
             const tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters?: number } } = {};
             for (const tokenCount of textContentList.concat(fileTokenCountList).concat(toolTokenCountList)) {
                 for (const model of Object.keys(tokenCount)) {
@@ -426,7 +428,7 @@ async function buildArgs(
         } else { }
 
         // コンテンツIDリストからDataURLのマップを作成しておく。
-        fileGroupIdChatCompletionContentPartImageMap = await buildFileGroupBodyMap(orgKey, contentPartList, fileGroupIdChatCompletionContentPartImageMap);
+        fileGroupIdChatCompletionContentPartImageMap = await buildFileGroupBodyMap(user.orgKey, contentPartList, fileGroupIdChatCompletionContentPartImageMap);
         // console.log(Object.keys(fileGroupIdChatCompletionContentPartImageMap));
 
         // console.log(`\n\ncontentPartList.length = ${contentPartList.length}\n`);
@@ -492,7 +494,7 @@ async function buildArgs(
 
                     // toolCallGroupIdがある場合はtoolCallを取得して組み立てる
                     const toolCallList = await ds.getRepository(ToolCallPartEntity).find({
-                        where: { orgKey, toolCallGroupId: content.linkId || '' },
+                        where: { orgKey: user.orgKey, toolCallGroupId: content.linkId || '' },
                         order: { seq: 'ASC' },
                     });
                     const tollCallObjectKeyListSequencial: string[] = [];
@@ -600,7 +602,10 @@ async function buildArgs(
             return contents.length > 0 || ((message as ChatCompletionAssistantMessageParam).tool_calls || []).length > 0
         });
 
-        messageArgsSetList.push({ ...messageSet, args: inDto.args, options: inDto.options });
+        // AIプロバイダクライアントを取得
+        const aiProviderClient = await getAIProvider(user, inDto.args.providerName);
+
+        messageArgsSetList.push({ ...messageSet, args: inDto.args, options: inDto.options, aiProviderClient });
 
         // 無理矢理だが、o系のモデルは出力が苦手なので調整しておく。
         if (inDto.args.model.startsWith('o1') || inDto.args.model.startsWith('o3') || inDto.args.model.startsWith('o4')) {
@@ -632,6 +637,67 @@ async function buildArgs(
     return { messageArgsSetList };
 }
 
+export async function getAIProvider(user: UserTokenPayload, providerName: string): Promise<AIProviderClient> {
+    // USER>DIVISION>ORGANIZTION の優先順位で最上位のスコープのものを取得する
+    const priority = [ScopeType.USER, ScopeType.DIVISION, ScopeType.ORGANIZATION];
+
+    // ユーザーのロールリストからスコープ条件を作成
+    const scopeConditions = user.roleList.map(role => ({
+        orgKey: user.orgKey,
+        name: providerName,
+        'scopeInfo.scopeType': role.scopeInfo.scopeType,
+        'scopeInfo.scopeId': role.scopeInfo.scopeId,
+    }));
+
+    console.dir(scopeConditions, { depth: null });
+    const providerList = await ds.getRepository(AIProviderEntity).find({
+        where: scopeConditions,
+    });
+
+    if (providerList.length === 0) {
+        throw new Error(`プロバイダ ${providerName} が見つかりません。`);
+    }
+
+    // スコープ優先順位でソート
+    const provider = providerList.sort((a, b) => {
+        return priority.indexOf(a.scopeInfo.scopeType) - priority.indexOf(b.scopeInfo.scopeType);
+    })[0];
+
+    // プロバイダのクライアントを生成
+    switch (provider.type) {
+        case AIProviderType.OPENAI:
+            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type)) };
+        case AIProviderType.AZURE_OPENAI:
+            return { type: provider.type, client: new MyAzureOpenAI(getAIProviderConfig(provider, provider.type)) };
+        case AIProviderType.ANTHROPIC:
+            return { type: provider.type, client: new Anthropic(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey }))[0]) };
+        case AIProviderType.CEREBRAS:
+            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey, baseURL: 'https://api.cerebras.com/v1' }))) };
+        case AIProviderType.GROQ:
+            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey, baseURL: 'https://api.groq.com/openai/v1' }))) };
+        case AIProviderType.MISTRAL:
+            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey, baseURL: 'https://api.mistral.com/v1' }))) };
+        case AIProviderType.DEEPSEEK:
+            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey, baseURL: 'https://api.deepseek.com/v1' }))) };
+        case AIProviderType.LOCAL:
+            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey, baseURL: 'http://localhost:3000' }))) };
+        case AIProviderType.OPENAI_COMPATIBLE:
+            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type)) };
+        case AIProviderType.VERTEXAI:
+            return { type: provider.type, client: new MyVertexAiClient(getAIProviderConfig(provider, provider.type)) };
+        case AIProviderType.ANTHROPIC_VERTEXAI:
+            return { type: provider.type, client: new MyAnthropicVertex(getAIProviderConfig(provider, provider.type)) };
+        case AIProviderType.OPENAPI_VERTEXAI:
+            return { type: provider.type, client: new MyVertexAiClient(getAIProviderConfig(provider, provider.type)) };
+        case AIProviderType.COHERE:
+            return { type: provider.type, client: new CohereClientV2({ token: (provider.config[0] as OpenAIConfig).apiKey }) };
+        case AIProviderType.GEMINI:
+            return { type: provider.type, client: new MyGemini(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey }))) };
+        default:
+            throw new Error(`Unknown provider type: ${provider.type}`);
+    }
+}
+
 /**
  * [user認証] チャットの送信
  */
@@ -645,7 +711,7 @@ export const chatCompletionByProjectModel = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { connectionId, streamId, type, id } = req.query as { connectionId: string, streamId: string, type: ArgsBuildType, id: string };
-        // const { args } = req.body as { args: ChatCompletionCreateParamsStreaming };
+        // const { args } = req.body as { args: MyChatCompletionCreateParamsStreaming };
         const { toolCallPartCommandList } = req.body as { toolCallPartCommandList: ToolCallPartCommand[] };
         // connectionIdはクライアントで発番しているので、万が一にも混ざらないようにユーザーIDを付与。
         const clientId = `${req.info.user.id}-${connectionId}` as string;
@@ -658,10 +724,12 @@ export const chatCompletionByProjectModel = [
         }[] = [];
         try {
 
-            const generativeModel = vertex_ai.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
+            const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
+            const client = my_vertexai.client;
+            const generativeModel = client.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
             const idList = id.split('|');
-            const { messageArgsSetList } = await buildArgs(req.info.user.orgKey, req.info.user.id, type, idList);
+            const { messageArgsSetList } = await buildArgs(req.info.user, type, idList);
             // console.dir(messageArgsSetList[0].args.messages, { depth: null });
 
             // 重複無しのメッセージグループリスト
@@ -892,8 +960,6 @@ export const chatCompletionByProjectModel = [
                     // const aiApi = new OpenAIApiWrapper();
                     // console.dir(inDto.args, { depth: null });
 
-                    const provider = providerPrediction(inDto.args.model);
-
                     // レスポンス返した後にゆるりとヒストリーを更新しておく。
                     const history = new PredictHistoryWrapperEntity();
                     history.connectionId = connectionId;
@@ -901,7 +967,7 @@ export const chatCompletionByProjectModel = [
                     history.messageId = message.id;
                     history.label = label;
                     history.model = inDto.args.model;
-                    history.provider = provider;
+                    history.provider = obj.inDto.aiProviderClient.type;
                     history.orgKey = req.info.user.orgKey;
                     history.createdBy = req.info.user.id;
                     history.updatedBy = req.info.user.id;
@@ -966,7 +1032,7 @@ export const chatCompletionByProjectModel = [
                             })
                         );
                     } else { }
-                    return { provider, toolCallCallList };
+                    return { provider: obj.inDto.aiProviderClient, toolCallCallList };
                 }))
             });
 
@@ -1463,7 +1529,7 @@ export const chatCompletionByProjectModel = [
             //     }));
             // })
         } catch (error) {
-            res.status(503).end(Utils.errorFormat(error));
+            res.status(503).set('Content-Type', 'text/plain; charset=utf-8').set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
         }
     }
 ];
@@ -1537,13 +1603,13 @@ export const geminiCountTokensByProjectModel = [
         const { type, id } = req.query as { type: ArgsBuildType, id: string };
         try {
             // カウントしたいだけだからパラメータは適当でOK。
-            const args = { messages: [], model: COUNT_TOKEN_MODEL, temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, } as ChatCompletionCreateParamsStreaming;
+            const args = { messages: [], model: COUNT_TOKEN_MODEL, temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, providerName: 'vertex_ai' } as MyChatCompletionCreateParamsStreaming;
 
             // const preTokenCount = { totalTokens: 0, totalBillableCharacters: 0 };
             const tokenCountSummaryList: { [model: string]: { totalTokens: number, totalBillableCharacters?: number } }[] = [];
             if (id) {
                 // メッセージIDが指定されていたらまずそれらを読み込む
-                const { messageArgsSetList } = await buildArgs(req.info.user.orgKey, req.info.user.id, type, [id], 'countOnly');
+                const { messageArgsSetList } = await buildArgs(req.info.user, type, [id], 'countOnly');
 
                 // const tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters: number } } = {};
                 // 実体はトークン数だけが返ってくる
@@ -1623,7 +1689,8 @@ export const geminiCountTokensByProjectModel = [
                             const req: GenerateContentRequest = mapForGemini(args);
                             const countCharsObj = countChars(args);
                             // console.dir(req, { depth: null });
-                            const generativeModel = vertex_ai.preview.getGenerativeModel({
+                            const client = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient).client;
+                            const generativeModel = client.preview.getGenerativeModel({
                                 model: COUNT_TOKEN_MODEL,
                                 safetySettings: [],
                             });
@@ -1670,10 +1737,10 @@ export const geminiCountTokensByProjectModel = [
                                 // console.dir(tokenCountSummaryList, { depth: null });
                                 res.end(JSON.stringify(tokenCountSummaryList));
                             }).catch(error => {
-                                res.status(503).end(Utils.errorFormat(error));
+                                res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
                             });
                         } catch (error) {
-                            res.status(503).end(Utils.errorFormat(error));
+                            res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
                         }
                     },
                 });
@@ -1682,7 +1749,7 @@ export const geminiCountTokensByProjectModel = [
                 res.end(JSON.stringify(tokenCountSummaryList));
             }
         } catch (error) {
-            res.status(503).end(Utils.errorFormat(error));
+            res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
         }
     }
 ];
@@ -1703,7 +1770,7 @@ export const geminiCountTokensByThread = [
             const result: { id: string, totalTokens: number, totalBillableCharacters: number }[] = [];
             if (ids.length > 0) {
                 // メッセージIDが指定されていたらまずそれらを読み込む
-                const { messageArgsSetList } = await buildArgs(req.info.user.orgKey, req.info.user.id, 'thread', ids, 'countOnly');
+                const { messageArgsSetList } = await buildArgs(req.info.user, 'thread', ids, 'countOnly');
                 // 指定されたIDの順番に並び替え
                 const messageArgsSetListSorted = ids.map(id => messageArgsSetList.find(m => m.thread.id === id) as MessageArgsSet);
                 // 実体はトークン数だけが返ってくる
@@ -1720,13 +1787,14 @@ export const geminiCountTokensByThread = [
             // inputCounterが0の場合は元々計算済みのものを返却するだけ
             res.end(JSON.stringify(result));
         } catch (error) {
-            res.status(503).end(Utils.errorFormat(error));
+            res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
         }
     }
 ];
 
 export async function geminiCountTokensByContentPart(transactionalEntityManager: EntityManager, contents: ContentPartEntity[], model: string = COUNT_TOKEN_MODEL): Promise<ContentPartEntity[]> {
-    const generativeModel = vertex_ai.preview.getGenerativeModel({
+    const client = (genClientByProvider(model).client as MyVertexAiClient).client;
+    const generativeModel = client.preview.getGenerativeModel({
         model, safetySettings: [],
     });
 
@@ -1805,7 +1873,9 @@ export async function geminiCountTokensByContentPart(transactionalEntityManager:
 }
 
 export async function geminiCountTokensByFile(transactionalEntityManager: EntityManager, fileList: { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }[], model: string = COUNT_TOKEN_MODEL): Promise<FileBodyEntity[]> {
-    const generativeModel = vertex_ai.preview.getGenerativeModel({
+    const my_vertexai = (genClientByProvider(model).client as MyVertexAiClient);
+    const client = my_vertexai.client;
+    const generativeModel = client.preview.getGenerativeModel({
         model, safetySettings: [],
     });
 
@@ -1965,7 +2035,7 @@ export const geminiCreateContextCacheByProjectModel = [
         const { type, id, model } = req.query as { type: ArgsBuildType, id: string, model: string };
         const { ttl, expire_time } = req.body as GenerateContentRequestForCache;
         try {
-            const { messageArgsSetList } = await buildArgs(req.info.user.orgKey, req.info.user.id, type, [id], 'createCache');
+            const { messageArgsSetList } = await buildArgs(req.info.user, type, [id], 'createCache');
             // const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
 
             // 課金用にプロジェクト振り分ける。当たらなかったら当たらなかったでよい。
@@ -1997,7 +2067,9 @@ export const geminiCreateContextCacheByProjectModel = [
                         // } else { }
 
                         const countCharsObj = countChars(args);
-                        const generativeModel = vertex_ai.preview.getGenerativeModel({
+                        const my_vertexai = (genClientByProvider(model).client as MyVertexAiClient);
+                        const client = my_vertexai.client;
+                        const generativeModel = client.preview.getGenerativeModel({
                             model: COUNT_TOKEN_MODEL,
                             safetySettings: [],
                         });
@@ -2072,12 +2144,12 @@ export const geminiCreateContextCacheByProjectModel = [
                         });
                         res.status(200).json(savedCachedContent);
                     } catch (error) {
-                        res.status(503).end(Utils.errorFormat(error));
+                        res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
                     }
                 },
             });
         } catch (error) {
-            res.status(503).end(Utils.errorFormat(error));
+            res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
         }
     }
 ];
@@ -2119,7 +2191,8 @@ export const geminiUpdateContextCacheByProjectModel = [
             });
 
             let savedCachedContent: VertexCachedContentEntity | undefined;
-            savedCachedContent = undefined;
+
+            const my_vertexai = (genClientByProvider(inDto.args.model).client as MyVertexAiClient);
             my_vertexai.getAuthorizedHeaders().then(headers =>
                 axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${cachedContent.name}`, { ttl }, headers)
             ).then(async response => {
@@ -2149,10 +2222,10 @@ export const geminiUpdateContextCacheByProjectModel = [
                 // 
                 res.end(JSON.stringify(savedCachedContent));
             }).catch(error => {
-                res.status(503).end(Utils.errorFormat(error));
+                res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
             });
         } catch (error) {
-            res.status(503).end(Utils.errorFormat(error));
+            res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
         }
     }
 ];
@@ -2182,6 +2255,7 @@ export const geminiDeleteContextCacheByProjectModel = [
                     const inDto = thread.inDto;
                     const cachedContent: VertexCachedContentEntity = (inDto.args as any).cachedContent;
 
+                    const my_vertexai = (genClientByProvider(inDto.args.model).client as MyVertexAiClient);
                     // cachedContentを消して更新
                     delete (inDto.args as any).cachedContent;
                     thread.inDto = inDto;
@@ -2212,12 +2286,12 @@ export const geminiDeleteContextCacheByProjectModel = [
                     ).then(async response => {
                         res.end(JSON.stringify(response.data));
                     }).catch(error => {
-                        res.status(503).end(Utils.errorFormat(error));
+                        res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
                     });
                 }
             });
         } catch (error) {
-            res.status(503).end(Utils.errorFormat(error));
+            res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
         }
     }
 ];
@@ -2229,15 +2303,16 @@ export const geminiGetContextCache = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         try {
+            const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
             my_vertexai.getAuthorizedHeaders().then(headers =>
                 axios.get(`${CONTEXT_CACHE_API_ENDPOINT}/projects/${GCP_PROJECT_ID}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`, headers)
             ).then(response => {
                 res.end(JSON.stringify(response.data));
             }).catch(error => {
-                res.status(503).end(Utils.errorFormat(error));
+                res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
             });
         } catch (error) {
-            res.status(503).end(Utils.errorFormat(error));
+            res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
         }
     }
 ];

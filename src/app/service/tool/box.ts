@@ -2,7 +2,7 @@ import { map, toArray } from "rxjs";
 import { promises as fs } from 'fs';
 import { detect } from 'jschardet';
 
-import { MyToolType, OpenAIApiWrapper, plainExtensions, plainMime, providerPrediction } from "../../common/openai-api-wrapper.js";
+import { genClientByProvider, MyToolType, OpenAIApiWrapper, plainExtensions, plainMime, providerPrediction } from "../../common/openai-api-wrapper.js";
 import { UserRequest } from "../models/info.js";
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
 import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
@@ -144,7 +144,7 @@ export async function boxFunctionDefinitions(
                 delete inDto.args.tool_choice;
                 delete inDto.args.tools;
 
-                const aiProvider = providerPrediction(inDto.args.model);
+                const aiProvider = genClientByProvider(inDto.args.model);
 
                 const newLabel = `${label}-call_ai-${model}`;
                 // レスポンス返した後にゆるりとヒストリーを更新しておく。
@@ -155,7 +155,7 @@ export async function boxFunctionDefinitions(
                 history.messageId = message.id;
                 history.label = newLabel;
                 history.model = inDto.args.model;
-                history.provider = aiProvider;
+                history.provider = aiProvider.type;
                 history.createdBy = req.info.user.id;
                 history.updatedBy = req.info.user.id;
                 history.createdIp = req.info.ip;

@@ -17,7 +17,7 @@ import * as configureGlobalFetch from './configureGlobalFetch.js'; configureGlob
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { Content, FunctionCall, FunctionDeclarationsTool, GenerateContentRequest, GenerateContentResponse, GenerateContentResult, HarmBlockThreshold, HarmCategory, Part, StreamGenerateContentResult, UsageMetadata, VertexAI } from '@google-cloud/vertexai';
+import { Content, FunctionCall, FunctionDeclarationsTool, GenerateContentRequest, GenerateContentResponse, GenerateContentResult, HarmBlockThreshold, HarmCategory, Part, SafetyRating, StreamGenerateContentResult, UsageMetadata, VertexAI } from '@google-cloud/vertexai';
 import { generateContentStream } from '@google-cloud/vertexai/build/src/functions/generate_content.js';
 
 // import { EnhancedGenerateContentResponse, GoogleGenerativeAI } from '@google/generative-ai';
@@ -37,10 +37,39 @@ import { Tiktoken, TiktokenEncoding, TiktokenModel, encoding_for_model } from 't
 import fss from './fss.js';
 import { Utils } from "./utils.js";
 import { getMetaDataFromDataURL } from './media-funcs.js';
-import { COST_TABLE, SHORT_NAME, Ratelimit, AiProvider, currentRatelimit, GPTModels, GPT4_MODELS, VISION_MODELS, JSON_MODELS } from './model-definition.js';
+import { COST_TABLE, SHORT_NAME, Ratelimit, currentRatelimit, GPTModels, GPT4_MODELS, VISION_MODELS, JSON_MODELS } from './model-definition.js';
+
+export type MyChatCompletionCreateParamsStreaming = ChatCompletionCreateParamsStreaming & { providerName: string, isGoogleSearch?: boolean, cachedContent?: CachedContent, safetySettings?: SafetyRating[] };
 
 const HISTORY_DIRE = `./history`;
 
+export type AIProviderClient =
+    { type: AIProviderType.OPENAI, client: MyOpenAI } |
+    { type: AIProviderType.COHERE, client: CohereClientV2 } |
+    { type: AIProviderType.AZURE_OPENAI, client: MyAzureOpenAI } |
+    { type: AIProviderType.OPENAPI_VERTEXAI, client: MyVertexAiClient } |
+    { type: AIProviderType.GROQ, client: MyOpenAI } |
+    { type: AIProviderType.MISTRAL, client: MyOpenAI } |
+    { type: AIProviderType.CEREBRAS, client: MyOpenAI } |
+    { type: AIProviderType.DEEPSEEK, client: MyOpenAI } |
+    { type: AIProviderType.LOCAL, client: MyOpenAI } |
+    { type: AIProviderType.OPENAI_COMPATIBLE, client: MyOpenAI } |
+    { type: AIProviderType.ANTHROPIC_VERTEXAI, client: MyAnthropicVertex } |
+    { type: AIProviderType.ANTHROPIC, client: Anthropic } |
+    { type: AIProviderType.GEMINI, client: MyGemini } |
+    { type: AIProviderType.VERTEXAI, client: MyVertexAiClient }
+    ;
+export const providerInstances: { [providerTypeAndName: string]: AIProviderClient } = {};
+// export const providerInstances = {} as Record<AIProviderType, AIProviderClient>;
+
+// const apiVersion = '2024-08-01-preview';
+import { CachedContent, countChars, GenerateContentRequestExtended, mapForGemini, mapForGeminiExtend, MyVertexAiClient } from './my-vertexai.js';
+import { MessageStreamEvent, MessageStreamParams } from '@anthropic-ai/sdk/resources/index.js';
+import { ReadableStream } from '@anthropic-ai/sdk/_shims/index.js';
+import { convertAnthropicToOpenAI, remapAnthropic } from './my-anthropic.js';
+import { AIProviderType, AnthropicVertexAIConfig, AzureOpenAIConfig } from '../service/entity/auth.entity.js';
+
+// TODO プロキシは環境変数から取得するように変更したい。
 // proxy設定判定用オブジェクト
 const proxyObj: { [key: string]: any } = {
     httpProxy: process.env['http_proxy'] as string || undefined,
@@ -52,78 +81,6 @@ Object.keys(proxyObj).filter(key => noProxies.includes(host) || !proxyObj[key]).
 const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? {
     httpAgent: new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || ''),
 } : {};
-
-
-const openai = new OpenAI({
-    apiKey: process.env['OPENAI_API_KEY'] || 'dummy',
-    // baseOptions: { timeout: 1200000, Configuration: { timeout: 1200000 } },
-});
-
-// llama2-70b-4096
-// mixtral-8x7b-32768
-const groq = new OpenAI({
-    apiKey: process.env['GROQ_API_KEY'] || 'dummy',
-    baseURL: 'https://api.groq.com/openai/v1',
-});
-const mistral = new OpenAI({
-    apiKey: process.env['MISTRAL_API_KEY'] || 'dummy',
-    baseURL: 'https://api.mistral.ai/v1',
-});
-const cerebras = new OpenAI({
-    apiKey: process.env['CEREBRAS_API_KEY'] || 'dummy',
-    baseURL: 'https://api.cerebras.ai/v1',
-});
-
-const anthropic = new Anthropic({
-    apiKey: process.env['ANTHROPIC_API_KEY'] || 'dummy',
-    httpAgent: options.httpAgent,
-    maxRetries: 3,
-});
-
-const gemini = new googleGenerativeAI.GoogleGenerativeAI(process.env['GEMINI_API_KEY'] || 'dummy');
-
-const deepseek = new OpenAI({
-    apiKey: process.env['DEEPSEEK_API_KEY'] || 'dummy',
-    baseURL: 'https://api.deepseek.com',
-});
-
-const cohere = new CohereClientV2({ token: process.env['COHERE_API_KEY'] || 'dummy' });
-
-const local = new OpenAI({
-    apiKey: process.env['LOCAL_AI_API_KEY'] || 'dummy',
-    baseURL: process.env['LOCAL_AI_BASE_URL'] || 'dummy',
-    httpAgent: false,
-});
-
-// 環境変数からAPIキーとエンドポイントを取得
-const AZURE_OPENAI_API_KEY_01 = process.env.AZURE_OPENAI_API_KEY_01 || 'dummy';
-const AZURE_OPENAI_ENDPOINT_01 = process.env.AZURE_OPENAI_ENDPOINT_01 || 'dummy';
-const AZURE_OPENAI_DEPLOYMENT_01 = process.env.AZURE_OPENAI_DEPLOYMENT_01 || 'dummy';
-
-const AZURE_OPENAI_API_KEY_02 = process.env.AZURE_OPENAI_API_KEY_02 || 'dummy';
-const AZURE_OPENAI_ENDPOINT_02 = process.env.AZURE_OPENAI_ENDPOINT_02 || 'dummy';
-const AZURE_OPENAI_DEPLOYMENT_02 = process.env.AZURE_OPENAI_DEPLOYMENT_02 || 'dummy';
-
-const AZURE_OPENAI_API_KEY_03 = process.env.AZURE_OPENAI_API_KEY_03 || 'dummy';
-const AZURE_OPENAI_ENDPOINT_03 = process.env.AZURE_OPENAI_ENDPOINT_03 || 'dummy';
-const AZURE_OPENAI_DEPLOYMENT_03 = process.env.AZURE_OPENAI_DEPLOYMENT_03 || 'dummy';
-
-// const apiVersion = '2024-08-01-preview';
-const apiVersion = '2024-12-01-preview';
-const azureClient_01 = new AzureOpenAI({ baseURL: AZURE_OPENAI_ENDPOINT_01, apiKey: AZURE_OPENAI_API_KEY_01, deployment: AZURE_OPENAI_DEPLOYMENT_01, apiVersion });
-const azureClient_02 = new AzureOpenAI({ baseURL: AZURE_OPENAI_ENDPOINT_02, apiKey: AZURE_OPENAI_API_KEY_02, deployment: AZURE_OPENAI_DEPLOYMENT_02, apiVersion });
-const azureClient_03 = new AzureOpenAI({ baseURL: AZURE_OPENAI_ENDPOINT_03, apiKey: AZURE_OPENAI_API_KEY_03, deployment: AZURE_OPENAI_DEPLOYMENT_03, apiVersion });
-
-
-import { CachedContent, countChars, GenerateContentRequestExtended, mapForGemini, mapForGeminiExtend, MyVertexAiClient } from './my-vertexai.js';
-import { ContentBlockParam, DocumentBlockParam, ImageBlockParam, MessageParam, MessageStreamEvent, MessageStreamParams, Tool, Usage } from '@anthropic-ai/sdk/resources/index.js';
-import { ReadableStream } from '@anthropic-ai/sdk/_shims/index.js';
-import { convertAnthropicToOpenAI, remapAnthropic } from './my-anthropic.js';
-
-// Initialize Vertex with your Cloud project and location
-export const my_vertexai = new MyVertexAiClient();
-export const vertex_ai = new VertexAI({ project: GCP_PROJECT_ID || '', location: GCP_REGION || 'asia-northeast1', apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}` });
-export const anthropicVertex = new AnthropicVertex({ projectId: GCP_PROJECT_ID || '', region: GCP_REGION_ANTHROPIC || 'europe-west1', baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: options.httpAgent }); //TODO 他で使えるようになったら変える。
 
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
@@ -153,36 +110,327 @@ export function getTiktokenEncoder(model: TiktokenModel): Tiktoken {
     return encoderMap[encoderModelMap[model]];
 }
 
-export function providerPrediction(model: string, provider?: AiProvider): AiProvider {
-    // providerが指定されている場合は、そのプロバイダーを使う。
-    // 指定されていなかったら、モデル名からプロバイダーを推測する。
-    if (provider) {
-        return provider as AiProvider;
-    } else if (model.startsWith('gemini-')) {
-        return 'gemini';
-        return 'vertexai';
-    } else if (model.startsWith('meta/llama3-')) {
-        return 'openapi_vertexai';
-    } else if (model.startsWith('claude-')) {
-        return 'anthropic';
-        return 'anthropic_vertexai';
-    } else if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4') || model.startsWith('chatgpt-')) {
-        return 'openai';
-        return 'azure';
-    } else if (model.startsWith('deepseek-r1-distill-') || model.startsWith('llama-3.3-70b-') || model === 'qwen-qwq-32b' || model === 'mistral-saba-24b' || model.startsWith('meta-llama/llama-4-')) {
-        return 'groq';
-    } else if (model.startsWith('llama-3.3-70b')) {
-        return 'cerebras';
-    } else if (model.startsWith('command-') || model.startsWith('c4ai-')) {
-        return 'cohere';
-    } else if (model.startsWith('deepseek-')) {
-        return 'deepseek';
-    } else {
-        // 未知モデルはlocalに向ける。
-        return 'local';
+export class MyOpenAI {
+    counter = 0;
+    clients: OpenAI[] = [];
+
+    constructor(public params: {
+        apiKey: string,
+        baseURL?: string,
+        httpAgent?: any, // HttpsProxyAgent
+    }[]) {
+        // params.forEach(param => {
+        //     this.clients.push(new OpenAI({ apiKey: param.apiKey, baseURL: param.baseURL, apiVersion: param.apiVersion }));
+        // });
+        this.params.forEach(param => {
+            this.clients.push(new OpenAI({ apiKey: param.apiKey, baseURL: param.baseURL || 'https://api.openai.com/v1', httpAgent: param.httpAgent || options.httpAgent }));
+        });
+    }
+
+    get client(): OpenAI {
+        const client = this.clients[this.counter % this.clients.length];
+        this.counter++;
+        return client;
     }
 }
 
+export class MyGemini {
+    counter = 0;
+    clients: googleGenerativeAI.GoogleGenerativeAI[] = [];
+
+    constructor(public params: { apiKey: string }[]) {
+        // params.forEach(param => {
+        //     this.clients.push(new googleGenerativeAI.GoogleGenerativeAI({ apiKey: param.apiKey }));
+        // });
+        this.params.forEach(param => {
+            this.clients.push(new googleGenerativeAI.GoogleGenerativeAI(param.apiKey));
+        });
+    }
+    get client(): googleGenerativeAI.GoogleGenerativeAI {
+        const client = this.clients[this.counter % this.clients.length];
+        this.counter++;
+        return client;
+    }
+}
+
+export class MyAnthropicVertex {
+    counter = 0;
+
+    clients: AnthropicVertex[];
+    constructor(public params: AnthropicVertexAIConfig[]) {
+        // params.forEach(param => {
+        //     this.clients.push(new AnthropicVertex({ projectId: param.projectId, region: param.region, baseURL: param.baseURL, httpAgent: param.httpAgent }));
+        // });
+        this.clients = params.map(param => new AnthropicVertex({ ...param, httpAgent: param.httpAgent || options.httpAgent }));
+    }
+
+    get client(): AnthropicVertex {
+        const client = this.clients[this.counter % this.clients.length];
+        this.counter++;
+        return client;
+    }
+}
+
+export class MyAzureOpenAI {
+    clients: { [model: string]: AzureOpenAI } = {};
+    constructor(public params: AzureOpenAIConfig[]) {
+        // params.forEach(param => {
+        //     this.clients.push(new AzureOpenAI({ baseURL: param.baseURL, apiKey: param.apiKey, deployment: param.deployment, apiVersion: param.apiVersion }));
+        // });
+        this.params.forEach(param => {
+            param.resources.forEach(resource => {
+                Object.keys(resource.deployments).forEach(modelAlias => {
+                    this.clients[modelAlias] = new AzureOpenAI({
+                        baseURL: resource.baseURL,
+                        apiKey: resource.apiKey,
+                        deployment: resource.deployments[modelAlias],
+                        apiVersion: resource.apiVersion || '2024-12-01-preview',
+                    });
+                });
+            });
+        });
+    }
+    getClient(model: string): AzureOpenAI {
+        if (this.clients[model]) {
+            return this.clients[model];
+        } else {
+            throw new Error(`Azure OpenAI client for model ${model} not found`);
+        }
+    }
+}
+
+
+export function providerPrediction(model: string, provider?: AIProviderType): AIProviderType {
+    // providerが指定されている場合は、そのプロバイダーを使う。
+    // 指定されていなかったら、モデル名からプロバイダーを推測する。
+    if (provider) {
+        return provider as AIProviderType;
+    } else if (model.startsWith('gemini-')) {
+        // return 'gemini';
+        return AIProviderType.VERTEXAI;
+    } else if (model.startsWith('meta/llama3-')) {
+        return AIProviderType.OPENAPI_VERTEXAI;
+    } else if (model.startsWith('claude-')) {
+        return AIProviderType.ANTHROPIC;
+        return AIProviderType.ANTHROPIC_VERTEXAI;
+    } else if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4') || model.startsWith('chatgpt-')) {
+        return AIProviderType.OPENAI;
+        return AIProviderType.AZURE_OPENAI;
+    } else if (model.startsWith('deepseek-r1-distill-') || model.startsWith('llama-3.3-70b-') || model === 'qwen-qwq-32b' || model === 'mistral-saba-24b' || model.startsWith('meta-llama/llama-4-')) {
+        return AIProviderType.GROQ;
+    } else if (model.startsWith('llama-3.3-70b')) {
+        return AIProviderType.CEREBRAS;
+    } else if (model.startsWith('command-') || model.startsWith('c4ai-')) {
+        return AIProviderType.COHERE;
+    } else if (model.startsWith('deepseek-')) {
+        return AIProviderType.DEEPSEEK;
+    } else {
+        // 未知モデルはlocalに向ける。
+        return AIProviderType.LOCAL;
+    }
+}
+
+export function genClientByProvider(model: string): AIProviderClient {
+    const provider = providerPrediction(model);
+    const key = `${provider}:default`;
+
+    // // Initialize Vertex with your Cloud project and location
+    // export const my_vertexai = new MyVertexAiClient({
+    //     projectId: GCP_PROJECT_ID || '',
+    //     location: GCP_REGION || 'asia-northeast1',
+    //     apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
+    //     httpAgent: options.httpAgent, // HttpsProxyAgent
+    // });
+    // export const vertex_ai = new VertexAI({ project: GCP_PROJECT_ID || '', location: GCP_REGION || 'asia-northeast1', apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}` });
+    // export const anthropicVertex = new AnthropicVertex({ projectId: GCP_PROJECT_ID || '', region: GCP_REGION_ANTHROPIC || 'europe-west1', baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: options.httpAgent }); //TODO 他で使えるようになったら変える。
+
+    // // llama2-70b-4096
+    // // mixtral-8x7b-32768
+    // const groq = new OpenAI({
+    //     apiKey: process.env['GROQ_API_KEY'] || 'dummy',
+    //     baseURL: 'https://api.groq.com/openai/v1',
+    // });
+    // const mistral = new OpenAI({
+    //     apiKey: process.env['MISTRAL_API_KEY'] || 'dummy',
+    //     baseURL: 'https://api.mistral.ai/v1',
+    // });
+    // const cerebras = new OpenAI({
+    //     apiKey: process.env['CEREBRAS_API_KEY'] || 'dummy',
+    //     baseURL: 'https://api.cerebras.ai/v1',
+    // });
+
+    // const anthropic = new Anthropic({
+    //     apiKey: process.env['ANTHROPIC_API_KEY'] || 'dummy',
+    //     httpAgent: options.httpAgent,
+    //     maxRetries: 3,
+    // });
+
+    // const gemini = new googleGenerativeAI.GoogleGenerativeAI(process.env['GEMINI_API_KEY'] || 'dummy');
+
+    // const deepseek = new OpenAI({
+    //     apiKey: process.env['DEEPSEEK_API_KEY'] || 'dummy',
+    //     baseURL: 'https://api.deepseek.com',
+    // });
+
+    // const local = new OpenAI({
+    //     apiKey: process.env['LOCAL_AI_API_KEY'] || 'dummy',
+    //     baseURL: process.env['LOCAL_AI_BASE_URL'] || 'dummy',
+    //     httpAgent: false,
+    // });
+
+
+    if (providerInstances[key]) {
+        return providerInstances[key];
+    } else {
+        let client: AIProviderClient;
+
+        switch (provider) {
+            case AIProviderType.OPENAI:
+                client = {
+                    type: AIProviderType.OPENAI,
+                    client: new MyOpenAI([{
+                        apiKey: process.env['OPENAI_API_KEY'] || 'dummy',
+                        // baseOptions: { timeout: 1200000, Configuration: { timeout: 1200000 } },
+                    }])
+                };
+                break;
+            case AIProviderType.COHERE:
+                client = {
+                    type: AIProviderType.COHERE,
+                    client: new CohereClientV2({ token: process.env['COHERE_API_KEY'] || 'dummy' })
+                };
+                break;
+            case AIProviderType.AZURE_OPENAI:
+                const apiVersion = '2024-12-01-preview';
+                // 環境変数からAPIキーとエンドポイントを取得
+                const AZURE_OPENAI_API_KEY_01 = process.env.AZURE_OPENAI_API_KEY_01 || 'dummy';
+                const AZURE_OPENAI_ENDPOINT_01 = process.env.AZURE_OPENAI_ENDPOINT_01 || 'dummy';
+
+                const AZURE_OPENAI_API_KEY_02 = process.env.AZURE_OPENAI_API_KEY_02 || 'dummy';
+                const AZURE_OPENAI_ENDPOINT_02 = process.env.AZURE_OPENAI_ENDPOINT_02 || 'dummy';
+
+                const AZURE_OPENAI_API_KEY_03 = process.env.AZURE_OPENAI_API_KEY_03 || 'dummy';
+                const AZURE_OPENAI_ENDPOINT_03 = process.env.AZURE_OPENAI_ENDPOINT_03 || 'dummy';
+                client = {
+                    type: AIProviderType.AZURE_OPENAI,
+                    client: new MyAzureOpenAI([{
+                        resources: [
+                            { baseURL: AZURE_OPENAI_ENDPOINT_01, apiKey: AZURE_OPENAI_API_KEY_01, apiVersion, deployments: { 'gpt-4o': 'gpt-4o', 'gpt-4o-mini': 'gpt-4o-mini' } },
+                            { baseURL: AZURE_OPENAI_ENDPOINT_02, apiKey: AZURE_OPENAI_API_KEY_02, apiVersion, deployments: { 'o1-preview': 'o1-preview' } },
+                            { baseURL: AZURE_OPENAI_ENDPOINT_03, apiKey: AZURE_OPENAI_API_KEY_03, apiVersion, deployments: { 'o1': 'o1', 'o1-pro': 'o1-pro', 'o3': 'o3', 'o3-mini': 'o3-mini', 'o4-mini': 'o4-mini', 'o4': 'o4', 'gpt-4.1': 'gpt-4.1', 'gpt-4.1-mini': 'gpt-4.1-mini', 'gpt-4.1-nano': 'gpt-4.1-nano' } },
+                        ]
+                    }]),
+                };
+                break;
+            case AIProviderType.OPENAPI_VERTEXAI:
+                client = {
+                    type: AIProviderType.OPENAPI_VERTEXAI,
+                    client: new MyVertexAiClient([{
+                        project: GCP_PROJECT_ID || '',
+                        location: GCP_REGION || 'asia-northeast1',
+                        apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
+                        httpAgent: options.httpAgent, // HttpsProxyAgent
+                    }]),
+                }; // とりあえずMyVertexAiClientを使う
+                break;
+            case AIProviderType.GROQ:
+                client = {
+                    type: AIProviderType.GROQ,
+                    client: new MyOpenAI([{
+                        apiKey: process.env['GROQ_API_KEY'] || 'dummy',
+                        baseURL: 'https://api.groq.com/openai/v1',
+                    }]),
+                };
+                break;
+            case AIProviderType.MISTRAL:
+                client = {
+                    type: AIProviderType.MISTRAL,
+                    client: new MyOpenAI([{
+                        apiKey: process.env['MISTRAL_API_KEY'] || 'dummy',
+                        baseURL: 'https://api.mistral.ai/v1',
+                    }])
+                };
+                break;
+            case AIProviderType.CEREBRAS:
+                client = {
+                    type: AIProviderType.CEREBRAS,
+                    client: new MyOpenAI([{
+                        apiKey: process.env['CEREBRAS_API_KEY'] || 'dummy',
+                        baseURL: 'https://api.cerebras.ai/v1',
+                    }])
+                };
+                break;
+            case AIProviderType.DEEPSEEK:
+                client = {
+                    type: AIProviderType.DEEPSEEK,
+                    client: new MyOpenAI([{
+                        apiKey: process.env['DEEPSEEK_API_KEY'] || 'dummy',
+                        baseURL: 'https://api.deepseek.com',
+                    }])
+                };
+                break;
+            case AIProviderType.LOCAL:
+                client = {
+                    type: AIProviderType.LOCAL,
+                    client: new MyOpenAI([{
+                        apiKey: process.env['LOCAL_AI_API_KEY'] || 'dummy',
+                        baseURL: process.env['LOCAL_AI_BASE_URL'] || 'http://localhost:8080/v1',
+                        httpAgent: false, // ローカルの場合はプロキシを使わない
+                    }])
+                };
+                break;
+            case AIProviderType.OPENAI_COMPATIBLE:
+                client = {
+                    type: AIProviderType.OPENAI_COMPATIBLE,
+                    client: new MyOpenAI([{
+                        apiKey: process.env['LOCAL_AI_API_KEY'] || 'dummy',
+                        baseURL: process.env['LOCAL_AI_BASE_URL'] || 'http://localhost:8080/v1',
+                        httpAgent: false, // ローカルの場合はプロキシを使わない
+                    }])
+                };
+                break;
+            case AIProviderType.ANTHROPIC_VERTEXAI:
+                client = {
+                    type: AIProviderType.ANTHROPIC_VERTEXAI,
+                    client: new MyAnthropicVertex([
+                        { projectId: GCP_PROJECT_ID || '', region: 'europe-west1', baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: options.httpAgent },
+                        { projectId: GCP_PROJECT_ID || '', region: 'us-east5', baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: options.httpAgent }]),
+                };
+                break;
+            case AIProviderType.ANTHROPIC:
+                client = {
+                    type: AIProviderType.ANTHROPIC,
+                    client: new Anthropic({
+                        apiKey: process.env['ANTHROPIC_API_KEY'] || 'dummy',
+                        httpAgent: options.httpAgent, // HttpsProxyAgent
+                        maxRetries: 3, // リトライ回数を増やす
+                    })
+                };
+                break;
+            case AIProviderType.GEMINI:
+                client = {
+                    type: AIProviderType.GEMINI,
+                    client: new MyGemini([{ apiKey: process.env['GEMINI_API_KEY'] || 'dummy', }]),
+                };
+                break;
+            case AIProviderType.VERTEXAI:
+                client = {
+                    type: AIProviderType.VERTEXAI,
+                    client: new MyVertexAiClient([{
+                        project: GCP_PROJECT_ID || '',
+                        location: GCP_REGION || 'asia-northeast1',
+                        apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
+                        httpAgent: options.httpAgent, // HttpsProxyAgent
+                    }]),
+                }; // とりあえずMyVertexAiClientを使う
+                break;
+            default:
+                throw new Error(`Unknown provider: ${provider}`);
+        }
+        providerInstances[key] = client;
+        return client;
+    }
+}
 export interface WrapperOptions {
     allowLocalFiles: boolean;
 }
@@ -214,7 +462,7 @@ export interface MyCompletionOptions {
     ip?: string,
     authType?: string,
     functions?: Record<string, MyToolType>;
-    provider?: AiProvider;
+    provider?: AIProviderType;
 }
 
 class RunBit {
@@ -223,7 +471,8 @@ class RunBit {
         public logObject: { output: (stepName: string, error?: any, message?: string) => string },
         public tokenCount: TokenCount,
         public args: ChatCompletionCreateParamsBase,
-        public provider: AiProvider,
+        // public provider: AIProviderType,
+        public provider: AIProviderClient,
         public options: RequestOptions,
         public openApiWrapper: OpenAIApiWrapper,
         public observer: Subscriber<ChatCompletionChunk>,
@@ -258,7 +507,7 @@ class RunBit {
         console.log(logObject.output('start', ''));
         try {
 
-            if (this.provider === 'anthropic' || this.provider === 'anthropic_vertexai') {
+            if (this.provider.type === AIProviderType.ANTHROPIC || this.provider.type === AIProviderType.ANTHROPIC_VERTEXAI) {
                 const args = remapAnthropic(commonArgs);
                 // anthropicの場合はmax_tokensは必須項目
                 args.max_tokens = args.max_tokens === 0 ? ratelimitObj.maxTokens : args.max_tokens;
@@ -266,7 +515,7 @@ class RunBit {
                     try {
                         // リクエストをファイルに書き出す
                         fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
-                        const client = this.provider === 'anthropic' ? anthropic : anthropicVertex;
+                        const client = this.provider.type === AIProviderType.ANTHROPIC_VERTEXAI ? this.provider.client.client : this.provider.client as Anthropic;
                         const response: ReadableStream = args.model.includes('-thinking')
                             ? client.beta.messages.stream({ ...args, 'betas': 'output-128k-2025-02-19' } as MessageStreamParams).toReadableStream()
                             : client.messages.stream(args as MessageStreamParams).toReadableStream();
@@ -491,7 +740,7 @@ class RunBit {
                     }
                     return;
                 });
-            } else if (this.provider === 'azure') {
+            } else if (this.provider.type === AIProviderType.AZURE_OPENAI) {
                 for (const key of ['safetySettings', 'cachedContent', 'gcpProjectId', 'isGoogleSearch']) delete (args as any)[key]; // Gemini用プロパティを消しておく
                 const _options = { idempotencyKey: options.idempotencyKey, stream: options.stream };
                 // 画像を50枚までに制限する
@@ -516,6 +765,7 @@ class RunBit {
                     args.reasoning_effort = 'high';
                 } else { }
 
+                const client = this.provider.client.getClient(args.model);
                 if (args.model.startsWith('o1') || args.model.startsWith('o3') || args.model.startsWith('o4')) {
                     // o1用にパラメータを調整
                     delete (args as any)['max_completion_tokens'];
@@ -528,9 +778,7 @@ class RunBit {
                     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options: _options }, Utils.genJsonSafer()), {}, (err) => { });
                     // console.log({ idempotencyKey: options.idempotencyKey, stream: options.stream });
                     // なんでか知らんけどazureClientを通すとargs.modelが消えてしまったり、破壊的なことが起こるのでコピーを送る
-                    runPromise = ((['o1', 'o3-mini', 'o3', 'o4-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano'].includes(args.model)
-                        ? azureClient_03
-                        : azureClient_02).chat.completions.create({ ...args }, _options) as APIPromise<Stream<ChatCompletionChunk>>)
+                    runPromise = (client.chat.completions.create({ ...args }, _options) as APIPromise<Stream<ChatCompletionChunk>>)
                         .withResponse().then(async (response) => {
                             // < x-ratelimit-remaining-requests: 99
                             // < x-ratelimit-remaining-tokens: 99888
@@ -599,7 +847,7 @@ class RunBit {
                         });
                 } else {
                     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options: _options }, Utils.genJsonSafer()), {}, (err) => { });
-                    runPromise = (azureClient_01.chat.completions.create({ ...args }, _options) as APIPromise<Stream<ChatCompletionChunk>>)
+                    runPromise = (client.chat.completions.create({ ...args }, _options) as APIPromise<Stream<ChatCompletionChunk>>)
                         .withResponse().then(async (response) => {
                             // < x-ratelimit-remaining-requests: 99
                             // < x-ratelimit-remaining-tokens: 99888
@@ -671,7 +919,7 @@ class RunBit {
                             return await readStream();
                         });
                 }
-            } else if (this.provider === 'vertexai') {
+            } else if (this.provider.type === AIProviderType.VERTEXAI) {
                 // console.log(generativeModel);
                 commonArgs.messages[0].content = commonArgs.messages[0].content || '';
                 // argsをGemini用に変換
@@ -690,7 +938,7 @@ class RunBit {
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify(req, Utils.genJsonSafer()), {}, (err) => { });
 
                 let isOver128 = false;
-                runPromise = generateContentStream(req.region, req.resourcePath, my_vertexai.getAccessToken(), args, `${req.region}-${GCP_API_BASE_PATH}`, req.generationConfig, req.safetySettings, req.tools, {}).then(async streamingResp => {
+                runPromise = generateContentStream(req.region, req.resourcePath, this.provider.client.getAccessToken(), args, `${req.region}-${GCP_API_BASE_PATH}`, req.generationConfig, req.safetySettings, req.tools, {}).then(async streamingResp => {
                     // かつてはModelを使って投げていた。
                     // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
 
@@ -881,7 +1129,7 @@ class RunBit {
                     return await readStream();
 
                 });
-            } else if (this.provider === 'gemini') {
+            } else if (this.provider.type === AIProviderType.GEMINI) {
                 // console.log(generativeModel);
                 commonArgs.messages[0].content = commonArgs.messages[0].content || '';
                 // argsをGemini用に変換
@@ -917,7 +1165,7 @@ class RunBit {
                 //     systemInstruction?: string | Part | Content;
                 //     cachedContent?: CachedContent;
                 // }
-                runPromise = gemini.getGenerativeModel({ model: commonArgs.model }).generateContentStream(reqGemini).then(async streamingResp => {
+                runPromise = this.provider.client.client.getGenerativeModel({ model: commonArgs.model }).generateContentStream(reqGemini).then(async streamingResp => {
                     // かつてはModelを使って投げていた。
                     // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
 
@@ -1088,12 +1336,12 @@ class RunBit {
                     return await readStream();
 
                 });
-            } else if (this.provider === 'openapi_vertexai') {
+            } else if (this.provider.type === AIProviderType.OPENAPI_VERTEXAI) {
                 // vertexホストのllamaとか。
                 for (const key of ['safetySettings', 'cachedContent', 'gcpProjectId', 'isGoogleSearch']) delete (args as any)[key]; // Gemini用プロパティを消しておく
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
                 // vertexai でllama3を使う場合。
-                runPromise = my_vertexai.getAccessToken().then(async token => {
+                runPromise = this.provider.client.getAccessToken().then(async token => {
                     const REGION = 'us-central1';
 
                     // const ENDPOINT = `us-central1-aiplatform.googleapis.com`;
@@ -1205,7 +1453,7 @@ class RunBit {
                             return await readStream();
                         });
                 })
-            } else if (this.provider === 'cohere') {
+            } else if (this.provider.type === AIProviderType.COHERE) {
                 // 元のargsを破壊してしまうとろくなことにならないので、JSON.stringifyしてからparseしている。
                 const args = commonArgs as V2ChatStreamRequest;
                 const _args = args as ChatCompletionCreateParamsBase;
@@ -1265,7 +1513,7 @@ class RunBit {
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
 
                 // Cohere API呼び出し
-                runPromise = cohere.chatStream(args as V2ChatStreamRequest, options as V2.RequestOptions).then(async (response) => {
+                runPromise = this.provider.client.chatStream(args as V2ChatStreamRequest, options as V2.RequestOptions).then(async (response) => {
 
                     // ヘッダー情報を取得
                     const headers: { [key: string]: string } = {};
@@ -1549,12 +1797,12 @@ class RunBit {
                 // top_logprobs?: number | null;
                 // top_p?: number | null;
                 // user?: string;
-                const clientMap: { [key: string]: OpenAI } = {
-                    groq, mistral, deepseek, cerebras, local, openai,
-                };
+                // const clientMap: { [key: string]: OpenAI } = {
+                //     groq, mistral, deepseek, cerebras, local, openai,
+                // };
                 // console.dir(args, { depth: null });
-                const client = clientMap[this.provider] || openai;
-                if (this.provider !== 'openai' && this.provider !== 'local') {
+                const client = this.provider.client;
+                if (this.provider.type !== AIProviderType.OPENAI && this.provider.type !== AIProviderType.LOCAL) {
                     // userプロンプト以外は文字列にしておく。
                     args.messages.forEach(message => {
                         if (message.role === 'system' || message.role === 'assistant' || message.role === 'tool') {
@@ -1585,13 +1833,13 @@ class RunBit {
                 } else { }
 
                 // TODO無理矢理すぎる。。proxy設定のやり方を再考する。
-                options.httpAgent = client.httpAgent;
+                options.httpAgent = client.client.httpAgent;
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
 
-                if (args.tools && args.tools.length > 0 && this.provider === 'local') {
+                if (args.tools && args.tools.length > 0 && this.provider.type === AIProviderType.LOCAL) {
                     // localのツールコールの場合はstreamをfalseにする。
                     args.stream = false;
-                    runPromise = (client.chat.completions.create(args, options) as APIPromise<ChatCompletion>)
+                    runPromise = (client.client.chat.completions.create(args, options) as APIPromise<ChatCompletion>)
                         .withResponse().then((response) => {
                             response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
                             response.response.headers.get('x-ratelimit-limit-tokens') && (ratelimitObj.limitTokens = Number(response.response.headers.get('x-ratelimit-limit-tokens')));
@@ -1684,7 +1932,7 @@ class RunBit {
                             fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
                         });
                 } else {
-                    runPromise = (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
+                    runPromise = (client.client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
                         .withResponse().then((response) => {
                             response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
                             response.response.headers.get('x-ratelimit-limit-tokens') && (ratelimitObj.limitTokens = Number(response.response.headers.get('x-ratelimit-limit-tokens')));
@@ -1807,20 +2055,22 @@ class RunBit {
             // [1] ClientError: [VertexAI.ClientError]: got status: 401 Unauthorized. {"error":{"code":401,"message":"Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.","status":"UNAUTHENTICATED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"ACCESS_TOKEN_TYPE_UNSUPPORTED","metadata":{"method":"google.cloud.aiplatform.v1.PredictionService.StreamGenerateContent","service":"aiplatform.googleapis.com"}}]}}
             if (error.toString().indexOf('status: 401 Unauthorized.') >= 0) {
                 // 401はアクセストークン取り直してリトライ。
-                await my_vertexai.getAccessToken(true).then(accessToken => {
-                    setTimeout(() => {
-                        try {
-                            this.executeCall()
-                                .catch(error => {
-                                    observer.error(error);
-                                    this.openApiWrapper.fire(); // キューに着火
-                                });
-                        } catch (e) {
-                            observer.error(error);
-                            this.openApiWrapper.fire(); // キューに着火
-                        }
-                    }, 1000);
-                });
+                if (this.provider.type === AIProviderType.VERTEXAI || this.provider.type === AIProviderType.OPENAPI_VERTEXAI) {
+                    await this.provider.client.getAccessToken(true).then(accessToken => {
+                        setTimeout(() => {
+                            try {
+                                this.executeCall()
+                                    .catch(error => {
+                                        observer.error(error);
+                                        this.openApiWrapper.fire(); // キューに着火
+                                    });
+                            } catch (e) {
+                                observer.error(error);
+                                this.openApiWrapper.fire(); // キューに着火
+                            }
+                        }, 1000);
+                    });
+                } else { }
                 return;
             } else { }
             // レートリミットに引っかかった場合は、レートリミットに書かれている時間分待機する。
@@ -1904,10 +2154,10 @@ export class OpenAIApiWrapper {
     chatCompletionObservableStream(
         args: ChatCompletionCreateParamsStreaming,
         options?: MyCompletionOptions,
-        _provider?: AiProvider,
+        // 面倒な書き方になっているが、要はclientだけオプション化しただけ。
+        aiProvider?: Omit<AIProviderClient, 'client'> & Partial<Pick<AIProviderClient, 'client'>>,
     ): Observable<ChatCompletionChunk> {
-        // プロバイダーをconstで定義する。
-        const provider = providerPrediction(args.model, _provider);
+        const provider = genClientByProvider(args.model);
 
         // 強制的にストリームモードにする。
         args.stream = true;
@@ -2016,7 +2266,7 @@ export class OpenAIApiWrapper {
                                         entity.idempotencyKey = reqOptions.idempotencyKey || '';
                                         entity.argsHash = argsHash;
                                         entity.label = `${label}${toolLabel}`;
-                                        entity.provider = provider;
+                                        entity.provider = provider.type;
                                         entity.model = args.model;
                                         entity.take = _take;
                                         entity.reqToken = tokenCount.prompt_tokens;
@@ -2190,7 +2440,7 @@ export class OpenAIApiWrapper {
      * @param toolCalls 
      * @returns 
      */
-    toolCallObservableStream(args: ChatCompletionCreateParamsStreaming, options: MyCompletionOptions, provider: AiProvider, toolCalls: ChatCompletionChunk.Choice.Delta.ToolCall[], input?: any): Observable<ChatCompletionChunk> {
+    toolCallObservableStream(args: ChatCompletionCreateParamsStreaming, options: MyCompletionOptions, provider: AIProviderClient, toolCalls: ChatCompletionChunk.Choice.Delta.ToolCall[], input?: any): Observable<ChatCompletionChunk> {
         const functions = options.functions as Record<string, MyToolType>;
 
         const tool_calls: ChatCompletionMessageToolCall[] = toolCalls.map(toolCall => ({ id: toolCall.id || '', type: 'function', function: { name: toolCall.function?.name || '', arguments: toolCall.function?.arguments || '' } }));
