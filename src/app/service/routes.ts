@@ -111,8 +111,8 @@ authUserRouter.post('/v2/count-tokens', geminiCountTokensByProjectModel); // cou
 // チャット系（認証不要）
 authNoneRouter.post('/count-tokens', geminiCountTokens);
 
-// 関数定義取得（認証不要）
-authNoneRouter.get('/function-definitions', getFunctionDefinitions);
+// 関数定義取得
+authUserRouter.get('/function-definitions', getFunctionDefinitions);
 authUserRouter.get('/tool-call-group/:id', getToolCallGroup);
 authUserRouter.get('/tool-call-group-by-tool-call-id/:id', getToolCallGroupByToolCallId);
 

@@ -49,7 +49,7 @@ export const userLogin = [
             // console.log(`userLogin-111 ${orgKey} ${req.body.email}`);
             const userAndRoleList = await getUserAndRoleList({ orgKey, email: req.body.email }, tm);
             const user = userAndRoleList.user;
-            // console.log(`userLogin-222 ${orgKey} ${req.body.email} ${user?.id} ${user?.name} ${user?.email} ${user?.status} ${user?.authGeneration} ${user?.passwordHash} ${userAndRoleList.roleList.length}`);
+            // console.log(`userLogin-222 ${orgKey} ${req.body.email} ${user?.id} ${user?.name} ${user?.email} ${user?.status} ${user?.authGeneration} ${bcrypt.compareSync(req.body.password, user?.passwordHash || '')} ${userAndRoleList.roleList.length}`);
             if (user == null || !bcrypt.compareSync(req.body.password, user.passwordHash || '') || userAndRoleList.roleList.length === 0) {
                 console.error(`認証に失敗しました。${req.body.email} ${user?.id} ${user?.name} ${user?.email} ${user?.status} ${user?.authGeneration} ${user?.passwordHash}`);
                 res.status(401).json({ message: '認証に失敗しました。' });
