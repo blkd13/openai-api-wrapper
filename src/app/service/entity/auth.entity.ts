@@ -225,6 +225,9 @@ export class DivisionEntity extends MyBaseEntity {
 
     @Column()
     label!: string;
+
+    @Column({ default: true })
+    isActive!: boolean; // 有効/無効フラグ
 }
 
 export enum OAuthAccountStatus {
@@ -447,18 +450,9 @@ export interface OpenAIConfig {
 export interface AzureOpenAIConfig {
     // resource_name: string; // Azure上のリソース名
     // default_deployment?: string; // オプション：省略時のデフォルト
-    resources: {
-        baseURL: string; // オプション：カスタムベースURL（例：https://<resource_name>.openai.azure.com/）
-        apiKey: string; // オプション：APIキー（あれば）
-        apiVersion: string; // APIバージョン（例：2023-05-15）
-        deployments: { [modelAlias: string]: string };
-        // deployments: {
-        //     [modelAlias: string]: {
-        //         deployment_id: string;
-        //         api_version: string;
-        //     };
-        // };
-    }[];
+    baseURL: string; // オプション：カスタムベースURL（例：https://<resource_name>.openai.azure.com/）
+    apiKey: string; // オプション：APIキー（あれば）
+    apiVersion?: string; // APIバージョン（例：2023-05-15）
 }
 
 export interface VertexAIConfig {
@@ -488,7 +482,7 @@ export type CredentialMetadata =
     | Record<string, any>; // その他（未定義プロバイダやローカルLLM）
 
 export function isAzureMetadata(meta: CredentialMetadata): meta is AzureOpenAIConfig {
-    return (meta as AzureOpenAIConfig).resources !== undefined;
+    return (meta as AzureOpenAIConfig).baseURL !== undefined;
 }
 
 export function isVertexMetadata(meta: CredentialMetadata): meta is VertexAIConfig {

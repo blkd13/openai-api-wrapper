@@ -7,14 +7,14 @@ import nodemailer from 'nodemailer';
 import { Request, Response } from 'express';
 
 import { InviteRequest, UserRequest } from '../models/info.js';
-import { UserEntity, InviteEntity, LoginHistoryEntity, UserRoleType, DepartmentMemberEntity, DepartmentRoleType, DepartmentEntity, UserStatus, SessionEntity, OAuthAccountEntity, OAuthAccountStatus, OrganizationEntity, ApiProviderEntity, ApiProviderTemplateEntity, ApiProviderAuthType, UserRoleEntity, UserRole, ScopeType } from '../entity/auth.entity.js';
+import { UserEntity, InviteEntity, LoginHistoryEntity, UserRoleType, DepartmentMemberEntity, DepartmentRoleType, DepartmentEntity, UserStatus, SessionEntity, OAuthAccountEntity, OAuthAccountStatus, OrganizationEntity, ApiProviderEntity, ApiProviderTemplateEntity, ApiProviderAuthType, UserRoleEntity, UserRole, ScopeType, DivisionEntity } from '../entity/auth.entity.js';
 import { InviteTokenPayload, ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_EXPIRES_IN, REFRESH_TOKEN_JWT_SECRET, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN, RefreshTokenPayload, UserTokenPayload, API_TOKEN_EXPIRES_IN, API_TOKEN_JWT_SECRET } from '../middleware/authenticate.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { EntityManager, In, MoreThan, Not } from 'typeorm';
 import { ds } from '../db.js';
 
 import { ProjectEntity, TeamEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
-import { ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamType } from '../models/values.js';
+import { ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamStatus, TeamType } from '../models/values.js';
 import { Utils } from '../../common/utils.js';
 import { AxiosInstance } from 'axios';
 
@@ -869,6 +869,68 @@ const getUserAndRoleList = async (_where: { orgKey: string, id: string } | { org
         return { user, roleList };
     }
 };
+
+export const getScopeLabels = [
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req: UserRequest = _req as UserRequest;
+        try {
+            const { user, roleList } = await getUserAndRoleList({ orgKey: req.info.user.orgKey, id: req.info.user.id });
+            if (!user) {
+                res.status(404).json({ message: 'User not found' });
+                return;
+            }
+
+            // roleListをscopeType/scopeIdでdistinct
+            const distinctRoleMap = Array.from(new Set(roleList.map(role => `${role.scopeInfo.scopeType}/${role.scopeInfo.scopeId}`))).reduce((acc, role) => {
+                const [scopeType, scopeId] = role.split('/');
+                if (!acc[scopeType]) {
+                    acc[scopeType] = [];
+                } else { }
+                // スコープIDが重複している場合は追加しない（まぁdistinctしてるので基本的に重複はないはず）
+                if (!acc[scopeType].includes(scopeId)) {
+                    acc[scopeType].push(scopeId);
+                } else { }
+                return acc;
+            }, {} as Record<string, string[]>);
+
+            // roleListに基づいて対象スコープの実体定義を取得
+            const orgList = distinctRoleMap[ScopeType.ORGANIZATION] ? await ds.getRepository(OrganizationEntity).findBy({ orgKey: req.info.user.orgKey, id: In(distinctRoleMap[ScopeType.ORGANIZATION]), isActive: true }) : [];
+            // if (org.length === 0) {
+            //     res.status(404).json({ message: 'Organization not found' });
+            //     return;
+            // }
+            const divisionList = distinctRoleMap[ScopeType.DIVISION] ? await ds.getRepository(DivisionEntity).findBy({ orgKey: req.info.user.orgKey, id: In(distinctRoleMap[ScopeType.DIVISION]), isActive: true }) : [];
+            const projectList = distinctRoleMap[ScopeType.PROJECT] ? await ds.getRepository(ProjectEntity).findBy({ orgKey: req.info.user.orgKey, id: In(distinctRoleMap[ScopeType.PROJECT]), status: ProjectStatus.InProgress }) : [];
+            const teamList = distinctRoleMap[ScopeType.TEAM] ? await ds.getRepository(TeamEntity).findBy({ orgKey: req.info.user.orgKey, id: In(distinctRoleMap[ScopeType.TEAM]), status: TeamStatus.Normal }) : [];
+
+            // Response DTOの型定義
+            interface ScopeLabelsResponse {
+                [ScopeType.ORGANIZATION]: { id: string, key: string, label: string, }[];
+                [ScopeType.DIVISION]: { id: string, name: string, label: string }[];
+                [ScopeType.PROJECT]: { id: string, name: string, label: string }[];
+                [ScopeType.TEAM]: { id: string, name: string, label: string }[];
+                roleList: { role: UserRoleType, scopeType: ScopeType, scopeId: string }[];
+            }
+
+            const response: ScopeLabelsResponse = {
+                [ScopeType.ORGANIZATION]: orgList.map(org => ({ id: org.id, key: org.key, label: org.label })),
+                [ScopeType.DIVISION]: divisionList.map(division => ({ id: division.id, name: division.name, label: division.label })),
+                [ScopeType.PROJECT]: projectList.map(project => ({ id: project.id, name: project.name, label: project.label })),
+                [ScopeType.TEAM]: teamList.map(team => ({ id: team.id, name: team.name, label: team.label })),
+                roleList: roleList.map(role => ({
+                    role: role.role,
+                    scopeType: role.scopeInfo.scopeType,
+                    scopeId: role.scopeInfo.scopeId,
+                })),
+            };
+            res.json(response);
+        } catch (error) {
+            console.error(error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    }
+];
 
 export const oAuthEmailAuth = [
     validationErrorHandler,

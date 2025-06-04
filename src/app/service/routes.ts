@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, getDepartmentMemberLog, getDepartmentMemberLogForUser, genApiToken, getOAuthAccount, getDepartmentMemberForUser } from './controllers/auth.js';
+import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, getDepartmentMemberLog, getDepartmentMemberLogForUser, genApiToken, getOAuthAccount, getDepartmentMemberForUser, getScopeLabels } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateOAuthUser, authenticateUserTokenMiddleGenerator } from './middleware/authenticate.js';
 import { chatCompletion, chatCompletionStream, codegenCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
@@ -48,6 +48,7 @@ import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
 import { registApiKey, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId } from './controllers/tool-call.js';
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, getAIProviders, getAIProviderTemplates, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing } from './controllers/model-manager.js';
+import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
 
 // routers/index.ts
 
@@ -273,3 +274,10 @@ authMaintainerRouter.get('/organizations', getOrganizations); // 組織一覧取
 authMaintainerRouter.post('/organizations', upsertOrganization); // 組織登録・更新
 authMaintainerRouter.put('/organizations/:orgKey', upsertOrganization); // 組織登録・更新
 authMaintainerRouter.delete('/organizations/:orgKey', deactivateOrganization); // 組織無効化
+
+authUserRouter.get('/scope-labels', getScopeLabels);
+
+// authUserRouter.post('/vertexai-claude-proxy/v1/messages', vertexAIByAnthropicAPI);
+authUserRouter.post('/vertexai-claude-proxy/v1/messages', vertexAIByAnthropicAPIStream);
+authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:rawPredict', vertexAIByAnthropicAPI);
+authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:streamRawPredict', vertexAIByAnthropicAPIStream);

@@ -648,8 +648,7 @@ export async function getAIProvider(user: UserTokenPayload, providerName: string
         'scopeInfo.scopeType': role.scopeInfo.scopeType,
         'scopeInfo.scopeId': role.scopeInfo.scopeId,
     }));
-
-    console.dir(scopeConditions, { depth: null });
+    // console.dir(scopeConditions, { depth: null });
     const providerList = await ds.getRepository(AIProviderEntity).find({
         where: scopeConditions,
     });

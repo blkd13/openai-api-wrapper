@@ -247,7 +247,8 @@ export const getAIProviders = [
  */
 export const upsertAIProvider = [
     param('providerId').optional({ nullable: true }).isUUID(),
-    body('provider').isIn(Object.values(AIProviderType)),
+    body('type').isIn(Object.values(AIProviderType)),
+    body('name').isString().notEmpty(),
     body('label').isString().notEmpty(),
     body('scopeInfo.scopeType').isIn(Object.values(ScopeType)),
     // body('scopeInfo.scopeId').isString().notEmpty(),

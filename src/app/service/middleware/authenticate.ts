@@ -80,47 +80,55 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                     // トークンアリの場合は検証を行う。
                 }
 
-                try {
-                    // アクセストークン検証
-                    const userTokenPayload = await verifyJwt<UserTokenPayload>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user');
-                    // console.log(`acc:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
+                if (req.cookies.access_token) {
+                    try {
 
-                    (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies, };
-                    return { isAuth: true, obj: userTokenPayload };
-                } catch (err) {
-                    // アクセストークン無し
-                }
+                        // アクセストークン検証
+                        const userTokenPayload = await verifyJwt<UserTokenPayload>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user');
+                        // console.log(`acc:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
 
-                try {
-                    // リフレッシュトークン検証
-                    const { userTokenPayload, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'refresh', req.cookies.refresh_token, roleType));
+                        (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies, };
+                        return { isAuth: true, obj: userTokenPayload };
+                    } catch (err) {
+                        // アクセストークン無し
+                    }
+                } else { }
 
-                    // クッキーをセット
-                    res.cookie('access_token', accessToken, {
-                        maxAge: Utils.parseTimeStringToMilliseconds(ACCESS_TOKEN_EXPIRES_IN), // クッキーの有効期限をミリ秒で指定
-                        httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
-                        secure: true, // HTTPSでのみ送信されるようにする
-                        sameSite: false, // CSRF保護のためのオプション
-                    });
+                if (req.cookies.refresh_token) {
+                    try {
+                        // リフレッシュトークン検証
+                        const { userTokenPayload, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'refresh', req.cookies.refresh_token, roleType));
 
-                    // console.log(`ref:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
-                    (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
-                    return { isAuth: true, obj: userTokenPayload };
-                } catch (err) {
-                    // リフレッシュトークン無し
-                }
+                        // クッキーをセット
+                        res.cookie('access_token', accessToken, {
+                            maxAge: Utils.parseTimeStringToMilliseconds(ACCESS_TOKEN_EXPIRES_IN), // クッキーの有効期限をミリ秒で指定
+                            httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
+                            secure: true, // HTTPSでのみ送信されるようにする
+                            sameSite: false, // CSRF保護のためのオプション
+                        });
 
+                        // console.log(`ref:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
+                        (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
+                        return { isAuth: true, obj: userTokenPayload };
+                    } catch (err) {
+                        // リフレッシュトークン無し
+                    }
 
-                try {
-                    // API用トークンの検証
-                    const { userTokenPayload, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'api', req.headers.authorization?.split(' ')[1] || '', roleType));
+                } else { }
 
-                    // console.log(`api:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
-                    (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
-                    return { isAuth: true, obj: userTokenPayload };
-                } catch (err) {
-                    // API用トークン無し
-                    // console.log(err);
+                // APIトークン検証
+                if (req.headers.authorization) {
+                    try {
+                        // API用トークンの検証
+                        const { userTokenPayload, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'api', req.headers.authorization?.split(' ')[1] || '', roleType));
+
+                        // console.log(`api:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
+                        (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
+                        return { isAuth: true, obj: userTokenPayload };
+                    } catch (err) {
+                        // API用トークン無し
+                        // console.log(err);
+                    }
                 }
 
                 return { isAuth: false, obj: new Error('Authentication failed: No valid token found') };

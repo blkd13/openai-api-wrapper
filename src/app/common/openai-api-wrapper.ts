@@ -172,30 +172,26 @@ export class MyAnthropicVertex {
 }
 
 export class MyAzureOpenAI {
-    clients: { [model: string]: AzureOpenAI } = {};
+    counter = 0;
+
+    clients: AzureOpenAI[] = [];
     constructor(public params: AzureOpenAIConfig[]) {
         // params.forEach(param => {
         //     this.clients.push(new AzureOpenAI({ baseURL: param.baseURL, apiKey: param.apiKey, deployment: param.deployment, apiVersion: param.apiVersion }));
         // });
-        this.params.forEach(param => {
-            param.resources.forEach(resource => {
-                Object.keys(resource.deployments).forEach(modelAlias => {
-                    this.clients[modelAlias] = new AzureOpenAI({
-                        baseURL: resource.baseURL,
-                        apiKey: resource.apiKey,
-                        deployment: resource.deployments[modelAlias],
-                        apiVersion: resource.apiVersion || '2024-12-01-preview',
-                    });
-                });
+        this.clients = params.map(param => {
+            // console.log('MyAzureOpenAI', param);
+            return new AzureOpenAI({
+                baseURL: param.baseURL,
+                apiKey: param.apiKey,
+                apiVersion: param.apiVersion || '2024-12-01-preview',
             });
         });
     }
-    getClient(model: string): AzureOpenAI {
-        if (this.clients[model]) {
-            return this.clients[model];
-        } else {
-            throw new Error(`Azure OpenAI client for model ${model} not found`);
-        }
+    get client(): AzureOpenAI {
+        const client = this.clients[this.clients.length - 1]; // とりあえず最後のクライアントを返す
+        this.counter++;
+        return client;
     }
 }
 
@@ -313,13 +309,11 @@ export function genClientByProvider(model: string): AIProviderClient {
                 const AZURE_OPENAI_ENDPOINT_03 = process.env.AZURE_OPENAI_ENDPOINT_03 || 'dummy';
                 client = {
                     type: AIProviderType.AZURE_OPENAI,
-                    client: new MyAzureOpenAI([{
-                        resources: [
-                            { baseURL: AZURE_OPENAI_ENDPOINT_01, apiKey: AZURE_OPENAI_API_KEY_01, apiVersion, deployments: { 'gpt-4o': 'gpt-4o', 'gpt-4o-mini': 'gpt-4o-mini' } },
-                            { baseURL: AZURE_OPENAI_ENDPOINT_02, apiKey: AZURE_OPENAI_API_KEY_02, apiVersion, deployments: { 'o1-preview': 'o1-preview' } },
-                            { baseURL: AZURE_OPENAI_ENDPOINT_03, apiKey: AZURE_OPENAI_API_KEY_03, apiVersion, deployments: { 'o1': 'o1', 'o1-pro': 'o1-pro', 'o3': 'o3', 'o3-mini': 'o3-mini', 'o4-mini': 'o4-mini', 'o4': 'o4', 'gpt-4.1': 'gpt-4.1', 'gpt-4.1-mini': 'gpt-4.1-mini', 'gpt-4.1-nano': 'gpt-4.1-nano' } },
-                        ]
-                    }]),
+                    client: new MyAzureOpenAI([
+                        { baseURL: AZURE_OPENAI_ENDPOINT_01, apiKey: AZURE_OPENAI_API_KEY_01, apiVersion, }, // deployments: { 'gpt-4o': 'gpt-4o', 'gpt-4o-mini': 'gpt-4o-mini' } 
+                        { baseURL: AZURE_OPENAI_ENDPOINT_02, apiKey: AZURE_OPENAI_API_KEY_02, apiVersion, }, // deployments: { 'o1-preview': 'o1-preview' } 
+                        { baseURL: AZURE_OPENAI_ENDPOINT_03, apiKey: AZURE_OPENAI_API_KEY_03, apiVersion, }, // deployments: { 'o1': 'o1', 'o1-pro': 'o1-pro', 'o3': 'o3', 'o3-mini': 'o3-mini', 'o4-mini': 'o4-mini', 'o4': 'o4', 'gpt-4.1': 'gpt-4.1', 'gpt-4.1-mini': 'gpt-4.1-mini', 'gpt-4.1-nano': 'gpt-4.1-nano' } 
+                    ]),
                 };
                 break;
             case AIProviderType.OPENAPI_VERTEXAI:
@@ -765,7 +759,7 @@ class RunBit {
                     args.reasoning_effort = 'high';
                 } else { }
 
-                const client = this.provider.client.getClient(args.model);
+                const client = this.provider.client.client;
                 if (args.model.startsWith('o1') || args.model.startsWith('o3') || args.model.startsWith('o4')) {
                     // o1用にパラメータを調整
                     delete (args as any)['max_completion_tokens'];
