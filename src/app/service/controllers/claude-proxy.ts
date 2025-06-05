@@ -19,7 +19,7 @@ import { Message } from "@anthropic-ai/sdk/resources.js";
 import { PredictHistoryEntity } from "../entity/project-models.entity.js";
 import { ds } from "../db.js";
 import { PredictHistoryStatus } from "../models/values.js";
-import { AIModelEntity, AIModelPricingEntity } from "../entity/auth.entity.js";
+import { AIModelEntity, AIModelPricingEntity, DepartmentEntity, DepartmentMemberEntity } from "../entity/auth.entity.js";
 
 // 履歴ディレクトリ
 const HISTORY_DIRE = `./history`;
@@ -35,13 +35,6 @@ Object.keys(proxyObj).filter(key => noProxies.includes(host) || !proxyObj[key]).
 const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? {
     httpAgent: new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || ''),
 } : {};
-
-export const my_vertexai = new MyVertexAiClient([{
-    project: GCP_PROJECT_ID || '',
-    locationList: [GCP_REGION || 'asia-northeast1'],
-    apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
-    httpAgent: options.httpAgent,
-}]);
 
 /**
  * トークン数を管理するクラス
@@ -116,7 +109,7 @@ try { fs.mkdirSync(`${HISTORY_DIRE}`, { recursive: true }); } catch (e) { }
  * Vertex AI の URL を生成
  */
 function buildVertexUrl(project: string, location: string, model: string, method: 'predict' | 'streamRawPredict'): string {
-    return `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/anthropic/models/${model}:${method}`;
+    return `https://${location}-${GCP_API_BASE_PATH}/v1/projects/${project}/locations/${location}/publishers/anthropic/models/${model}:${method}`;
 }
 
 /**
@@ -177,7 +170,19 @@ const commonValidation = [
  */
 async function commonPreProcess(req: UserRequest, suffix: string) {
     const { project, location, model } = req.params;
-    const targetProject = GCP_PROJECT_ID || project || 'default-project';
+
+    let gcpProjectId;
+    const depmen = await ds.getRepository(DepartmentMemberEntity).findOneBy({
+        orgKey: req.info.user.orgKey,
+        name: req.info.user.name,
+    });
+    if (!depmen) {
+    } else {
+        const dep = await ds.getRepository(DepartmentEntity).findOneByOrFail({ orgKey: req.info.user.orgKey, id: depmen.departmentId });
+        gcpProjectId = dep.gcpProjectId;
+    }
+
+    const targetProject = gcpProjectId || GCP_PROJECT_ID || project || 'default-project';
     const targetLocation = GCP_REGION_ANTHROPIC || location || 'us-central1';
 
     const { idempotencyKey, label, tokenCount, logObject } = await initializeRequest(req, model, suffix);
@@ -188,6 +193,13 @@ async function commonPreProcess(req: UserRequest, suffix: string) {
         console.log(logObject.output('error', 'Invalid request: messages が必要です'));
         throw new Error('Invalid request: messages が必要です');
     }
+
+    const my_vertexai = new MyVertexAiClient([{
+        project: GCP_PROJECT_ID || '',
+        locationList: [GCP_REGION || 'asia-northeast1'],
+        apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
+        httpAgent: options.httpAgent,
+    }]);
 
     const accessToken = await my_vertexai.getAccessToken();
     const vertexUrl = buildVertexUrl(targetProject, targetLocation, model, suffix as any);
@@ -219,6 +231,7 @@ export const vertexAIByAnthropicAPI = [
                     'Content-Type': 'application/json; charset=UTF-8',
                 },
                 responseType: 'json',
+                httpAgent: options.httpAgent,
             });
 
             // レスポンスからトークン数を取得
@@ -284,6 +297,7 @@ export const vertexAIByAnthropicAPIStream = [
                     'Content-Type': 'application/json; charset=UTF-8',
                 },
                 responseType: 'stream',
+                httpAgent: options.httpAgent,
             });
 
             // レスポンスヘッダーをログ
@@ -407,7 +421,7 @@ export const vertexAIByAnthropicAPIStream = [
 
             vertexResponse.data.pipe(res);
         } catch (err: any) {
-            const { idempotencyKey, logObject } = await commonPreProcess(req, 'stream').catch(() => ({
+            const { idempotencyKey, logObject } = await commonPreProcess(req, 'streamRawPredict').catch(() => ({
                 idempotencyKey: 'error',
                 logObject: new LogObject(Date.now(), new TokenCount(), 'error', 'error')
             }));

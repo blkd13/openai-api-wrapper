@@ -187,7 +187,13 @@ export const genApiToken = [
             };
             const apiToken = jwt.sign(apiTokenBody, API_TOKEN_JWT_SECRET, { expiresIn: API_TOKEN_EXPIRES_IN as ms.StringValue });
 
-            const apiTokenEntity = new OAuthAccountEntity();
+            const exists = await manager.getRepository(OAuthAccountEntity).findOneBy({ orgKey: user.orgKey, userId: user.id, provider: `local-${label}` });
+            if (exists && exists.status === OAuthAccountStatus.ACTIVE) {
+                res.status(400).json({ error: `同名のAPIトークンは作成できません。${label}` });
+                return;
+            } else { }
+
+            const apiTokenEntity = exists || new OAuthAccountEntity();
             apiTokenEntity.userId = user.id;
             apiTokenEntity.provider = `local-${label}`;
             apiTokenEntity.providerUserId = user.id;

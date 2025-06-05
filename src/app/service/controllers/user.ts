@@ -145,38 +145,36 @@ export const getApiProviders = [
                 description: false,
             };
 
-            // 管理者の場合は oAuth2Config も取得
-            if (isAdmin) {
-                // console.log('Admin or Maintainer role detected, including oAuth2Config in selection.');
+            if (nonAuth) {
+                // 非認証の場合は最低限のプロパティのみ返す
+            } else {
+                // 認証済み経路の場合は、ユーザー情報取得用のパスとかを返す
                 select.uriBase = true;
                 select.uriBaseAuth = true;
                 select.pathUserInfo = true;
                 select.description = true;
-                // select.pathUserInfo = true;
-                select.oAuth2Config = {
-                    clientId: true,
-                    // clientSecret: true, // セキュリティ上、クライアントシークレットは返さない
-                    // pathAuthorize: true,
-                    // pathAccessToken: true,
-                    // pathTop: true,
-                    // scope: true,
-                    // postType: true,
-                    // redirectUri: true,
-                    clientSecret: false,
-                    requireMailAuth: true
-                } as FindOptionsSelect<OAuth2Config>;
-            } else {
-                if (!nonAuth) {
-                    select.uriBase = true;
-                    select.pathUserInfo = true;
-                    select.description = true;
+
+                // 管理者の場合は oAuth2Config も取得
+                if (isAdmin) {
+                    // console.log('Admin or Maintainer role detected, including oAuth2Config in selection.');
+                    // select.pathUserInfo = true;
                     select.oAuth2Config = {
+                        clientId: true,
+                        // clientSecret: true, // セキュリティ上、クライアントシークレットは返さない
+                        // pathAuthorize: true,
+                        // pathAccessToken: true,
+                        // pathTop: true,
+                        // scope: true,
+                        // postType: true,
+                        // redirectUri: true,
                         clientSecret: false,
-                    }
+                        requireMailAuth: true
+                    } as FindOptionsSelect<OAuth2Config>;
                 } else {
-                    // 
+                    select.oAuth2Config = false;
                 }
             }
+
             // console.dir(select, { depth: null });
             const whereClause: {
                 orgKey: string,

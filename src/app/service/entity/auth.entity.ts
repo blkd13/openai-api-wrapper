@@ -755,14 +755,12 @@ export class AIModelOverrideEntity extends MyBaseEntity {
 @Index(['orgKey', 'providerName', 'providerModelId'], { unique: true })
 export class AIModelEntity extends MyBaseEntity {
 
+    // 同名でのオーバーライドを許可するため、providerTypeとproviderNameの組み合わせでproviderを指定する。（providerIdを使ってしまうとオーバーライドができないため）
     @Column({ type: 'enum', enum: AIProviderType })
-    provider!: AIProviderType;
-
-    @Column({ nullable: true, type: 'enum', enum: AIProviderType })
     providerType!: AIProviderType;
 
-    @Column({ nullable: true })
-    providerName!: string; // プロバイダ名
+    @Column()
+    providerName!: string;
 
     @Column()
     providerModelId!: string;
@@ -850,13 +848,11 @@ export class AIModelAlias extends MyBaseEntity {
     @Column({ type: 'uuid' })
     modelId!: string;
 
+    // 同名でのオーバーライドを許可するため、providerTypeとproviderNameの組み合わせでproviderを指定する。（providerIdを使ってしまうとオーバーライドができないため）
     @Column({ type: 'enum', enum: AIProviderType })
-    provider!: AIProviderType;
-
-    @Column({ nullable: true, type: 'enum', enum: AIProviderType })
     providerType!: AIProviderType;
 
-    @Column({ nullable: true })
+    @Column() 
     providerName?: string; // プロバイダ名（例: 'openai', 'azure_openai'）
 
     @Column({ type: 'text' })
