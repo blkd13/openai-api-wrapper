@@ -6,7 +6,7 @@ import axios from 'axios';
 import { concat, concatMap, from, map, Observable, of, retry, tap, toArray } from 'rxjs';
 import { ChatCompletionAssistantMessageParam, ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionMessageParam, ChatCompletionMessageToolCall, ChatCompletionTool, ChatCompletionToolMessageParam, FileContent } from "openai/resources";
 
-import { AIProviderClient, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyGemini, MyOpenAI, MyToolType, aiApi, calculateTokenCost, genClientByProvider, getTiktokenEncoder, invalidMimeList, normalizeMessage, providerPrediction } from '../../common/openai-api-wrapper.js';
+import { AIProviderClient, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, aiApi, calculateTokenCost, genClientByProvider, getTiktokenEncoder, invalidMimeList, normalizeMessage, providerInstances, providerPrediction } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ds } from '../db.js';
@@ -662,39 +662,76 @@ export async function getAIProvider(user: UserTokenPayload, providerName: string
         return priority.indexOf(a.scopeInfo.scopeType) - priority.indexOf(b.scopeInfo.scopeType);
     })[0];
 
+    if (providerInstances[provider.id] && providerInstances[provider.id].updatedAt === provider.updatedAt) {
+        // 既にクライアントが生成されている場合はそれを返す
+        return providerInstances[provider.id].client;
+    } else { }
+
+    
+    console.log(`Using AI provider: ${provider.name} (${provider.type})`);
+
+    let aiProviderClient: AIProviderClient;
+
     // プロバイダのクライアントを生成
     switch (provider.type) {
         case AIProviderType.OPENAI:
-            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type)) };
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type)) };
+            break;
         case AIProviderType.AZURE_OPENAI:
-            return { type: provider.type, client: new MyAzureOpenAI(getAIProviderConfig(provider, provider.type)) };
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyAzureOpenAI(getAIProviderConfig(provider, provider.type)) };
+            break;
         case AIProviderType.ANTHROPIC:
-            return { type: provider.type, client: new Anthropic(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey }))[0]) };
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyAnthropic(getAIProviderConfig(provider, provider.type)) };
+            break;
         case AIProviderType.CEREBRAS:
-            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey, baseURL: 'https://api.cerebras.com/v1' }))) };
+            const cerebrasConfig = getAIProviderConfig(provider, provider.type);
+            cerebrasConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.cerebras.ai/v1') : null);
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(cerebrasConfig) };
+            break;
         case AIProviderType.GROQ:
-            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey, baseURL: 'https://api.groq.com/openai/v1' }))) };
+            const groqConfig = getAIProviderConfig(provider, provider.type);
+            groqConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.groq.com/openai/v1') : null);
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(groqConfig) };
+            break;
         case AIProviderType.MISTRAL:
-            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey, baseURL: 'https://api.mistral.com/v1' }))) };
+            const mistralConfig = getAIProviderConfig(provider, provider.type);
+            mistralConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.mistral.com/v1') : null);
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(mistralConfig) };
+            break;
         case AIProviderType.DEEPSEEK:
-            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey, baseURL: 'https://api.deepseek.com/v1' }))) };
+            const deepSeekConfig = getAIProviderConfig(provider, provider.type);
+            deepSeekConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.deepseek.com/v1') : null);
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(deepSeekConfig) };
+            break;
         case AIProviderType.LOCAL:
-            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey, baseURL: 'http://localhost:3000' }))) };
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type)) };
+            break;
         case AIProviderType.OPENAI_COMPATIBLE:
-            return { type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type)) };
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type)) };
+            break;
         case AIProviderType.VERTEXAI:
-            return { type: provider.type, client: new MyVertexAiClient(getAIProviderConfig(provider, provider.type)) };
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyVertexAiClient(getAIProviderConfig(provider, provider.type)) };
+            break;
         case AIProviderType.ANTHROPIC_VERTEXAI:
-            return { type: provider.type, client: new MyAnthropicVertex(getAIProviderConfig(provider, provider.type)) };
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyAnthropicVertex(getAIProviderConfig(provider, provider.type)) };
+            break;
         case AIProviderType.OPENAPI_VERTEXAI:
-            return { type: provider.type, client: new MyVertexAiClient(getAIProviderConfig(provider, provider.type)) };
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyVertexAiClient(getAIProviderConfig(provider, provider.type)) };
+            break;
         case AIProviderType.COHERE:
-            return { type: provider.type, client: new CohereClientV2({ token: (provider.config[0] as OpenAIConfig).apiKey }) };
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyCohere(getAIProviderConfig(provider, provider.type)) };
+            break;
         case AIProviderType.GEMINI:
-            return { type: provider.type, client: new MyGemini(getAIProviderConfig(provider, provider.type).map(obj => ({ apiKey: obj.apiKey }))) };
+            // .map(obj => ({ apiKey: obj.apiKey }))
+            aiProviderClient = { name: provider.name, type: provider.type, client: new MyGemini(getAIProviderConfig(provider, provider.type)) };
+            break;
         default:
             throw new Error(`Unknown provider type: ${provider.type}`);
     }
+
+    // クライアントをキャッシュに保存
+    providerInstances[provider.id] = { client: aiProviderClient, updatedAt: provider.updatedAt };
+    return aiProviderClient;
 }
 
 /**

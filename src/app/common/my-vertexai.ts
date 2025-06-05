@@ -61,8 +61,9 @@ export class MyVertexAiClient {
     constructor(public params: VertexAIConfig[]) {
         // this.client = new VertexAI({ project: this.params.projectId, location: this.params.region, apiEndpoint: this.params.baseURL, httpAgent: this.params.httpAgent });
         this.params.forEach(param => {
-            // console.log(`param:${JSON.stringify(param)}`);
-            this.clients.push(new VertexAI(param));
+            param.locationList.forEach(location => {
+                this.clients.push(new VertexAI({ ...param, location }));
+            });
         });
     }
 

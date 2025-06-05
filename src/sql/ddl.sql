@@ -20,7 +20,7 @@ p2_ranked AS (
     FROM predict_history_wrapper_entity p2
 )
 SELECT
-    u.name,
+    COALESCE(u.name, u2.name) AS user_name,
     COALESCE(p2.created_by,  p1.created_by)  AS created_by,
     COALESCE(p2.created_at,  p1.created_at)  AS created_at,
     COALESCE(p2.created_ip,  p1.created_ip)  AS created_ip,
@@ -51,5 +51,7 @@ FROM
            AND p1.rn        = p2.rn          -- ★ 同じ順位同士でペアリング
     LEFT JOIN user_entity u
            ON  p1.label LIKE 'chat-' || u.id::text || '%'
+    LEFT JOIN user_entity u2
+           ON  p1.created_by = u2.id::text -- 本当はuuid比較したいけど、batchと書いてあるモノと混在しているせいで出来ない。。。これのせいで遅い。
 ORDER BY
     COALESCE(p2.updated_at, p1.updated_at) DESC;

@@ -432,32 +432,44 @@ export class OrganizationEntity extends MyBaseEntity {
 // }
 
 export interface OpenAIConfig {
-    apiKey: string; // OpenAI APIキー
-    baseURL?: string; // オプション：カスタムベースURL（例：https://api.openai.com/v1/）
-    apiVersion?: string; // オプション：APIバージョン（例：2023-05-15）
-    // modelIds?: { [modelAlias: string]: string }; // 任意のモデルエイリアスとOpenAIモデル名の対応
-    httpAgent?: any; // オプション：HTTPエージェント（例：プロキシ設定など）
-    // proxy?: {
-    //     host: string; // プロキシホスト
-    //     port: number; // プロキシポート
-    //     auth?: {
-    //         username: string; // プロキシ認証ユーザー名
-    //         password: string; // プロキシ認証パスワード
-    //     };
-    // };
+    endpoints: {
+        apiKey: string; // OpenAI APIキー
+        baseURL?: string; // オプション：カスタムベースURL（例：https://api.openai.com/v1/）
+        apiVersion?: string; // オプション：APIバージョン（例：2023-05-15）
+        // modelIds?: { [modelAlias: string]: string }; // 任意のモデルエイリアスとOpenAIモデル名の対応
+        httpAgent?: any; // オプション：HTTPエージェント（例：プロキシ設定など）
+        maxRetries?: number; // オプション：最大リトライ回数（デフォルトは3）
+        // proxy?: {
+        //     host: string; // プロキシホスト
+        //     port: number; // プロキシポート
+        //     auth?: {
+        //         username: string; // プロキシ認証ユーザー名
+        //         password: string; // プロキシ認証パスワード
+        //     };
+        // };
+    }[];
+}
+export interface OpenAICompatibleConfig {
+    endpoints: {
+        apiKey: string; // OpenAI APIキー
+        baseURL: string; // オプション：カスタムベースURL（例：https://api.openai.com/v1/）
+        maxRetries?: number; // オプション：最大リトライ回数（デフォルトは3）
+    }[];
 }
 
 export interface AzureOpenAIConfig {
-    // resource_name: string; // Azure上のリソース名
-    // default_deployment?: string; // オプション：省略時のデフォルト
-    baseURL: string; // オプション：カスタムベースURL（例：https://<resource_name>.openai.azure.com/）
-    apiKey: string; // オプション：APIキー（あれば）
-    apiVersion?: string; // APIバージョン（例：2023-05-15）
+    resources: {
+        // resource_name: string; // Azure上のリソース名
+        // default_deployment?: string; // オプション：省略時のデフォルト
+        baseURL: string; // オプション：カスタムベースURL（例：https://<resource_name>.openai.azure.com/）
+        apiKey: string; // オプション：APIキー（あれば）
+        apiVersion?: string; // APIバージョン（例：2023-05-15）
+    }[];
 }
 
 export interface VertexAIConfig {
     project: string;               // GCP プロジェクトID
-    location: string;                 // リージョン（例：us-central1）
+    locationList: string[];                 // リージョン（例：us-central1）
     // model_ids?: {
     //     [modelAlias: string]: string; // 任意のモデルエイリアスとVertexモデル名の対応
     // };
@@ -467,7 +479,7 @@ export interface VertexAIConfig {
 
 export interface AnthropicVertexAIConfig {
     projectId: string;               // GCP プロジェクトID
-    region: string;                   // リージョン（例：us-central1）
+    regionList: string[];                   // リージョン（例：us-central1）
     // model_ids?: {
     //     [modelAlias: string]: string; // 任意のモデルエイリアスとVertexモデル名の対応
     // };
@@ -475,14 +487,22 @@ export interface AnthropicVertexAIConfig {
     httpAgent?: any;
 }
 
+export interface CohereConfig {
+    endpoints: {
+        token: string;
+        environment?: string;
+    }[];
+}
+
 export type CredentialMetadata =
     | AzureOpenAIConfig
     | VertexAIConfig
     | AnthropicVertexAIConfig
+    | CohereConfig
     | Record<string, any>; // その他（未定義プロバイダやローカルLLM）
 
 export function isAzureMetadata(meta: CredentialMetadata): meta is AzureOpenAIConfig {
-    return (meta as AzureOpenAIConfig).baseURL !== undefined;
+    return (meta as AzureOpenAIConfig).resources !== undefined;
 }
 
 export function isVertexMetadata(meta: CredentialMetadata): meta is VertexAIConfig {
@@ -657,12 +677,12 @@ type AIProviderConfigMap = {
     [AIProviderType.ANTHROPIC]: OpenAIConfig;
     [AIProviderType.DEEPSEEK]: OpenAIConfig;
     [AIProviderType.LOCAL]: OpenAIConfig; // ローカルLLMの設定
-    [AIProviderType.OPENAI_COMPATIBLE]: { apiKey: string, baseURL: string }; // OpenAI互換のローカルLLM
+    [AIProviderType.OPENAI_COMPATIBLE]: OpenAICompatibleConfig; // OpenAI互換のローカルLLM
     [AIProviderType.VERTEXAI]: VertexAIConfig;
     [AIProviderType.ANTHROPIC_VERTEXAI]: AnthropicVertexAIConfig; // Vertex AI上のAnthropicモデル
     [AIProviderType.OPENAPI_VERTEXAI]: VertexAIConfig; // Vertex AI上のOpenAI互換モデル
     [AIProviderType.CEREBRAS]: OpenAIConfig; // Cerebrasの設定
-    [AIProviderType.COHERE]: OpenAIConfig; // Cohereの設定
+    [AIProviderType.COHERE]: CohereConfig; // Cohereの設定
     [AIProviderType.GEMINI]: OpenAIConfig; // Geminiの設定
 };
 
@@ -732,11 +752,17 @@ export class AIModelOverrideEntity extends MyBaseEntity {
 
 
 @Entity()
-@Index(['orgKey', 'provider', 'providerModelId'], { unique: true })
+@Index(['orgKey', 'providerName', 'providerModelId'], { unique: true })
 export class AIModelEntity extends MyBaseEntity {
 
     @Column({ type: 'enum', enum: AIProviderType })
     provider!: AIProviderType;
+
+    @Column({ nullable: true, type: 'enum', enum: AIProviderType })
+    providerType!: AIProviderType;
+
+    @Column({ nullable: true })
+    providerName!: string; // プロバイダ名
 
     @Column()
     providerModelId!: string;
@@ -818,7 +844,7 @@ export class AIModelEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['orgKey', 'provider', 'alias'], { unique: true })
+@Index(['orgKey', 'providerName', 'alias'], { unique: true })
 export class AIModelAlias extends MyBaseEntity {
 
     @Column({ type: 'uuid' })
@@ -827,6 +853,82 @@ export class AIModelAlias extends MyBaseEntity {
     @Column({ type: 'enum', enum: AIProviderType })
     provider!: AIProviderType;
 
+    @Column({ nullable: true, type: 'enum', enum: AIProviderType })
+    providerType!: AIProviderType;
+
+    @Column({ nullable: true })
+    providerName?: string; // プロバイダ名（例: 'openai', 'azure_openai'）
+
     @Column({ type: 'text' })
     alias!: string;
 }
+
+//   CREATE TABLE api_provider_entity_bk AS SELECT * FROM api_provider_entity;
+//   DROP TABLE api_provider_entity;
+  
+//   INSERT INTO api_provider_entity(id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,type,name,label,uri_base,o_auth2_config,description,is_deleted,sort_seq,auth_type,path_user_info,uri_base_auth)
+//   SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,type,name,label,uri_base,o_auth2_config,description,is_deleted,sort_seq,auth_type,path_user_info,uri_base_auth FROM api_provider_entity_bk; 
+  
+//   DROP TABLE api_provider_entity_bk;
+  
+//   UPDATE ai_model_entity SET provider_name=provider::text WHERE provider_name IS NULL;
+//   UPDATE ai_model_entity SET provider_type=provider::text::ai_model_entity_provider_type_enum WHERE provider_type IS NULL;
+//   UPDATE ai_model_alias  SET provider_name=provider::text WHERE provider_name IS NULL;
+//   UPDATE ai_model_alias  SET provider_type=provider::text::ai_model_alias_provider_type_enum WHERE provider_type IS NULL;
+
+
+
+// -- =======================
+// -- ① バックアップ作成
+// -- =======================
+// CREATE TABLE ai_model_entity_backup AS TABLE ai_model_entity;
+// CREATE TABLE ai_model_alias_backup AS TABLE ai_model_alias;
+
+// -- =======================
+// -- ② 旧テーブル削除
+// -- =======================
+// DROP TABLE ai_model_alias;
+// DROP TABLE ai_model_entity;
+
+// -- =======================
+// -- ③ TypeORM で再作成
+// -- =======================
+// -- ※ アプリ起動 or `npx typeorm migration:run` で自動再作成
+
+// -- =======================
+// -- ④ データ復元
+// -- =======================
+
+// -- AIModelEntity
+// INSERT INTO ai_model_entity (
+//     id, org_key, created_by, updated_by, created_at, updated_at, created_ip, updated_ip,
+//     provider, provider_type, provider_name, provider_model_id, name, short_name, throttle_key,
+//     status, description, details, modalities, max_context_tokens, max_output_tokens,
+//     is_stream, input_formats, output_formats, default_parameters, capabilities,
+//     metadata, endpoint_template, documentation_url, license_type, knowledge_cutoff,
+//     release_date, deprecation_date, tags, ui_order, is_active
+// )
+// SELECT
+//     id, org_key, created_by, updated_by, created_at, updated_at, created_ip, updated_ip,
+//     provider, provider_type, provider_name, provider_model_id, name, short_name, throttle_key,
+//     status, description, details, modalities, max_context_tokens, max_output_tokens,
+//     is_stream, input_formats, output_formats, default_parameters, capabilities,
+//     metadata, endpoint_template, documentation_url, license_type, knowledge_cutoff,
+//     release_date, deprecation_date, tags, ui_order, is_active
+// FROM ai_model_entity_backup;
+
+// -- AIModelAlias
+// INSERT INTO ai_model_alias (
+//     id, org_key, created_by, updated_by, created_at, updated_at, created_ip, updated_ip,
+//     model_id, provider, provider_type, provider_name, alias
+// )
+// SELECT
+//     id, org_key, created_by, updated_by, created_at, updated_at, created_ip, updated_ip,
+//     model_id, provider, provider_type, provider_name, alias
+// FROM ai_model_alias_backup;
+
+// -- =======================
+// -- ⑤ バックアップ削除（任意）
+// -- =======================
+// -- DROP TABLE ai_model_entity_backup;
+// -- DROP TABLE ai_model_alias_backup;

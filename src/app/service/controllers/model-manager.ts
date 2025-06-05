@@ -468,7 +468,8 @@ export const getBaseModels = [
  */
 export const upsertBaseModel = [
     param('modelId').optional({ nullable: true }).isUUID(),
-    body('provider').isIn(Object.values(AIProviderType)),
+    body('providerType').isIn(Object.values(AIProviderType)),
+    body('providerName').isString().notEmpty(),
     body('providerModelId').isString().notEmpty(),
     body('name').isString().notEmpty(),
     body('aliases').optional({ nullable: true }).isArray(),
@@ -522,14 +523,14 @@ export const upsertBaseModel = [
             // 一意制約チェック: provider + providerModelId
             const conflict = await repo.findOne({
                 where: {
-                    provider: bodyData.provider,
+                    providerName: bodyData.providerName,
                     providerModelId: bodyData.providerModelId,
                     ...(isNew ? { orgKey: req.info.user.orgKey } : { id: Not(modelId), orgKey: req.info.user.orgKey })
                 }
             });
             if (conflict) {
                 console.log('Conflict:', modelId, conflict);
-                return res.status(409).json({ message: `${bodyData.provider} + ${bodyData.providerModelId} のモデルが既に存在します` });
+                return res.status(409).json({ message: `${bodyData.providerName} + ${bodyData.providerModelId} のモデルが既に存在します` });
             }
 
             // aliasesの整備
@@ -544,19 +545,21 @@ export const upsertBaseModel = [
             }
             const conflictAlias = await repoAlias.find({
                 where: {
-                    provider: bodyData.provider,
+                    providerName: bodyData.providerName,
                     alias: In(aliases),
                     ...(isNew ? { orgKey: req.info.user.orgKey } : { modelId: Not(modelId), orgKey: req.info.user.orgKey })
                 }
             });
             if (conflictAlias && conflictAlias.length > 0) {
-                return res.status(409).json({ message: `${bodyData.provider} + ${conflictAlias.map(alias => alias.alias).join(', ')} のエイリアスが既に存在します` });
+                return res.status(409).json({ message: `${bodyData.providerName} + ${conflictAlias.map(alias => alias.alias).join(', ')} のエイリアスが既に存在します` });
             } else { }
 
             if (isNew) {
                 // 新規作成
                 entity = repo.create({
-                    provider: bodyData.provider,
+                    provider: bodyData.providerType,
+                    providerType: bodyData.providerType,
+                    providerName: bodyData.providerName,
                     providerModelId: bodyData.providerModelId,
                     name: bodyData.name,
                     status: bodyData.status,
@@ -571,7 +574,9 @@ export const upsertBaseModel = [
             } else {
                 // 更新 - 必須フィールド
                 Object.assign(entity!, {
-                    provider: bodyData.provider,
+                    provider: bodyData.providerType,
+                    providerType: bodyData.providerType,
+                    providerName: bodyData.providerName,
                     providerModelId: bodyData.providerModelId,
                     name: bodyData.name,
                     status: bodyData.status,
@@ -632,7 +637,9 @@ export const upsertBaseModel = [
                 const newAliasEntities = newAliases.map(alias => {
                     const aliasEntity = new AIModelAlias();
                     aliasEntity.orgKey = req.info.user.orgKey;
-                    aliasEntity.provider = bodyData.provider;
+                    aliasEntity.provider = bodyData.providerType;
+                    aliasEntity.providerType = bodyData.providerType;
+                    aliasEntity.providerName = bodyData.providerName;
                     aliasEntity.alias = alias;
                     aliasEntity.modelId = saved.id;
                     aliasEntity.createdBy = req.info.user.id;

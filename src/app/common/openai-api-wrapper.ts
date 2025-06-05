@@ -25,7 +25,7 @@ import * as googleGenerativeAI from '@google/generative-ai';
 
 import { AzureOpenAI } from 'openai';
 
-import { Cohere, CohereClientV2 } from "cohere-ai";
+import { Cohere, CohereClientV2, CohereEnvironment } from "cohere-ai";
 import { StreamedChatResponseV2, V2ChatStreamRequest } from 'cohere-ai/api';
 import { V2 } from 'cohere-ai/api/resources/v2/client/Client';
 
@@ -44,22 +44,23 @@ export type MyChatCompletionCreateParamsStreaming = ChatCompletionCreateParamsSt
 const HISTORY_DIRE = `./history`;
 
 export type AIProviderClient =
-    { type: AIProviderType.OPENAI, client: MyOpenAI } |
-    { type: AIProviderType.COHERE, client: CohereClientV2 } |
-    { type: AIProviderType.AZURE_OPENAI, client: MyAzureOpenAI } |
-    { type: AIProviderType.OPENAPI_VERTEXAI, client: MyVertexAiClient } |
-    { type: AIProviderType.GROQ, client: MyOpenAI } |
-    { type: AIProviderType.MISTRAL, client: MyOpenAI } |
-    { type: AIProviderType.CEREBRAS, client: MyOpenAI } |
-    { type: AIProviderType.DEEPSEEK, client: MyOpenAI } |
-    { type: AIProviderType.LOCAL, client: MyOpenAI } |
-    { type: AIProviderType.OPENAI_COMPATIBLE, client: MyOpenAI } |
-    { type: AIProviderType.ANTHROPIC_VERTEXAI, client: MyAnthropicVertex } |
-    { type: AIProviderType.ANTHROPIC, client: Anthropic } |
-    { type: AIProviderType.GEMINI, client: MyGemini } |
-    { type: AIProviderType.VERTEXAI, client: MyVertexAiClient }
+    { name: string, type: AIProviderType.OPENAI, client: MyOpenAI } |
+    { name: string, type: AIProviderType.COHERE, client: MyCohere } |
+    { name: string, type: AIProviderType.AZURE_OPENAI, client: MyAzureOpenAI } |
+    { name: string, type: AIProviderType.OPENAPI_VERTEXAI, client: MyVertexAiClient } |
+    { name: string, type: AIProviderType.GROQ, client: MyOpenAI } |
+    { name: string, type: AIProviderType.MISTRAL, client: MyOpenAI } |
+    { name: string, type: AIProviderType.CEREBRAS, client: MyOpenAI } |
+    { name: string, type: AIProviderType.DEEPSEEK, client: MyOpenAI } |
+    { name: string, type: AIProviderType.LOCAL, client: MyOpenAI } |
+    { name: string, type: AIProviderType.OPENAI_COMPATIBLE, client: MyOpenAI } |
+    { name: string, type: AIProviderType.ANTHROPIC_VERTEXAI, client: MyAnthropicVertex } |
+    { name: string, type: AIProviderType.ANTHROPIC, client: MyAnthropic } |
+    { name: string, type: AIProviderType.GEMINI, client: MyGemini } |
+    { name: string, type: AIProviderType.VERTEXAI, client: MyVertexAiClient }
     ;
-export const providerInstances: { [providerTypeAndName: string]: AIProviderClient } = {};
+// export const providerInstances: { [providerTypeAndName: string]: AIProviderClient } = {};
+export const providerInstances: { [aiProviderId: string]: { client: AIProviderClient, updatedAt: Date } } = {};
 // export const providerInstances = {} as Record<AIProviderType, AIProviderClient>;
 
 // const apiVersion = '2024-08-01-preview';
@@ -67,7 +68,7 @@ import { CachedContent, countChars, GenerateContentRequestExtended, mapForGemini
 import { MessageStreamEvent, MessageStreamParams } from '@anthropic-ai/sdk/resources/index.js';
 import { ReadableStream } from '@anthropic-ai/sdk/_shims/index.js';
 import { convertAnthropicToOpenAI, remapAnthropic } from './my-anthropic.js';
-import { AIProviderType, AnthropicVertexAIConfig, AzureOpenAIConfig } from '../service/entity/auth.entity.js';
+import { AIProviderType, AnthropicVertexAIConfig, AzureOpenAIConfig, CohereConfig, OpenAICompatibleConfig, OpenAIConfig } from '../service/entity/auth.entity.js';
 
 // TODO プロキシは環境変数から取得するように変更したい。
 // proxy設定判定用オブジェクト
@@ -115,18 +116,30 @@ export class MyOpenAI {
     clients: OpenAI[] = [];
 
     constructor(public params: {
-        apiKey: string,
-        baseURL?: string,
-        httpAgent?: any, // HttpsProxyAgent
+        endpoints: {
+            apiKey: string,
+            organization?: string,
+            project?: string,
+            baseURL?: string,
+            httpAgent?: any, // HttpsProxyAgent
+        }[]
     }[]) {
         // params.forEach(param => {
         //     this.clients.push(new OpenAI({ apiKey: param.apiKey, baseURL: param.baseURL, apiVersion: param.apiVersion }));
         // });
-        this.params.forEach(param => {
-            this.clients.push(new OpenAI({ apiKey: param.apiKey, baseURL: param.baseURL || 'https://api.openai.com/v1', httpAgent: param.httpAgent || options.httpAgent }));
-        });
+        this.clients = this.params.map(param => {
+            // this.clients.push(new OpenAI({ apiKey: param.apiKey, baseURL: param.baseURL || 'https://api.openai.com/v1', httpAgent: param.httpAgent || options.httpAgent }));
+            return (param.endpoints || []).map(endpoint => {
+                return new OpenAI({
+                    apiKey: endpoint.apiKey,
+                    organization: endpoint.organization,
+                    project: endpoint.project,
+                    baseURL: endpoint.baseURL || 'https://api.openai.com/v1',
+                    httpAgent: endpoint.httpAgent || options.httpAgent,
+                });
+            });
+        }).flat();
     }
-
     get client(): OpenAI {
         const client = this.clients[this.counter % this.clients.length];
         this.counter++;
@@ -138,13 +151,11 @@ export class MyGemini {
     counter = 0;
     clients: googleGenerativeAI.GoogleGenerativeAI[] = [];
 
-    constructor(public params: { apiKey: string }[]) {
+    constructor(public params: OpenAIConfig[]) {
         // params.forEach(param => {
         //     this.clients.push(new googleGenerativeAI.GoogleGenerativeAI({ apiKey: param.apiKey }));
         // });
-        this.params.forEach(param => {
-            this.clients.push(new googleGenerativeAI.GoogleGenerativeAI(param.apiKey));
-        });
+        this.clients = params.map(param => param.endpoints.map(endpoint => new googleGenerativeAI.GoogleGenerativeAI(endpoint.apiKey))).flat();
     }
     get client(): googleGenerativeAI.GoogleGenerativeAI {
         const client = this.clients[this.counter % this.clients.length];
@@ -153,6 +164,23 @@ export class MyGemini {
     }
 }
 
+export class MyAnthropic {
+    counter = 0;
+
+    clients: Anthropic[];
+    constructor(public params: OpenAIConfig[]) {
+        // params.forEach(param => {
+        //     this.clients.push(new AnthropicVertex({ projectId: param.projectId, region: param.region, baseURL: param.baseURL, httpAgent: param.httpAgent }));
+        // });
+        this.clients = params.map(param => param.endpoints.map(endpoint => new Anthropic({ apiKey: endpoint.apiKey, baseURL: endpoint.baseURL || 'https://api.anthropic.com/v1', httpAgent: options.httpAgent, maxRetries: 3 }))).flat();
+    }
+
+    get client(): Anthropic {
+        const client = this.clients[this.counter % this.clients.length];
+        this.counter++;
+        return client;
+    }
+}
 export class MyAnthropicVertex {
     counter = 0;
 
@@ -161,7 +189,7 @@ export class MyAnthropicVertex {
         // params.forEach(param => {
         //     this.clients.push(new AnthropicVertex({ projectId: param.projectId, region: param.region, baseURL: param.baseURL, httpAgent: param.httpAgent }));
         // });
-        this.clients = params.map(param => new AnthropicVertex({ ...param, httpAgent: param.httpAgent || options.httpAgent }));
+        this.clients = params.map(param => param.regionList.map(region => new AnthropicVertex({ ...param, httpAgent: param.httpAgent || options.httpAgent, region }))).flat();
     }
 
     get client(): AnthropicVertex {
@@ -180,13 +208,14 @@ export class MyAzureOpenAI {
         //     this.clients.push(new AzureOpenAI({ baseURL: param.baseURL, apiKey: param.apiKey, deployment: param.deployment, apiVersion: param.apiVersion }));
         // });
         this.clients = params.map(param => {
-            // console.log('MyAzureOpenAI', param);
-            return new AzureOpenAI({
-                baseURL: param.baseURL,
-                apiKey: param.apiKey,
-                apiVersion: param.apiVersion || '2024-12-01-preview',
+            return param.resources.map(resource => {
+                return new AzureOpenAI({
+                    baseURL: resource.baseURL,
+                    apiKey: resource.apiKey,
+                    apiVersion: resource.apiVersion || '2024-12-01-preview',
+                });
             });
-        });
+        }).flat();
     }
     get client(): AzureOpenAI {
         const client = this.clients[this.clients.length - 1]; // とりあえず最後のクライアントを返す
@@ -195,6 +224,23 @@ export class MyAzureOpenAI {
     }
 }
 
+export class MyCohere {
+    counter = 0;
+
+    clients: CohereClientV2[];
+    constructor(public params: CohereConfig[]) {
+        // params.forEach(param => {
+        //     this.clients.push(new AnthropicVertex({ projectId: param.projectId, region: param.region, baseURL: param.baseURL, httpAgent: param.httpAgent }));
+        // });
+        this.clients = params.map(param => param.endpoints.map(endpoint => new CohereClientV2({ token: endpoint.token, environment: endpoint.environment || CohereEnvironment.Production }))).flat();
+    }
+
+    get client(): CohereClientV2 {
+        const client = this.clients[this.counter % this.clients.length];
+        this.counter++;
+        return client;
+    }
+}
 
 export function providerPrediction(model: string, provider?: AIProviderType): AIProviderType {
     // providerが指定されている場合は、そのプロバイダーを使う。
@@ -276,24 +322,26 @@ export function genClientByProvider(model: string): AIProviderClient {
 
 
     if (providerInstances[key]) {
-        return providerInstances[key];
+        return providerInstances[key].client;
     } else {
         let client: AIProviderClient;
 
         switch (provider) {
             case AIProviderType.OPENAI:
                 client = {
+                    name: AIProviderType.OPENAI,
                     type: AIProviderType.OPENAI,
                     client: new MyOpenAI([{
-                        apiKey: process.env['OPENAI_API_KEY'] || 'dummy',
+                        endpoints: [{ apiKey: process.env['OPENAI_API_KEY'] || 'dummy', }],
                         // baseOptions: { timeout: 1200000, Configuration: { timeout: 1200000 } },
                     }])
                 };
                 break;
             case AIProviderType.COHERE:
                 client = {
+                    name: AIProviderType.COHERE,
                     type: AIProviderType.COHERE,
-                    client: new CohereClientV2({ token: process.env['COHERE_API_KEY'] || 'dummy' })
+                    client: new MyCohere([{ endpoints: [{ token: process.env['COHERE_API_KEY'] || 'dummy' }] }]),
                 };
                 break;
             case AIProviderType.AZURE_OPENAI:
@@ -308,20 +356,24 @@ export function genClientByProvider(model: string): AIProviderClient {
                 const AZURE_OPENAI_API_KEY_03 = process.env.AZURE_OPENAI_API_KEY_03 || 'dummy';
                 const AZURE_OPENAI_ENDPOINT_03 = process.env.AZURE_OPENAI_ENDPOINT_03 || 'dummy';
                 client = {
+                    name: AIProviderType.AZURE_OPENAI,
                     type: AIProviderType.AZURE_OPENAI,
-                    client: new MyAzureOpenAI([
-                        { baseURL: AZURE_OPENAI_ENDPOINT_01, apiKey: AZURE_OPENAI_API_KEY_01, apiVersion, }, // deployments: { 'gpt-4o': 'gpt-4o', 'gpt-4o-mini': 'gpt-4o-mini' } 
-                        { baseURL: AZURE_OPENAI_ENDPOINT_02, apiKey: AZURE_OPENAI_API_KEY_02, apiVersion, }, // deployments: { 'o1-preview': 'o1-preview' } 
-                        { baseURL: AZURE_OPENAI_ENDPOINT_03, apiKey: AZURE_OPENAI_API_KEY_03, apiVersion, }, // deployments: { 'o1': 'o1', 'o1-pro': 'o1-pro', 'o3': 'o3', 'o3-mini': 'o3-mini', 'o4-mini': 'o4-mini', 'o4': 'o4', 'gpt-4.1': 'gpt-4.1', 'gpt-4.1-mini': 'gpt-4.1-mini', 'gpt-4.1-nano': 'gpt-4.1-nano' } 
-                    ]),
+                    client: new MyAzureOpenAI([{
+                        resources: [
+                            { baseURL: AZURE_OPENAI_ENDPOINT_01, apiKey: AZURE_OPENAI_API_KEY_01, apiVersion, }, // deployments: { 'gpt-4o': 'gpt-4o', 'gpt-4o-mini': 'gpt-4o-mini' } 
+                            { baseURL: AZURE_OPENAI_ENDPOINT_02, apiKey: AZURE_OPENAI_API_KEY_02, apiVersion, }, // deployments: { 'o1-preview': 'o1-preview' } 
+                            { baseURL: AZURE_OPENAI_ENDPOINT_03, apiKey: AZURE_OPENAI_API_KEY_03, apiVersion, }, // deployments: { 'o1': 'o1', 'o1-pro': 'o1-pro', 'o3': 'o3', 'o3-mini': 'o3-mini', 'o4-mini': 'o4-mini', 'o4': 'o4', 'gpt-4.1': 'gpt-4.1', 'gpt-4.1-mini': 'gpt-4.1-mini', 'gpt-4.1-nano': 'gpt-4.1-nano' } 
+                        ]
+                    }]),
                 };
                 break;
             case AIProviderType.OPENAPI_VERTEXAI:
                 client = {
+                    name: AIProviderType.OPENAPI_VERTEXAI,
                     type: AIProviderType.OPENAPI_VERTEXAI,
                     client: new MyVertexAiClient([{
                         project: GCP_PROJECT_ID || '',
-                        location: GCP_REGION || 'asia-northeast1',
+                        locationList: [GCP_REGION || 'asia-northeast1'],
                         apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
                         httpAgent: options.httpAgent, // HttpsProxyAgent
                     }]),
@@ -329,90 +381,115 @@ export function genClientByProvider(model: string): AIProviderClient {
                 break;
             case AIProviderType.GROQ:
                 client = {
+                    name: AIProviderType.GROQ,
                     type: AIProviderType.GROQ,
                     client: new MyOpenAI([{
-                        apiKey: process.env['GROQ_API_KEY'] || 'dummy',
-                        baseURL: 'https://api.groq.com/openai/v1',
+                        endpoints: [{
+                            apiKey: process.env['GROQ_API_KEY'] || 'dummy',
+                            baseURL: 'https://api.groq.com/openai/v1',
+                        }]
                     }]),
                 };
                 break;
             case AIProviderType.MISTRAL:
                 client = {
+                    name: AIProviderType.MISTRAL,
                     type: AIProviderType.MISTRAL,
                     client: new MyOpenAI([{
-                        apiKey: process.env['MISTRAL_API_KEY'] || 'dummy',
-                        baseURL: 'https://api.mistral.ai/v1',
+                        endpoints: [{
+                            apiKey: process.env['MISTRAL_API_KEY'] || 'dummy',
+                            baseURL: 'https://api.mistral.ai/v1',
+                        }]
                     }])
                 };
                 break;
             case AIProviderType.CEREBRAS:
                 client = {
+                    name: AIProviderType.CEREBRAS,
                     type: AIProviderType.CEREBRAS,
                     client: new MyOpenAI([{
-                        apiKey: process.env['CEREBRAS_API_KEY'] || 'dummy',
-                        baseURL: 'https://api.cerebras.ai/v1',
+                        endpoints: [{
+                            apiKey: process.env['CEREBRAS_API_KEY'] || 'dummy',
+                            baseURL: 'https://api.cerebras.ai/v1',
+                        }]
                     }])
                 };
                 break;
             case AIProviderType.DEEPSEEK:
                 client = {
+                    name: AIProviderType.DEEPSEEK,
                     type: AIProviderType.DEEPSEEK,
                     client: new MyOpenAI([{
-                        apiKey: process.env['DEEPSEEK_API_KEY'] || 'dummy',
-                        baseURL: 'https://api.deepseek.com',
+                        endpoints: [{
+                            apiKey: process.env['DEEPSEEK_API_KEY'] || 'dummy',
+                            baseURL: 'https://api.deepseek.com',
+                        }]
                     }])
                 };
                 break;
             case AIProviderType.LOCAL:
                 client = {
+                    name: AIProviderType.LOCAL,
                     type: AIProviderType.LOCAL,
                     client: new MyOpenAI([{
-                        apiKey: process.env['LOCAL_AI_API_KEY'] || 'dummy',
-                        baseURL: process.env['LOCAL_AI_BASE_URL'] || 'http://localhost:8080/v1',
-                        httpAgent: false, // ローカルの場合はプロキシを使わない
+                        endpoints: [{
+                            apiKey: process.env['LOCAL_AI_API_KEY'] || 'dummy',
+                            baseURL: process.env['LOCAL_AI_BASE_URL'] || 'http://localhost:8080/v1',
+                            httpAgent: false, // ローカルの場合はプロキシを使わない
+                        }]
                     }])
                 };
                 break;
             case AIProviderType.OPENAI_COMPATIBLE:
                 client = {
+                    name: AIProviderType.OPENAI_COMPATIBLE,
                     type: AIProviderType.OPENAI_COMPATIBLE,
                     client: new MyOpenAI([{
-                        apiKey: process.env['LOCAL_AI_API_KEY'] || 'dummy',
-                        baseURL: process.env['LOCAL_AI_BASE_URL'] || 'http://localhost:8080/v1',
-                        httpAgent: false, // ローカルの場合はプロキシを使わない
+                        endpoints: [{
+                            apiKey: process.env['LOCAL_AI_API_KEY'] || 'dummy',
+                            baseURL: process.env['LOCAL_AI_BASE_URL'] || 'http://localhost:8080/v1',
+                            httpAgent: false, // ローカルの場合はプロキシを使わない
+                        }]
                     }])
                 };
                 break;
             case AIProviderType.ANTHROPIC_VERTEXAI:
                 client = {
+                    name: AIProviderType.ANTHROPIC_VERTEXAI,
                     type: AIProviderType.ANTHROPIC_VERTEXAI,
                     client: new MyAnthropicVertex([
-                        { projectId: GCP_PROJECT_ID || '', region: 'europe-west1', baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: options.httpAgent },
-                        { projectId: GCP_PROJECT_ID || '', region: 'us-east5', baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: options.httpAgent }]),
+                        { projectId: GCP_PROJECT_ID || '', regionList: ['us-east5'], baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: options.httpAgent },
+                        // { projectId: GCP_PROJECT_ID || '', regionList: ['us-east5', 'europe-west1'], baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: options.httpAgent },
+                    ]),
                 };
                 break;
             case AIProviderType.ANTHROPIC:
                 client = {
+                    name: AIProviderType.ANTHROPIC,
                     type: AIProviderType.ANTHROPIC,
-                    client: new Anthropic({
-                        apiKey: process.env['ANTHROPIC_API_KEY'] || 'dummy',
-                        httpAgent: options.httpAgent, // HttpsProxyAgent
-                        maxRetries: 3, // リトライ回数を増やす
-                    })
+                    client: new MyAnthropic([{
+                        endpoints: [{
+                            apiKey: process.env['ANTHROPIC_API_KEY'] || 'dummy',
+                            // httpAgent: options.httpAgent, // HttpsProxyAgent
+                            maxRetries: 3, // リトライ回数を増やす
+                        }],
+                    }])
                 };
                 break;
             case AIProviderType.GEMINI:
                 client = {
+                    name: AIProviderType.GEMINI,
                     type: AIProviderType.GEMINI,
-                    client: new MyGemini([{ apiKey: process.env['GEMINI_API_KEY'] || 'dummy', }]),
+                    client: new MyGemini([{ endpoints: [{ apiKey: process.env['GEMINI_API_KEY'] || 'dummy', }] }]),
                 };
                 break;
             case AIProviderType.VERTEXAI:
                 client = {
+                    name: AIProviderType.VERTEXAI,
                     type: AIProviderType.VERTEXAI,
                     client: new MyVertexAiClient([{
                         project: GCP_PROJECT_ID || '',
-                        location: GCP_REGION || 'asia-northeast1',
+                        locationList: [GCP_REGION || 'asia-northeast1'],
                         apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
                         httpAgent: options.httpAgent, // HttpsProxyAgent
                     }]),
@@ -421,7 +498,8 @@ export function genClientByProvider(model: string): AIProviderClient {
             default:
                 throw new Error(`Unknown provider: ${provider}`);
         }
-        providerInstances[key] = client;
+        console.log(`genClientByProvider:default: ${key} created`, client);
+        providerInstances[key] = { client, updatedAt: new Date() };
         return client;
     }
 }
@@ -475,6 +553,7 @@ class RunBit {
     async executeCall(): Promise<void> {
         const commonArgs = JSON.parse(JSON.stringify(this.args)) as ChatCompletionCreateParamsBase;
         const args = commonArgs;
+        delete (args as any).providerName; // providerNameは付けちゃダメ
         const options = this.options;
         const idempotencyKey = this.options.idempotencyKey as string;
         const tokenCount = this.tokenCount;
@@ -509,7 +588,7 @@ class RunBit {
                     try {
                         // リクエストをファイルに書き出す
                         fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
-                        const client = this.provider.type === AIProviderType.ANTHROPIC_VERTEXAI ? this.provider.client.client : this.provider.client as Anthropic;
+                        const client = this.provider.type === AIProviderType.ANTHROPIC_VERTEXAI ? this.provider.client.client : this.provider.client.client as Anthropic;
                         const response: ReadableStream = args.model.includes('-thinking')
                             ? client.beta.messages.stream({ ...args, 'betas': 'output-128k-2025-02-19' } as MessageStreamParams).toReadableStream()
                             : client.messages.stream(args as MessageStreamParams).toReadableStream();
@@ -1507,7 +1586,7 @@ class RunBit {
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
 
                 // Cohere API呼び出し
-                runPromise = this.provider.client.chatStream(args as V2ChatStreamRequest, options as V2.RequestOptions).then(async (response) => {
+                runPromise = this.provider.client.client.chatStream(args as V2ChatStreamRequest, options as V2.RequestOptions).then(async (response) => {
 
                     // ヘッダー情報を取得
                     const headers: { [key: string]: string } = {};
@@ -2149,9 +2228,9 @@ export class OpenAIApiWrapper {
         args: ChatCompletionCreateParamsStreaming,
         options?: MyCompletionOptions,
         // 面倒な書き方になっているが、要はclientだけオプション化しただけ。
-        aiProvider?: Omit<AIProviderClient, 'client'> & Partial<Pick<AIProviderClient, 'client'>>,
+        aiProvider?: AIProviderClient,
     ): Observable<ChatCompletionChunk> {
-        const provider = genClientByProvider(args.model);
+        const provider = aiProvider || genClientByProvider(args.model);
 
         // 強制的にストリームモードにする。
         args.stream = true;
