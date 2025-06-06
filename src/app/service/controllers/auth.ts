@@ -912,18 +912,22 @@ export const getScopeLabels = [
 
             // Response DTOの型定義
             interface ScopeLabelsResponse {
-                [ScopeType.ORGANIZATION]: { id: string, key: string, label: string, }[];
-                [ScopeType.DIVISION]: { id: string, name: string, label: string }[];
-                [ScopeType.PROJECT]: { id: string, name: string, label: string }[];
-                [ScopeType.TEAM]: { id: string, name: string, label: string }[];
+                scopeLabels: {
+                    [ScopeType.ORGANIZATION]: { id: string, key: string, label: string, }[],
+                    [ScopeType.DIVISION]: { id: string, name: string, label: string }[],
+                    [ScopeType.PROJECT]: { id: string, name: string, label: string }[],
+                    [ScopeType.TEAM]: { id: string, name: string, label: string }[],
+                },
                 roleList: { role: UserRoleType, scopeType: ScopeType, scopeId: string }[];
             }
 
             const response: ScopeLabelsResponse = {
-                [ScopeType.ORGANIZATION]: orgList.map(org => ({ id: org.id, key: org.key, label: org.label })),
-                [ScopeType.DIVISION]: divisionList.map(division => ({ id: division.id, name: division.name, label: division.label })),
-                [ScopeType.PROJECT]: projectList.map(project => ({ id: project.id, name: project.name, label: project.label })),
-                [ScopeType.TEAM]: teamList.map(team => ({ id: team.id, name: team.name, label: team.label })),
+                scopeLabels: {
+                    [ScopeType.ORGANIZATION]: orgList.map(org => ({ id: org.id, key: org.key, label: org.label })),
+                    [ScopeType.DIVISION]: divisionList.map(division => ({ id: division.id, name: division.name, label: division.label })),
+                    [ScopeType.PROJECT]: projectList.map(project => ({ id: project.id, name: project.name, label: project.label })),
+                    [ScopeType.TEAM]: teamList.map(team => ({ id: team.id, name: team.name, label: team.label }))
+                },
                 roleList: roleList.map(role => ({
                     role: role.role,
                     scopeType: role.scopeInfo.scopeType,

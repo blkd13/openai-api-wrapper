@@ -32,7 +32,7 @@ import { FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-mode
 import { EntityManager, In, IsNull, Not } from 'typeorm';
 import { clients } from './chat.js';
 import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
-import { AIProviderEntity, AIProviderType, AzureOpenAIConfig, DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, getAIProviderConfig, OAuthAccountEntity, OAuthAccountStatus, OpenAIConfig, ScopeType, UserEntity, UserRoleEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
+import { AIModelEntity, AIProviderEntity, AIProviderType, AzureOpenAIConfig, DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, getAIProviderConfig, OAuthAccountEntity, OAuthAccountStatus, OpenAIConfig, ScopeType, UserEntity, UserRoleEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
 import { Utils, EnhancedRequestLimiter } from '../../common/utils.js';
 import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
 import { functionDefinitions } from '../tool/_index.js';
@@ -637,101 +637,149 @@ async function buildArgs(
     return { messageArgsSetList };
 }
 
-export async function getAIProvider(user: UserTokenPayload, providerName: string): Promise<AIProviderClient> {
+export async function getAIProvider(user: UserTokenPayload, modelName: string): Promise<AIProviderClient> {
     // USER>DIVISION>ORGANIZTION の優先順位で最上位のスコープのものを取得する
     const priority = [ScopeType.USER, ScopeType.DIVISION, ScopeType.ORGANIZATION];
 
+    const modelList = await ds.getRepository(AIModelEntity).find({
+        where: { orgKey: user.orgKey, name: modelName, isActive: true },
+    });
+
+    if (modelList.length === 0) {
+        throw new Error(`モデル ${modelName} が見つかりません。`);
+    } else if (modelList.length > 1) {
+        console.warn(`モデル ${modelName} が複数見つかりました。最初のものを使用します。`);
+    }
+    const model = modelList[0];
+
+    // // modelList内でproviderNameが重複している場合は最初のものを使用する
+    // const providerMap = modelList.reduce((prev, curr) => {
+    //     if (prev[curr.providerName]) {
+    //         // 既に存在する場合は何もしない
+    //     } else {
+    //         prev[curr.providerName] = [];
+    //     }
+    //     prev[curr.providerName].push(curr);
+    //     return prev;
+    // }, {} as Record<string, AIModelEntity[]>);
+    // // TODO scopeの仕組みを実装したらソートしないとダメになる
+    // // Object.keys(providerMap).forEach(key => {
+    // //     providerMap[key].sort((a, b) => {
+    // //         return priority.indexOf(a.scopeInfo.scopeType) - priority.indexOf(b.scopeInfo.scopeType);
+    // //     });
+    // // });
+    // const providerList = Object.keys(providerMap)
+    //     .map(key => providerMap[key][0]); // 最初のプロバイダ名を使用
+
     // ユーザーのロールリストからスコープ条件を作成
-    const scopeConditions = user.roleList.map(role => ({
-        orgKey: user.orgKey,
-        name: providerName,
-        'scopeInfo.scopeType': role.scopeInfo.scopeType,
-        'scopeInfo.scopeId': role.scopeInfo.scopeId,
-    }));
+    const scopeConditions = user.roleList.map(role =>
+        model.providerNameList.map(providerName => ({
+            orgKey: user.orgKey,
+            name: providerName,
+            'scopeInfo.scopeType': role.scopeInfo.scopeType,
+            'scopeInfo.scopeId': role.scopeInfo.scopeId,
+        }))
+    ).flat();
+
     // console.dir(scopeConditions, { depth: null });
     const providerList = await ds.getRepository(AIProviderEntity).find({
         where: scopeConditions,
     });
 
     if (providerList.length === 0) {
-        throw new Error(`プロバイダ ${providerName} が見つかりません。`);
+        throw new Error(`モデル ${modelName} に対応するプロバイダが見つかりません。`);
     }
 
     // スコープ優先順位でソート
-    const provider = providerList.sort((a, b) => {
-        return priority.indexOf(a.scopeInfo.scopeType) - priority.indexOf(b.scopeInfo.scopeType);
-    })[0];
+    const providerSetMap = providerList.reduce((prev, curr) => {
+        if (prev[curr.id]) {
+            // 既に存在する場合は何もしない
+        } else {
+            prev[curr.id] = [];
+        }
+        prev[curr.id].push(curr);
+        return prev;
+    }, {} as Record<string, AIProviderEntity[]>);
+    Object.keys(providerSetMap).forEach(key => {
+        providerSetMap[key].sort((a, b) => {
+            return priority.indexOf(a.scopeInfo.scopeType) - priority.indexOf(b.scopeInfo.scopeType);
+        });
+    });
+    // providerSetMapのキーをプロバイダIDにして最初のプロバイダ名を使用
+    const activeProviderList = Object.keys(providerSetMap).map(key => providerSetMap[key][0]);
 
-    if (providerInstances[provider.id] && providerInstances[provider.id].updatedAt === provider.updatedAt) {
-        // 既にクライアントが生成されている場合はそれを返す
-        return providerInstances[provider.id].client;
-    } else { }
+    const activeProviderClients = activeProviderList.map(provider => {
+        if (providerInstances[provider.id] && providerInstances[provider.id].updatedAt === provider.updatedAt) {
+            // 既にクライアントが生成されている場合はそれを返す
+            return providerInstances[provider.id].client;
+        } else { }
 
-    
-    console.log(`Using AI provider: ${provider.name} (${provider.type})`);
+        console.log(`Using AI provider: ${provider.name} (${provider.type})`);
 
-    let aiProviderClient: AIProviderClient;
+        let aiProviderClient: AIProviderClient;
 
-    // プロバイダのクライアントを生成
-    switch (provider.type) {
-        case AIProviderType.OPENAI:
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type)) };
-            break;
-        case AIProviderType.AZURE_OPENAI:
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyAzureOpenAI(getAIProviderConfig(provider, provider.type)) };
-            break;
-        case AIProviderType.ANTHROPIC:
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyAnthropic(getAIProviderConfig(provider, provider.type)) };
-            break;
-        case AIProviderType.CEREBRAS:
-            const cerebrasConfig = getAIProviderConfig(provider, provider.type);
-            cerebrasConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.cerebras.ai/v1') : null);
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(cerebrasConfig) };
-            break;
-        case AIProviderType.GROQ:
-            const groqConfig = getAIProviderConfig(provider, provider.type);
-            groqConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.groq.com/openai/v1') : null);
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(groqConfig) };
-            break;
-        case AIProviderType.MISTRAL:
-            const mistralConfig = getAIProviderConfig(provider, provider.type);
-            mistralConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.mistral.com/v1') : null);
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(mistralConfig) };
-            break;
-        case AIProviderType.DEEPSEEK:
-            const deepSeekConfig = getAIProviderConfig(provider, provider.type);
-            deepSeekConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.deepseek.com/v1') : null);
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(deepSeekConfig) };
-            break;
-        case AIProviderType.LOCAL:
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type)) };
-            break;
-        case AIProviderType.OPENAI_COMPATIBLE:
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(getAIProviderConfig(provider, provider.type)) };
-            break;
-        case AIProviderType.VERTEXAI:
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyVertexAiClient(getAIProviderConfig(provider, provider.type)) };
-            break;
-        case AIProviderType.ANTHROPIC_VERTEXAI:
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyAnthropicVertex(getAIProviderConfig(provider, provider.type)) };
-            break;
-        case AIProviderType.OPENAPI_VERTEXAI:
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyVertexAiClient(getAIProviderConfig(provider, provider.type)) };
-            break;
-        case AIProviderType.COHERE:
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyCohere(getAIProviderConfig(provider, provider.type)) };
-            break;
-        case AIProviderType.GEMINI:
-            // .map(obj => ({ apiKey: obj.apiKey }))
-            aiProviderClient = { name: provider.name, type: provider.type, client: new MyGemini(getAIProviderConfig(provider, provider.type)) };
-            break;
-        default:
-            throw new Error(`Unknown provider type: ${provider.type}`);
-    }
+        // プロバイダのクライアントを生成
+        switch (provider.type) {
+            case AIProviderType.OPENAI:
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI([getAIProviderConfig(provider, provider.type)]) };
+                break;
+            case AIProviderType.AZURE_OPENAI:
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyAzureOpenAI([getAIProviderConfig(provider, provider.type)]) };
+                break;
+            case AIProviderType.ANTHROPIC:
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyAnthropic([getAIProviderConfig(provider, provider.type)]) };
+                break;
+            case AIProviderType.CEREBRAS:
+                const cerebrasConfig = [getAIProviderConfig(provider, provider.type)];
+                cerebrasConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.cerebras.ai/v1') : null);
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(cerebrasConfig) };
+                break;
+            case AIProviderType.GROQ:
+                const groqConfig = [getAIProviderConfig(provider, provider.type)];
+                groqConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.groq.com/openai/v1') : null);
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(groqConfig) };
+                break;
+            case AIProviderType.MISTRAL:
+                const mistralConfig = [getAIProviderConfig(provider, provider.type)];
+                mistralConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.mistral.com/v1') : null);
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(mistralConfig) };
+                break;
+            case AIProviderType.DEEPSEEK:
+                const deepSeekConfig = [getAIProviderConfig(provider, provider.type)];
+                deepSeekConfig.forEach(obj => obj.endpoints ? obj.endpoints.forEach(endpoint => endpoint.baseURL = endpoint.baseURL || 'https://api.deepseek.com/v1') : null);
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI(deepSeekConfig) };
+                break;
+            case AIProviderType.LOCAL:
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI([getAIProviderConfig(provider, provider.type)]) };
+                break;
+            case AIProviderType.OPENAI_COMPATIBLE:
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyOpenAI([getAIProviderConfig(provider, provider.type)]) };
+                break;
+            case AIProviderType.VERTEXAI:
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyVertexAiClient([getAIProviderConfig(provider, provider.type)]) };
+                break;
+            case AIProviderType.ANTHROPIC_VERTEXAI:
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyAnthropicVertex([getAIProviderConfig(provider, provider.type)]) };
+                break;
+            case AIProviderType.OPENAPI_VERTEXAI:
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyVertexAiClient([getAIProviderConfig(provider, provider.type)]) };
+                break;
+            case AIProviderType.COHERE:
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyCohere([getAIProviderConfig(provider, provider.type)]) };
+                break;
+            case AIProviderType.GEMINI:
+                // .map(obj => ({ apiKey: obj.apiKey }))
+                aiProviderClient = { name: provider.name, type: provider.type, client: new MyGemini([getAIProviderConfig(provider, provider.type)]) };
+                break;
+            default:
+                throw new Error(`Unknown provider type: ${provider.type}`);
+        }
 
-    // クライアントをキャッシュに保存
-    providerInstances[provider.id] = { client: aiProviderClient, updatedAt: provider.updatedAt };
-    return aiProviderClient;
+        // クライアントをキャッシュに保存
+        providerInstances[provider.id] = { client: aiProviderClient, updatedAt: provider.updatedAt };
+        return aiProviderClient;
+    });
+    return activeProviderClients[Math.floor(Math.random() * activeProviderClients.length)]; // 複数ある場合はランダムに一つ返す。負荷分散したいだけだからとりあえず適当でよい
 }
 
 /**

@@ -707,7 +707,7 @@ export class AIProviderEntity extends MyBaseEntity {
     label!: string;
 
     @Column({ type: 'jsonb' })
-    config!: AIProviderConfig[]; // 複数ある時はラウンドロビン
+    config!: AIProviderConfig;
 
     @Column({ default: true })
     isActive!: boolean;
@@ -716,8 +716,8 @@ export class AIProviderEntity extends MyBaseEntity {
 export function getAIProviderConfig<T extends AIProviderType>(
     provider: AIProviderEntity,
     type: T
-): AIProviderConfigMap[T][] {
-    return provider.config as AIProviderConfigMap[T][];
+): AIProviderConfigMap[T] {
+    return provider.config as AIProviderConfigMap[T];
 }
 
 
@@ -761,6 +761,9 @@ export class AIModelEntity extends MyBaseEntity {
 
     @Column()
     providerName!: string;
+
+    @Column('text', { array: true, nullable: false, default: '{}' })
+    providerNameList!: string[];
 
     @Column()
     providerModelId!: string;
@@ -928,3 +931,5 @@ export class AIModelAlias extends MyBaseEntity {
 // -- =======================
 // -- DROP TABLE ai_model_entity_backup;
 // -- DROP TABLE ai_model_alias_backup;
+
+//   UPDATE ai_model_entity SET provider_name_list=ARRAY[provider_name] WHERE provider_name_list = '{}';
