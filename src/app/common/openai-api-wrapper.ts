@@ -2735,7 +2735,7 @@ export class OpenAIApiWrapper {
         const inProgressQueue = this.inProgressQueue;
         for (const key of Object.keys(waitQueue)) {
             // 未知モデル名の場合はlimit=1のObjectを追加しておく
-            if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { maxTokens: 4096, limitRequests: 1, limitTokens: 1, remainingRequests: 1, remainingTokens: 0, resetRequests: '', resetTokens: '' };
+            if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { maxTokens: 4096, limitRequests: 1, limitTokens: 1, remainingRequests: 1, remainingTokens: 1, resetRequests: '', resetTokens: '' };
             // console.log(`fire ${key} x waitQueue:${waitQueue[key].length} inProgressQueue:${inProgressQueue[key].length} reqlimit:${this.currentRatelimit[key].limitRequests} toklimit:${this.currentRatelimit[key].limitTokens} remainingRequests:${this.currentRatelimit[key].remainingRequests} remaingTokens:${this.currentRatelimit[key].remainingTokens}`);
             const ratelimitObj = this.currentRatelimit[key];
             // console.log(`fire ${key} x waitQueue:${waitQueue[key].length} inProgressQueue:${inProgressQueue[key].length} reqlimit:${ratelimitObj.limitRequests} toklimit:${ratelimitObj.limitTokens} remainingRequests:${ratelimitObj.remainingRequests} remaingTokens:${ratelimitObj.remainingTokens}`);
