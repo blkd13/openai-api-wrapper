@@ -6,7 +6,7 @@ import { ds } from '../db.js'; // データソース
 import { validationErrorHandler } from '../middleware/validation.js';
 import { UserSettingEntity } from '../entity/user.entity.js';
 import { UserRequest } from '../models/info.js';
-import { ApiProviderAuthType, ApiProviderEntity, ApiProviderPostType, ApiProviderTemplateEntity, OAuth2Config, OAuth2ConfigTemplate, OrganizationEntity, UserRoleType } from '../entity/auth.entity.js';
+import { ApiProviderAuthType, ApiProviderEntity, ApiProviderPostType, ApiProviderTemplateEntity, OAuth2Config, OAuth2ConfigTemplate, OrganizationEntity, UserEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
 import { NextFunction } from 'http-proxy-middleware/dist/types.js';
 import { decrypt, encrypt } from './tool-call.js';
 import { MakeOptional } from '../../common/utils.js';
@@ -893,6 +893,36 @@ export const deactivateOrganization = [
         } catch (error) {
             console.error('Error deactivating organization:', error);
             res.status(500).json({ message: 'テナントの非アクティブ化中にエラーが発生しました' });
+        }
+    }
+];
+
+/**
+ * [GET] テナントに所属するユーザーの一覧の取得
+ */
+export const getOrganizationUsers = [
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const orgKey = req.info.user.orgKey;
+
+        try {
+            const entities = await ds.getRepository(UserEntity).find({
+                select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                },
+                where: {
+                    orgKey,
+                    status: UserStatus.Active, // アクティブなユーザーのみ取得
+                },
+            });
+
+            res.status(200).json(entities);
+        } catch (error) {
+            console.error('Error retrieving organizations:', error);
+            res.status(500).json({ message: 'テナント一覧の取得中にエラーが発生しました' });
         }
     }
 ];

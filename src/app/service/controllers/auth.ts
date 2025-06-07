@@ -514,6 +514,7 @@ export async function tryRefreshCore(tm: EntityManager, xRealIp: string, tokenTy
     const userRoleWhere = {
         orgKey: decodedPayload.orgKey,
         userId: decodedPayload.userId,
+        status: UserStatus.Active, // activeユーザーじゃないと使えない
     };
     // userRoleListの取得
     const userRoleList: UserRole[] = (await tm.find(UserRoleEntity, { where: userRoleWhere })).map(roleBinding => {
@@ -1263,7 +1264,7 @@ export const passwordReset = [
 ];
 
 /**
- * [user認証] ユーザー情報取得
+ * [user認証] 自分のユーザー情報取得
  */
 export const getUser = [
     validationErrorHandler,

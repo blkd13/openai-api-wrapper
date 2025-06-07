@@ -557,7 +557,7 @@ export const upsertBaseModel = [
             if (isNew) {
                 // 新規作成
                 entity = repo.create({
-                    provider: bodyData.providerType,
+                    providerNameList: bodyData.providerNameList || [],
                     providerType: bodyData.providerType,
                     providerName: bodyData.providerName,
                     providerModelId: bodyData.providerModelId,
@@ -574,7 +574,7 @@ export const upsertBaseModel = [
             } else {
                 // 更新 - 必須フィールド
                 Object.assign(entity!, {
-                    provider: bodyData.providerType,
+                    providerNameList: bodyData.providerNameList || [],
                     providerType: bodyData.providerType,
                     providerName: bodyData.providerName,
                     providerModelId: bodyData.providerModelId,
@@ -637,7 +637,7 @@ export const upsertBaseModel = [
                 const newAliasEntities = newAliases.map(alias => {
                     const aliasEntity = new AIModelAlias();
                     aliasEntity.orgKey = req.info.user.orgKey;
-                    aliasEntity.provider = bodyData.providerType;
+                    // aliasEntity.provider = bodyData.providerType;
                     aliasEntity.providerType = bodyData.providerType;
                     aliasEntity.providerName = bodyData.providerName;
                     aliasEntity.alias = alias;

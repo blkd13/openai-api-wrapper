@@ -57,6 +57,46 @@ export class UserEntity extends MyBaseEntity {
     authGeneration?: number;
 }
 
+export enum ScopeType {
+    USER = 'USER', DIVISION = 'DIVISION', ORGANIZATION = 'ORGANIZATION',
+    PROJECT = 'PROJECT', TEAM = 'TEAM', GLOBAL = 'GLOBAL',
+}
+export class ScopeInfo {
+    @Column({ type: 'enum', enum: ScopeType })
+    scopeType!: ScopeType;
+
+    @Column({ type: 'uuid' })
+    scopeId!: string;
+}
+
+export interface UserRole {
+    orgKey: string;
+    userId: string;
+    scopeInfo: ScopeInfo;
+    role: UserRoleType;
+}
+
+@Entity()
+@Index(['orgKey', 'userId'])
+@Index(['orgKey', 'userId', 'role', 'scopeInfo.scopeType', 'scopeInfo.scopeId'], { unique: true })
+export class UserRoleEntity extends MyBaseEntity implements UserRole {
+    @Column({ type: 'uuid' })
+    userId!: string;
+
+    @Column(type => ScopeInfo)
+    scopeInfo!: ScopeInfo;
+
+    @Column({ type: 'enum', enum: UserRoleType, default: UserRoleType.User })
+    role!: UserRoleType;       // 'ADMIN' | 'MEMBER' …
+
+    @Column({ default: 0 })
+    priority!: number; // 複数divisionのroleを持つことがあるのでその優先度。数値が大きいほど優先される。
+
+    @Column({ type: 'enum', enum: UserStatus, default: UserStatus.Active })
+    status!: UserStatus;
+}
+// INSERT INTO ribbon.role_binding_entity(org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,role,scope_info_scope_type,scope_info_scope_id) 
+// SELECT org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,id,'ORGANIZATION','{95051ea1-c8f6-4485-a407-f5b19c3245bc}'FROM user_entity;
 
 @Entity()
 export class InviteEntity extends MyBaseEntity {
@@ -177,6 +217,14 @@ export enum DepartmentRoleType {
     Deputy = 'Deputy', // 主務じゃない
 }
 
+export enum DivisionRoleType {
+    Maintainer = 'Maintainer', // メンテナ
+    Owner = 'Owner', // 所有者
+    Admin = 'Admin', // 管理者
+    Member = 'Member', // メンバー
+    Deputy = 'Deputy', // 主務じゃない
+}
+
 @Entity()
 export class DepartmentEntity extends MyBaseEntity {
     // @PrimaryGeneratedColumn('uuid')
@@ -225,6 +273,9 @@ export class DivisionEntity extends MyBaseEntity {
 
     @Column()
     label!: string;
+
+    @Column({ type: 'text', nullable: true })
+    description?: string;
 
     @Column({ default: true })
     isActive!: boolean; // 有効/無効フラグ
@@ -527,46 +578,6 @@ export enum AIProviderType {
     GEMINI = 'gemini',
 }
 
-export enum ScopeType {
-    USER = 'USER', DIVISION = 'DIVISION', ORGANIZATION = 'ORGANIZATION',
-    PROJECT = 'PROJECT', TEAM = 'TEAM', GLOBAL = 'GLOBAL',
-}
-export class ScopeInfo {
-    @Column({ type: 'enum', enum: ScopeType })
-    scopeType!: ScopeType;
-
-    @Column({ type: 'uuid' })
-    scopeId!: string;
-}
-
-export interface UserRole {
-    orgKey: string;
-    userId: string;
-    scopeInfo: ScopeInfo;
-    role: UserRoleType;
-}
-
-@Entity()
-@Index(['orgKey', 'userId'])
-@Index(['orgKey', 'userId', 'role', 'scopeInfo.scopeType', 'scopeInfo.scopeId'], { unique: true })
-export class UserRoleEntity extends MyBaseEntity implements UserRole {
-    @Column({ type: 'uuid' })
-    userId!: string;
-
-    @Column(type => ScopeInfo)
-    scopeInfo!: ScopeInfo;
-
-    @Column({ type: 'enum', enum: UserRoleType, default: UserRoleType.User })
-    role!: UserRoleType;       // 'ADMIN' | 'MEMBER' …
-
-    @Column({ default: 0 })
-    priority!: number; // 複数divisionのroleを持つことがあるのでその優先度。数値が大きいほど優先される。
-
-    @Column({ type: 'enum', enum: UserStatus, default: UserStatus.Active })
-    status!: UserStatus;
-}
-// INSERT INTO ribbon.role_binding_entity(org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,role,scope_info_scope_type,scope_info_scope_id) 
-// SELECT org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,id,'ORGANIZATION','{95051ea1-c8f6-4485-a407-f5b19c3245bc}'FROM user_entity;
 export enum ProviderCategory {
     AI = 'AI',
     API = 'API', // APIプロバイダ（GitHub, GitLabなど）
@@ -722,7 +733,6 @@ export function getAIProviderConfig<T extends AIProviderType>(
 
 
 @Entity()
-@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
 @Index(['orgKey', 'modelId', 'scopeInfo.scopeType', 'scopeInfo.scopeId']) // モデル検索に備える
 export class AIModelOverrideEntity extends MyBaseEntity {
 

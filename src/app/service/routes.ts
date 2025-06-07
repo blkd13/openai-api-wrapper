@@ -42,13 +42,14 @@ import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCo
 import { UserRoleType } from './entity/auth.entity.js';
 import { getOAuthApiProxy } from './api/api-proxy.js';
 import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
-import { getUserSetting, upsertUserSetting, deleteUserSetting, getApiProviders, upsertApiProvider, deleteApiProvider, getApiProviderTemplates, upsertApiProviderTemplate, deleteApiProviderTemplate, getOrganizations, upsertOrganization, deactivateOrganization } from './controllers/user.js';
+import { getUserSetting, upsertUserSetting, deleteUserSetting, getApiProviders, upsertApiProvider, deleteApiProvider, getApiProviderTemplates, upsertApiProviderTemplate, deleteApiProviderTemplate, getOrganizations, upsertOrganization, deactivateOrganization, getOrganizationUsers } from './controllers/user.js';
 import * as gitlab from './api/api-gitlab.js';
 import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
 import { registApiKey, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId } from './controllers/tool-call.js';
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, getAIProviders, getAIProviderTemplates, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing } from './controllers/model-manager.js';
 import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
+import { getDivisionMembers, updateDivisionMember, removeDivisionMember, getDivisionList, createDivision, getDivision, updateDivision, deleteDivision, getAllDivisions, upsertDivisionMember } from './controllers/division.js';
 
 // routers/index.ts
 
@@ -92,7 +93,7 @@ authUserRouter.get(`/predict-history`, getDepartmentMemberLogForUser);
 // authUserRouter.get('/access-token', genAccessToken);
 authUserRouter.post('/api-token', genApiToken);
 
-authUserRouter.get(`/user-list`, getUserList); // 部署情報取得（メンバー追加時のサジェスト）
+authUserRouter.get(`/user-list`, getUserList); // メンバー追加時のサジェスト
 
 authUserRouter.get(`/user-setting/:userId/:key`, getUserSetting);
 authUserRouter.post(`/user-setting/:userId/:key`, upsertUserSetting);
@@ -129,6 +130,18 @@ authUserRouter.post('/team/:teamId/member', addTeamMember);
 authUserRouter.get('/team/:teamId/members', getTeamMembers);
 authUserRouter.patch('/team/:teamId/member/:userId', updateTeamMember);
 authUserRouter.delete('/team/:teamId/member/:userId', removeTeamMember);
+
+// Division関連
+authUserRouter.get('/divisions', getDivisionList);
+authAdminRouter.post('/division', createDivision); // 管理者はDivisionを追加できる
+authAdminRouter.patch('/division/:divisionId', updateDivision); // 管理者はDivisionを更新できる
+authAdminRouter.delete('/division/:divisionId', deleteDivision); // 管理者はDivisionを削除できる
+
+// Divisionメンバー関連
+authAdminRouter.post('/division/:divisionId/member', upsertDivisionMember);
+authUserRouter.get('/division/:divisionId/members', getDivisionMembers);
+authAdminRouter.patch('/division/:divisionId/member/:userId', upsertDivisionMember);
+authAdminRouter.delete('/division/:divisionId/member/:userId', removeDivisionMember);
 
 // プロジェクト関連
 authUserRouter.post('/project', createProject);
@@ -186,8 +199,8 @@ authUserRouter.put('/:id/access', updateFileAccess); // ファイルアクセス
 // authUserRouter.post('/file/:path/*', saveFile); // 最低1階層は必要
 
 // 部管理用
-authUserRouter.get(`/department`, getDepartmentList); // 部署一覧取得
-authUserRouter.get(`/department-member`, getDepartmentMemberForUser); // 部署情報取得
+// authUserRouter.get(`/department`, getDepartmentList); // 部署一覧取得
+// authUserRouter.get(`/department-member`, getDepartmentMemberForUser); // 部署情報取得
 authAdminRouter.get(`/department`, getDepartment); // 部署情報取得
 authAdminRouter.patch(`/department/:departmentId`, patchDepartmentMember);
 authAdminRouter.get(`/predict-history/:userId`, getDepartmentMemberLog);
@@ -269,6 +282,8 @@ authUserRouter.get('/ai-model/:modelId/pricing', getModelPricings);
 authMaintainerRouter.post('/ai-model/:modelId/pricing', upsertModelPricing);
 authMaintainerRouter.put('/ai-model/:modelId/pricing/:id?', upsertModelPricing);
 authMaintainerRouter.delete('/ai-model/:modelId/pricing/:id', deleteModelPricing);
+
+authAdminRouter.get('/organizations/users', getOrganizationUsers); // 組織一覧取得
 
 authMaintainerRouter.get('/organizations', getOrganizations); // 組織一覧取得
 authMaintainerRouter.post('/organizations', upsertOrganization); // 組織登録・更新
