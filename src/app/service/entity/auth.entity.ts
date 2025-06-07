@@ -762,15 +762,9 @@ export class AIModelOverrideEntity extends MyBaseEntity {
 
 
 @Entity()
-@Index(['orgKey', 'providerName', 'providerModelId'], { unique: true })
+@Index(['orgKey', 'providerModelId'], { unique: true })
+@Index(['orgKey', 'name'], { unique: true })
 export class AIModelEntity extends MyBaseEntity {
-
-    // 同名でのオーバーライドを許可するため、providerTypeとproviderNameの組み合わせでproviderを指定する。（providerIdを使ってしまうとオーバーライドができないため）
-    @Column({ type: 'enum', enum: AIProviderType })
-    providerType!: AIProviderType;
-
-    @Column()
-    providerName!: string;
 
     @Column('text', { array: true, nullable: false, default: '{}' })
     providerNameList!: string[];
@@ -855,18 +849,18 @@ export class AIModelEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['orgKey', 'providerName', 'alias'], { unique: true })
+@Index(['orgKey', 'alias'], { unique: true })
 export class AIModelAlias extends MyBaseEntity {
 
     @Column({ type: 'uuid' })
     modelId!: string;
 
-    // 同名でのオーバーライドを許可するため、providerTypeとproviderNameの組み合わせでproviderを指定する。（providerIdを使ってしまうとオーバーライドができないため）
-    @Column({ type: 'enum', enum: AIProviderType })
-    providerType!: AIProviderType;
+    // // 同名でのオーバーライドを許可するため、providerTypeとproviderNameの組み合わせでproviderを指定する。（providerIdを使ってしまうとオーバーライドができないため）
+    // @Column({ type: 'enum', enum: AIProviderType })
+    // providerType!: AIProviderType;
 
-    @Column() 
-    providerName?: string; // プロバイダ名（例: 'openai', 'azure_openai'）
+    // @Column() 
+    // providerName?: string; // プロバイダ名（例: 'openai', 'azure_openai'）
 
     @Column({ type: 'text' })
     alias!: string;

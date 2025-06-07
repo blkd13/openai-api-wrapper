@@ -520,18 +520,18 @@ export const upsertBaseModel = [
                 if (entity) isNew = false;
             }
 
-            // 一意制約チェック: provider + providerModelId
-            const conflict = await repo.findOne({
-                where: {
-                    providerName: bodyData.providerName,
-                    providerModelId: bodyData.providerModelId,
-                    ...(isNew ? { orgKey: req.info.user.orgKey } : { id: Not(modelId), orgKey: req.info.user.orgKey })
-                }
-            });
-            if (conflict) {
-                console.log('Conflict:', modelId, conflict);
-                return res.status(409).json({ message: `${bodyData.providerName} + ${bodyData.providerModelId} のモデルが既に存在します` });
-            }
+            // // 一意制約チェック: provider + providerModelId
+            // const conflict = await repo.findOne({
+            //     where: {
+            //         providerName: bodyData.providerName,
+            //         providerModelId: bodyData.providerModelId,
+            //         ...(isNew ? { orgKey: req.info.user.orgKey } : { id: Not(modelId), orgKey: req.info.user.orgKey })
+            //     }
+            // });
+            // if (conflict) {
+            //     console.log('Conflict:', modelId, conflict);
+            //     return res.status(409).json({ message: `${bodyData.providerName} + ${bodyData.providerModelId} のモデルが既に存在します` });
+            // }
 
             // aliasesの整備
             if (aliases.length > 0) {
@@ -543,23 +543,23 @@ export const upsertBaseModel = [
                 // エイリアスが空の場合はデフォルトエイリアスを追加
                 aliases.push(bodyData.providerModelId);
             }
-            const conflictAlias = await repoAlias.find({
-                where: {
-                    providerName: bodyData.providerName,
-                    alias: In(aliases),
-                    ...(isNew ? { orgKey: req.info.user.orgKey } : { modelId: Not(modelId), orgKey: req.info.user.orgKey })
-                }
-            });
-            if (conflictAlias && conflictAlias.length > 0) {
-                return res.status(409).json({ message: `${bodyData.providerName} + ${conflictAlias.map(alias => alias.alias).join(', ')} のエイリアスが既に存在します` });
-            } else { }
+            // const conflictAlias = await repoAlias.find({
+            //     where: {
+            //         providerName: bodyData.providerName,
+            //         alias: In(aliases),
+            //         ...(isNew ? { orgKey: req.info.user.orgKey } : { modelId: Not(modelId), orgKey: req.info.user.orgKey })
+            //     }
+            // });
+            // if (conflictAlias && conflictAlias.length > 0) {
+            //     return res.status(409).json({ message: `${bodyData.providerName} + ${conflictAlias.map(alias => alias.alias).join(', ')} のエイリアスが既に存在します` });
+            // } else { }
 
             if (isNew) {
                 // 新規作成
                 entity = repo.create({
                     providerNameList: bodyData.providerNameList || [],
-                    providerType: bodyData.providerType,
-                    providerName: bodyData.providerName,
+                    // providerType: bodyData.providerType,
+                    // providerName: bodyData.providerName,
                     providerModelId: bodyData.providerModelId,
                     name: bodyData.name,
                     status: bodyData.status,
@@ -575,8 +575,8 @@ export const upsertBaseModel = [
                 // 更新 - 必須フィールド
                 Object.assign(entity!, {
                     providerNameList: bodyData.providerNameList || [],
-                    providerType: bodyData.providerType,
-                    providerName: bodyData.providerName,
+                    // providerType: bodyData.providerType,
+                    // providerName: bodyData.providerName,
                     providerModelId: bodyData.providerModelId,
                     name: bodyData.name,
                     status: bodyData.status,
@@ -638,8 +638,8 @@ export const upsertBaseModel = [
                     const aliasEntity = new AIModelAlias();
                     aliasEntity.orgKey = req.info.user.orgKey;
                     // aliasEntity.provider = bodyData.providerType;
-                    aliasEntity.providerType = bodyData.providerType;
-                    aliasEntity.providerName = bodyData.providerName;
+                    // aliasEntity.providerType = bodyData.providerType;
+                    // aliasEntity.providerName = bodyData.providerName;
                     aliasEntity.alias = alias;
                     aliasEntity.modelId = saved.id;
                     aliasEntity.createdBy = req.info.user.id;
