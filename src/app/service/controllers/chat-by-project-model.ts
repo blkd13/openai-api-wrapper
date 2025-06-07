@@ -603,7 +603,7 @@ async function buildArgs(
         });
 
         // AIプロバイダクライアントを取得
-        const aiProviderClient = await getAIProvider(user, inDto.args.providerName);
+        const aiProviderClient = await getAIProvider(user, inDto.args.model || 'default-model');
 
         messageArgsSetList.push({ ...messageSet, args: inDto.args, options: inDto.options, aiProviderClient });
 
@@ -678,6 +678,7 @@ export async function getAIProvider(user: UserTokenPayload, modelName: string): 
             name: providerName,
             'scopeInfo.scopeType': role.scopeInfo.scopeType,
             'scopeInfo.scopeId': role.scopeInfo.scopeId,
+            isActive: true,
         }))
     ).flat();
 
@@ -702,9 +703,10 @@ export async function getAIProvider(user: UserTokenPayload, modelName: string): 
     }, {} as Record<string, AIProviderEntity[]>);
     Object.keys(providerSetMap).forEach(key => {
         providerSetMap[key].sort((a, b) => {
-            return priority.indexOf(a.scopeInfo.scopeType) - priority.indexOf(b.scopeInfo.scopeType);
+            return priority.indexOf(b.scopeInfo.scopeType) - priority.indexOf(a.scopeInfo.scopeType);
         });
     });
+    // console.log(`\n\nproviderSetMap=${JSON.stringify(providerSetMap, null, 2)}`);
     // providerSetMapのキーをプロバイダIDにして最初のプロバイダ名を使用
     const activeProviderList = Object.keys(providerSetMap).map(key => providerSetMap[key][0]);
 
