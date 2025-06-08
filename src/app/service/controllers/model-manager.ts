@@ -6,6 +6,7 @@ import { AIProviderType, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIM
 import { validationErrorHandler } from '../middleware/validation.js';
 import { ds } from '../db.js';
 import { UserRequest } from '../models/info.js';
+import { safeWhere } from '../entity/base.js';
 
 /**
  * [GET] AIProvider 一覧取得
@@ -32,7 +33,7 @@ export const getAIProviderTemplates = [
             if (scopeType) where['scopeInfo.scopeType'] = scopeType;
 
             const providers = await ds.getRepository(AIProviderTemplateEntity).find({
-                where,
+                where: safeWhere(where),
                 order: { createdAt: 'DESC' }
             });
 
@@ -69,27 +70,27 @@ export const upsertAIProviderTemplate = [
 
             // 既存レコードチェック
             if (providerId) {
-                entity = await repo.findOneBy({
+                entity = await repo.findOneBy(safeWhere({
                     orgKey: req.info.user.orgKey,
                     id: providerId,
-                });
+                }));
                 if (entity) isNew = false;
             } else { }
 
             let scopeId;
             if (bodyData.scopeInfo.scopeType === ScopeType.ORGANIZATION) {
-                const org = await ds.getRepository(OrganizationEntity).findOneBy({
+                const org = await ds.getRepository(OrganizationEntity).findOneBy(safeWhere({
                     orgKey: req.info.user.orgKey,
-                });
+                }));
                 if (!org) {
                     return res.status(400).json({ message: '指定された組織が見つかりません' });
                 }
                 scopeId = org.id;
             } else if (bodyData.scopeInfo.scopeType === ScopeType.DIVISION) {
                 const divisionRoles = req.info.user.roleList.filter(role => role.scopeInfo.scopeType === ScopeType.DIVISION && [UserRoleType.Admin, UserRoleType.Maintainer].includes(role.role));
-                const division = await ds.getRepository(DivisionEntity).findOneBy({
+                const division = await ds.getRepository(DivisionEntity).findOneBy(safeWhere({
                     orgKey: req.info.user.orgKey,
-                });
+                }));
 
                 if (!division) {
                     return res.status(400).json({ message: '指定された部門が見つかりません' });
@@ -100,6 +101,7 @@ export const upsertAIProviderTemplate = [
             }
 
             // 一意制約チェック: organization + scopeInfo + provider
+            // TODO DANGER safeWhereが適用できてない。
             const conflict = await repo.findOneBy({
                 provider: bodyData.provider,
                 orgKey: req.info.user.orgKey,
@@ -107,7 +109,7 @@ export const upsertAIProviderTemplate = [
                     scopeType: bodyData.scopeInfo.scopeType,
                     scopeId: scopeId,
                 },
-                ...(isNew ? {} : { id: Not(providerId) })
+                ...(isNew ? {} : { id: Not(providerId ?? 'id') })
             });
 
             if (conflict) {
@@ -176,10 +178,10 @@ export const deleteAIProviderTemplate = [
             const { providerId } = req.params;
             const repo = ds.getRepository(AIProviderTemplateEntity);
             const entity = await repo.findOne({
-                where: {
+                where: safeWhere({
                     id: providerId,
                     orgKey: req.info.user.orgKey
-                }
+                }),
             });
 
             if (!entity) {
@@ -230,7 +232,7 @@ export const getAIProviders = [
             if (scopeType) where['scopeInfo.scopeType'] = scopeType;
 
             const providers = await ds.getRepository(AIProviderEntity).find({
-                where,
+                where: safeWhere(where),
                 order: { createdAt: 'DESC' }
             });
 
@@ -266,27 +268,27 @@ export const upsertAIProvider = [
 
             // 既存レコードチェック
             if (providerId) {
-                entity = await repo.findOneBy({
+                entity = await repo.findOneBy(safeWhere({
                     orgKey: req.info.user.orgKey,
                     id: providerId,
-                });
+                }));
                 if (entity) isNew = false;
             } else { }
 
             let scopeId;
             if (bodyData.scopeInfo.scopeType === ScopeType.ORGANIZATION) {
-                const org = await ds.getRepository(OrganizationEntity).findOneBy({
+                const org = await ds.getRepository(OrganizationEntity).findOneBy(safeWhere({
                     orgKey: req.info.user.orgKey,
-                });
+                }));
                 if (!org) {
                     return res.status(400).json({ message: '指定された組織が見つかりません' });
                 }
                 scopeId = org.id;
             } else if (bodyData.scopeInfo.scopeType === ScopeType.DIVISION) {
                 const divisionRoles = req.info.user.roleList.filter(role => role.scopeInfo.scopeType === ScopeType.DIVISION && [UserRoleType.Admin, UserRoleType.Maintainer].includes(role.role));
-                const division = await ds.getRepository(DivisionEntity).findOneBy({
+                const division = await ds.getRepository(DivisionEntity).findOneBy(safeWhere({
                     orgKey: req.info.user.orgKey,
-                });
+                }));
 
                 if (!division) {
                     return res.status(400).json({ message: '指定された部門が見つかりません' });
@@ -297,6 +299,7 @@ export const upsertAIProvider = [
             }
 
             // 一意制約チェック: organization + scopeInfo + provider
+            // TODO DANGER safeWhereが適用できてない。
             const conflict = await repo.findOneBy({
                 type: bodyData.type,
                 name: bodyData.name,
@@ -376,10 +379,10 @@ export const deleteAIProvider = [
             const { providerId } = req.params;
             const repo = ds.getRepository(AIProviderEntity);
             const entity = await repo.findOne({
-                where: {
+                where: safeWhere({
                     id: providerId,
                     orgKey: req.info.user.orgKey
-                }
+                })
             });
 
             if (!entity) {
@@ -426,16 +429,16 @@ export const getBaseModels = [
             if (status) where.status = status;
 
             const models = await ds.getRepository(AIModelEntity).find({
-                where,
+                where: safeWhere(where),
                 order: { createdAt: 'DESC' }
             });
 
             // エイリアスを取得
             const aliases = await ds.getRepository(AIModelAlias).find({
-                where: {
+                where: safeWhere({
                     orgKey: req.info.user.orgKey,
                     modelId: In(models.map(model => model.id))
-                }
+                }),
             });
             // エイリアスをモデルにマージ
             models.forEach(model => {
@@ -444,10 +447,10 @@ export const getBaseModels = [
 
             // プライスリストを取得
             const pricingHistory = await ds.getRepository(AIModelPricingEntity).find({
-                where: {
+                where: safeWhere({
                     orgKey: req.info.user.orgKey,
                     modelId: In(models.map(model => model.id))
-                },
+                }),
                 order: { validFrom: 'DESC' }
             });
             // プライスリストをモデルにマージ
@@ -468,9 +471,8 @@ export const getBaseModels = [
  */
 export const upsertBaseModel = [
     param('modelId').optional({ nullable: true }).isUUID(),
-    body('providerType').isIn(Object.values(AIProviderType)),
-    body('providerName').isString().notEmpty(),
-    body('providerModelId').isString().notEmpty(),
+    body('providerNameList').isArray().notEmpty(),
+    body('providerNameList.*').isString().notEmpty(),
     body('name').isString().notEmpty(),
     body('aliases').optional({ nullable: true }).isArray(),
     body('aliases.*').isString().notEmpty(),
@@ -516,22 +518,29 @@ export const upsertBaseModel = [
 
             // 既存レコードチェック
             if (modelId) {
-                entity = await repo.findOne({ where: { id: modelId, orgKey: req.info.user.orgKey } });
+                entity = await repo.findOne({ where: safeWhere({ id: modelId, orgKey: req.info.user.orgKey }) });
                 if (entity) isNew = false;
             }
 
-            // // 一意制約チェック: provider + providerModelId
-            // const conflict = await repo.findOne({
-            //     where: {
-            //         providerName: bodyData.providerName,
-            //         providerModelId: bodyData.providerModelId,
-            //         ...(isNew ? { orgKey: req.info.user.orgKey } : { id: Not(modelId), orgKey: req.info.user.orgKey })
-            //     }
-            // });
-            // if (conflict) {
-            //     console.log('Conflict:', modelId, conflict);
-            //     return res.status(409).json({ message: `${bodyData.providerName} + ${bodyData.providerModelId} のモデルが既に存在します` });
-            // }
+            // 一意制約チェック: provider + providerModelId
+            const conflict = await repo.findOne({
+                where: safeWhere({
+                    name: bodyData.name,
+                    ...(isNew ? { orgKey: req.info.user.orgKey } : { id: Not(modelId), orgKey: req.info.user.orgKey })
+                }),
+            });
+            if (conflict) {
+                console.log('Conflict:', modelId, conflict);
+                return res.status(409).json({ message: `${bodyData.name} のモデルが既に存在します` });
+            }
+
+            // providerNameListの存在チェック
+            const providers = await ds.getRepository(AIProviderEntity).find({
+                where: safeWhere({ name: In(bodyData.providerNameList) })
+            });
+            if (providers.length === 0) {
+                return res.status(400).json({ message: 'providerNameListに存在しないプロバイダーが含まれています' });
+            }
 
             // aliasesの整備
             if (aliases.length > 0) {
@@ -543,23 +552,11 @@ export const upsertBaseModel = [
                 // エイリアスが空の場合はデフォルトエイリアスを追加
                 aliases.push(bodyData.providerModelId);
             }
-            // const conflictAlias = await repoAlias.find({
-            //     where: {
-            //         providerName: bodyData.providerName,
-            //         alias: In(aliases),
-            //         ...(isNew ? { orgKey: req.info.user.orgKey } : { modelId: Not(modelId), orgKey: req.info.user.orgKey })
-            //     }
-            // });
-            // if (conflictAlias && conflictAlias.length > 0) {
-            //     return res.status(409).json({ message: `${bodyData.providerName} + ${conflictAlias.map(alias => alias.alias).join(', ')} のエイリアスが既に存在します` });
-            // } else { }
 
             if (isNew) {
                 // 新規作成
                 entity = repo.create({
-                    providerNameList: bodyData.providerNameList || [],
-                    // providerType: bodyData.providerType,
-                    // providerName: bodyData.providerName,
+                    providerNameList: bodyData.providerNameList,
                     providerModelId: bodyData.providerModelId,
                     name: bodyData.name,
                     status: bodyData.status,
@@ -574,9 +571,7 @@ export const upsertBaseModel = [
             } else {
                 // 更新 - 必須フィールド
                 Object.assign(entity!, {
-                    providerNameList: bodyData.providerNameList || [],
-                    // providerType: bodyData.providerType,
-                    // providerName: bodyData.providerName,
+                    providerNameList: bodyData.providerNameList,
                     providerModelId: bodyData.providerModelId,
                     name: bodyData.name,
                     status: bodyData.status,

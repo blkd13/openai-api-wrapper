@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, getDepartmentMemberLog, getDepartmentMemberLogForUser, genApiToken, getOAuthAccount, getDepartmentMemberForUser, getScopeLabels } from './controllers/auth.js';
+import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, getDepartmentMemberLog, getDepartmentMemberLogForUser, genApiToken, getOAuthAccount, getDepartmentMemberForUser, getScopeLabels, getJournal, getDepartmentMemberLogSummaryForUser } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateOAuthUser, authenticateUserTokenMiddleGenerator } from './middleware/authenticate.js';
 import { chatCompletion, chatCompletionStream, codegenCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
@@ -90,6 +90,8 @@ authUserRouter.patch('/user', updateUser);
 authUserRouter.patch('/change-password', changePassword);
 authUserRouter.delete('/user', deleteUser);
 authUserRouter.get(`/predict-history`, getDepartmentMemberLogForUser);
+authUserRouter.get(`/predict-history/summary`, getDepartmentMemberLogSummaryForUser);
+
 // authUserRouter.get('/access-token', genAccessToken);
 authUserRouter.post('/api-token', genApiToken);
 
@@ -296,3 +298,6 @@ authUserRouter.get('/scope-labels', getScopeLabels);
 authUserRouter.post('/vertexai-claude-proxy/v1/messages', vertexAIByAnthropicAPIStream);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:rawPredict', vertexAIByAnthropicAPI);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:streamRawPredict', vertexAIByAnthropicAPIStream);
+
+
+authUserRouter.get('/predict-journal/:idempotencyKey/:argsHash/:type', getJournal);

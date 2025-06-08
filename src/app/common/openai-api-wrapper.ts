@@ -172,7 +172,8 @@ export class MyAnthropic {
         // params.forEach(param => {
         //     this.clients.push(new AnthropicVertex({ projectId: param.projectId, region: param.region, baseURL: param.baseURL, httpAgent: param.httpAgent }));
         // });
-        this.clients = params.map(param => param.endpoints.map(endpoint => new Anthropic({ apiKey: endpoint.apiKey, baseURL: endpoint.baseURL || 'https://api.anthropic.com/v1', httpAgent: options.httpAgent, maxRetries: 3 }))).flat();
+        // https://api.anthropic.com/v1
+        this.clients = params.map(param => param.endpoints.map(endpoint => new Anthropic({ apiKey: endpoint.apiKey, baseURL: endpoint.baseURL || 'https://api.anthropic.com', httpAgent: options.httpAgent, maxRetries: 3 }))).flat();
     }
 
     get client(): Anthropic {

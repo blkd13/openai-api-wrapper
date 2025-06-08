@@ -207,6 +207,7 @@ export const SHORT_NAME: { [key: string]: string } = {
     'claude-2': 'cla-2   ',
     'claude-2.1': 'cla-2.1 ',
     'claude-3-haiku-20240307': 'cla-3-hk',
+    'claude-3-5-haiku-20241022': 'cla-35hk',
     'claude-3-5-sonnet-20240229': 'cla-3-sn',
     'claude-3-opus-20240229': 'cla-3-op',
     'claude-3-5-sonnet-20240620': 'cla-35sn',

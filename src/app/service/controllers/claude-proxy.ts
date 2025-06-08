@@ -322,7 +322,6 @@ export const vertexAIByAnthropicAPIStream = [
             // ストリーミングデータの監視
             vertexResponse.data.on('data', (chunk: Buffer) => {
                 const chunkStr = chunk.toString();
-                fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}.txt`, chunkStr, {}, () => { });
 
                 // チャンクをバッファに追加
                 dataBuffer += chunkStr;
@@ -337,7 +336,9 @@ export const vertexAIByAnthropicAPIStream = [
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
                         try {
-                            const data = JSON.parse(line.substring(6));
+                            const jsonString = line.substring(6);
+                            fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}.txt`, jsonString, {}, () => { });
+                            const data = JSON.parse(jsonString);
                             if (data.type === 'content_block_delta' && data.delta?.text) {
                                 tokenBuilder += data.delta.text;
                             } else if (data.type === 'message_delta') {

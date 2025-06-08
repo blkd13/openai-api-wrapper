@@ -41,6 +41,7 @@ import { appendToolCallPart } from './tool-call.js';
 import { UserTokenPayload } from '../middleware/authenticate.js';
 import { CohereClientV2 } from 'cohere-ai/ClientV2.js';
 import Anthropic from '@anthropic-ai/sdk/index.js';
+import { safeWhere } from '../entity/base.js';
 
 export const COUNT_TOKEN_MODEL = 'gemini-1.5-flash' as const;
 export const COUNT_TOKEN_OPENAI_MODEL = 'gpt-4o' as const;
@@ -673,7 +674,7 @@ export async function getAIProvider(user: UserTokenPayload, modelName: string): 
 
     // ユーザーのロールリストからスコープ条件を作成
     const scopeConditions = user.roleList.map(role =>
-        model.providerNameList.map(providerName => ({
+        model.providerNameList.map(providerName => safeWhere({
             orgKey: user.orgKey,
             name: providerName,
             'scopeInfo.scopeType': role.scopeInfo.scopeType,
@@ -925,10 +926,21 @@ export const chatCompletionByProjectModel = [
                         const cachedContent = (inDto.args as any).cachedContent as VertexCachedContentEntity;
 
                         // 課金用にプロジェクト振り分ける。当たらなかったら当たらなかったでよい。
-                        const departmentMember = await transactionalEntityManager.getRepository(DepartmentMemberEntity).findOne({ where: { orgKey: req.info.user.orgKey, name: req.info.user.name || '', departmentRole: DepartmentRoleType.Member } });
+                        const departmentMember = await transactionalEntityManager.getRepository(DepartmentMemberEntity).findOne({
+                            where: safeWhere({
+                                orgKey: req.info.user.orgKey,
+                                name: req.info.user.name || '',
+                                departmentRole: DepartmentRoleType.Member
+                            })
+                        });
                         // console.log(departmentMember);
                         if (departmentMember) {
-                            const department = await transactionalEntityManager.getRepository(DepartmentEntity).findOne({ where: { orgKey: req.info.user.orgKey, id: departmentMember.departmentId } });
+                            const department = await transactionalEntityManager.getRepository(DepartmentEntity).findOne({
+                                where: safeWhere({
+                                    orgKey: req.info.user.orgKey,
+                                    id: departmentMember.departmentId
+                                })
+                            });
                             (inDto.args as any).gcpProjectId = department?.gcpProjectId || GCP_PROJECT_ID;
                             // console.log(department?.gcpProjectId);
                         } else {
@@ -1008,7 +1020,7 @@ export const chatCompletionByProjectModel = [
                                 if (cachedContent) {
                                     // console.log(`cachedContent=${cachedContent.id}`, JSON.stringify(cachedContent));
                                     const chacedEntity = await transactionalEntityManager.getRepository(VertexCachedContentEntity).findOne({
-                                        where: { orgKey: req.info.user.orgKey, id: cachedContent.id }
+                                        where: safeWhere({ orgKey: req.info.user.orgKey, id: cachedContent.id })
                                     })
                                     if (chacedEntity) {
                                         // カウント回数は登り電文を信用しない。

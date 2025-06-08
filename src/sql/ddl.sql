@@ -41,7 +41,8 @@ SELECT
     p1.args_hash,
     p2.connection_id,
     p2.stream_id,
-    p2.message_id
+    p2.message_id,
+    COALESCE(u.id, u2.id) AS user_id
 FROM
     p1_ranked p1
     LEFT JOIN p2_ranked p2

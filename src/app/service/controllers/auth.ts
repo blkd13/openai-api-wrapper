@@ -1500,10 +1500,10 @@ export const getDepartment = [
         const memberMap = memberList.reduce((map, member) => { map[member.name] = member; return map; }, {} as { [key: string]: DepartmentMemberEntity });
 
         const totalCosts = await ds.query(`
-            SELECT TO_CHAR(created_at,'YYYY-MM') as yyyy_mm, name, model, sum(cost) as cost, sum(req_token) as req_token, sum(res_token) as res_token, COUNT(*)  
+            SELECT TO_CHAR(created_at,'YYYY-MM') as yyyy_mm, user_name, model, sum(cost) as cost, sum(req_token) as req_token, sum(res_token) as res_token, COUNT(*)  
             FROM predict_history_view 
-            GROUP BY name, model, ROLLUP(yyyy_mm)
-            ORDER BY name, model, yyyy_mm;
+            GROUP BY user_name, model, ROLLUP(yyyy_mm)
+            ORDER BY user_name, model, yyyy_mm;
           `);
         type History = { name: string, yyyy_mm: string, model: string, cost: number, req_token: number, res_token: number };
         type HistorySummaryMap = { [createdBy: string]: { [yyyyMm: string]: { totalCost: number, totalReqToken: number, totalResToken: number, foreignModelReqToken: number, foreignModelResToken: number } } };
@@ -1651,27 +1651,169 @@ export const getDepartmentMemberLog = [
         // console.log(memberList);
         const predictHistory = await ds.query(`
             SELECT created_at, model, provider, take, cost, req_token, res_token, status
-            FROM predict_history_view 
-            WHERE name = (SELECT name FROM user_entity WHERE id='{${userId}}') ;
-          `);
+            FROM predict_history_view
+            WHERE user_id = $1
+            ORDER BY created_at DESC;
+          `, [userId]);
         // 纏める
         res.json({ predictHistory });
     }
 ];
 
-
+// 既存のエンドポイントを修正してtotalCountも返すように
 export const getDepartmentMemberLogForUser = [
+    query('offset').optional().isInt({ min: 0 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const userId = req.info.user.id;
-        const predictHistory = await ds.query(`
-            SELECT created_at, model, provider, take, cost, req_token, res_token, status
+
+        // 総件数を取得
+        const countResult = await ds.query(`
+            SELECT COUNT(*) as total_count
             FROM predict_history_view 
-            WHERE name = (SELECT name FROM user_entity WHERE id='{${userId}}') ;
-          `);
+            WHERE user_id = $1
+        `, [req.info.user.id]);
+
+        const totalCount = parseInt(countResult[0].total_count);
+
+        // ページングされたデータを取得
+        const predictHistory = await ds.query(`
+            SELECT created_at, model, provider, take, cost, req_token, res_token, status, idempotency_key, args_hash
+            FROM predict_history_view 
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+        `, [req.info.user.id, req.query.limit || 100, req.query.offset || 0]);
+
+        res.json({ predictHistory, totalCount });
+    }
+];
+
+interface MonthlySummary {
+    month: string;
+    totalCost: number;
+    totalReqTokens: number;
+    totalResTokens: number;
+    count: number;
+}
+// 月次集計用の新しいエンドポイント
+export const getDepartmentMemberLogSummaryForUser = [
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+
+        // 全データを取得（集計用）
+        const predictHistory = await ds.query(`
+            SELECT created_at, model, provider, take, cost, req_token, res_token, status, idempotency_key, args_hash
+            FROM predict_history_view 
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+        `, [req.info.user.id]);
+
+        const summaryMap = new Map<string, MonthlySummary>();
+
+        (predictHistory as Array<{
+            created_at: string,
+            model: string,
+            provider: string,
+            take: number,
+            cost: number,
+            req_token: number,
+            res_token: number,
+            status: string,
+            idempotency_key: string,
+            args_hash: string
+        }>).forEach(predict => {
+            const month = Utils.formatDate(new Date(predict.created_at), 'yyyy-MM');
+            const summary = summaryMap.get(month) || {
+                month,
+                totalCost: 0,
+                totalReqTokens: 0,
+                totalResTokens: 0,
+                count: 0
+            };
+
+            summary.totalCost += predict.cost * 150;
+            summary.totalReqTokens += predict.req_token;
+            summary.totalResTokens += predict.res_token;
+            summary.count += 1;
+
+            summaryMap.set(month, summary);
+        });
+
+        const monthlySummary = Array.from(summaryMap.values()).sort((a, b) => b.month.localeCompare(a.month));
         // 纏める
-        res.json({ predictHistory });
+        res.json({ monthlySummary });
+    }
+];
+
+
+import fg from 'fast-glob';
+import { promises as fs } from 'fs';
+import path from 'path';
+
+export async function readRequestLog(
+    logDir: string,
+    idempotencyKey: string,
+    argsHash: string,
+    type: 'request' | 'response' | 'stream' = 'request'
+): Promise<string> {
+    // パターンにマッチするファイルを探す
+    const pattern = `${logDir}*/${idempotencyKey}*.` + (type === 'stream' ? 'txt' : `${type}.json`);
+    const [filePath] = await fg(pattern);
+    if (!filePath) {
+        throw new Error(`ログファイルが見つかりません: ${pattern}`);
+    }
+    // 見つかったファイルを読み込む
+    const jsonString = await fs.readFile(filePath, 'utf8');
+    if (type === 'response') {
+        const jsonObj = JSON.parse(jsonString);
+        if (jsonObj.response.headers && jsonObj.response.headers['set-cookie']) {
+            delete jsonObj.response.headers['set-cookie']; // set-cookieヘッダーは認証系なので削除する
+        }
+        return JSON.stringify(jsonObj.response); // レスポンスはresponseフィールドのみを返す
+    } else {
+        return jsonString;
+
+    }
+}
+
+export const getJournal = [
+    param('idempotencyKey').notEmpty().isString(),
+    param('argsHash').notEmpty().isString(),
+    param('type').optional().isIn(['request', 'response', 'stream']).default('request'),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+
+        try {
+            // パラメータ化クエリを使用
+            const count = await ds.query(`
+            SELECT EXISTS (
+                SELECT 1
+                FROM predict_history_view
+                WHERE user_id = $1 AND idempotency_key = $2 AND args_hash = $3
+            ) 
+        `, [req.info.user.id, req.params.idempotencyKey, req.params.argsHash]);
+            if (!count[0]) {
+                res.status(404).json({ error: 'ログが見つかりません。' });
+                return;
+            }
+            const LOG_DIR = path.join('', './history');
+
+            const logs = await Promise.all(['request', 'response', 'stream'].map(async (type) => {
+                return await readRequestLog(LOG_DIR, req.params.idempotencyKey, req.params.argsHash, type as 'request' | 'response' | 'stream')
+                    .then(json => ({ type, json }))
+                    .catch(() => ({ type, json: null }));
+            }));
+
+            // 纏める
+            res.json(Object.fromEntries(logs.map(log => [log.type, log.json])));
+        } catch (error) {
+            console.error('Error reading journal:', error);
+            res.status(500).json({ error: 'ログの読み込みに失敗しました。' });
+        }
     }
 ];
 
