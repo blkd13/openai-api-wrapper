@@ -166,6 +166,13 @@ const commonValidation = [
     validationErrorHandler,
 ];
 
+const my_vertexai = new MyVertexAiClient([{
+    project: GCP_PROJECT_ID || '',
+    locationList: [GCP_REGION || 'asia-northeast1'],
+    apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
+    httpAgent: options.httpAgent,
+}]);
+
 /**
  * 共通の前処理
  */
@@ -194,13 +201,6 @@ async function commonPreProcess(req: UserRequest, suffix: string) {
         console.log(logObject.output('error', 'Invalid request: messages が必要です'));
         throw new Error('Invalid request: messages が必要です');
     }
-
-    const my_vertexai = new MyVertexAiClient([{
-        project: GCP_PROJECT_ID || '',
-        locationList: [GCP_REGION || 'asia-northeast1'],
-        apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
-        httpAgent: options.httpAgent,
-    }]);
 
     const accessToken = await my_vertexai.getAccessToken();
     const vertexUrl = buildVertexUrl(targetProject, targetLocation, model, suffix as any);

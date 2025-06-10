@@ -11,6 +11,7 @@ import { giteaFunctionDefinitions } from './gitea.js';
 import { gitlabFunctionDefinitions } from './gitlab.js';
 import { jiraFunctionDefinitions } from './jira.js';
 import { mattermostFunctionDefinitions } from './mattermost.js';
+import { mcpFunctionDefinitions } from './mcp.js';
 
 // 1. 関数マッピングの作成
 export async function functionDefinitions(
@@ -27,9 +28,7 @@ export async function functionDefinitions(
             isDeleted: false,
         },
         order: { sortSeq: 'ASC' },
-    });
-
-    // プロバイダーtypeごとの関数定義をマッピング
+    });    // プロバイダーtypeごとの関数定義をマッピング
     const map = {
         mattermost: mattermostFunctionDefinitions,
         box: boxFunctionDefinitions,
@@ -37,6 +36,7 @@ export async function functionDefinitions(
         jira: jiraFunctionDefinitions,
         gitea: giteaFunctionDefinitions,
         gitlab: gitlabFunctionDefinitions,
+        mcp: mcpFunctionDefinitions,
     } as Record<string, (name: string, obj: any, req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string) => Promise<MyToolType[]>>;
 
     // 各プロバイダーの関数定義を取得

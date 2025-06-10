@@ -47,6 +47,7 @@ import * as gitlab from './api/api-gitlab.js';
 import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
 import { registApiKey, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId } from './controllers/tool-call.js';
+import { upsertMCPServer, getMCPServers, deleteMCPServer } from './controllers/mcp-manager.js';
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
 import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
 import { getDivisionMembers, updateDivisionMember, removeDivisionMember, getDivisionList, getDivision, deleteDivision, getAllDivisions, upsertDivisionMember, upsertDivision } from './controllers/division.js';
@@ -305,3 +306,9 @@ authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:loca
 
 
 authUserRouter.get('/predict-journal/:idempotencyKey/:argsHash/:type', getJournal);
+
+// MCP Server Management
+authAdminRouter.get('/mcp-servers', getMCPServers);
+authAdminRouter.post('/mcp-server', upsertMCPServer);
+authAdminRouter.put('/mcp-server/:id', upsertMCPServer);
+authAdminRouter.delete('/mcp-server/:id', deleteMCPServer);
