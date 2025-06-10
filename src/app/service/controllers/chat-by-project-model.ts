@@ -32,7 +32,8 @@ import { FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-mode
 import { EntityManager, In, IsNull, Not } from 'typeorm';
 import { clients } from './chat.js';
 import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
-import { AIModelEntity, AIProviderEntity, AIProviderType, AzureOpenAIConfig, DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, getAIProviderConfig, OAuthAccountEntity, OAuthAccountStatus, OpenAIConfig, ScopeType, UserEntity, UserRoleEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
+import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus, ScopeType, UserEntity, UserRoleEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
+import { AIModelEntity, AIProviderEntity, AIProviderType, AzureOpenAIConfig, getAIProviderConfig, OpenAIConfig, } from '../entity/ai-model-manager.entity.js';
 import { Utils, EnhancedRequestLimiter } from '../../common/utils.js';
 import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
 import { functionDefinitions } from '../tool/_index.js';

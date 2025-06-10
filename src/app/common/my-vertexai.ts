@@ -6,7 +6,7 @@ import { ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompleti
 
 import { plainMime } from "./openai-api-wrapper.js";
 import { CompletionUsage } from "openai/resources/completions.js";
-import { VertexAIConfig } from "../service/entity/auth.entity.js";
+import { VertexAIConfig } from "../service/entity/ai-model-manager.entity.js";
 
 const execPromise = promisify(exec);
 interface CommandResult {

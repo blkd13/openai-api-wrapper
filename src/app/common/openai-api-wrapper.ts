@@ -68,7 +68,7 @@ import { CachedContent, countChars, GenerateContentRequestExtended, mapForGemini
 import { MessageStreamEvent, MessageStreamParams } from '@anthropic-ai/sdk/resources/index.js';
 import { ReadableStream } from '@anthropic-ai/sdk/_shims/index.js';
 import { convertAnthropicToOpenAI, remapAnthropic } from './my-anthropic.js';
-import { AIProviderType, AnthropicVertexAIConfig, AzureOpenAIConfig, CohereConfig, OpenAICompatibleConfig, OpenAIConfig } from '../service/entity/auth.entity.js';
+import { AIProviderType, AnthropicVertexAIConfig, AzureOpenAIConfig, CohereConfig, OpenAICompatibleConfig, OpenAIConfig } from '../service/entity/ai-model-manager.entity.js';
 
 // TODO プロキシは環境変数から取得するように変更したい。
 // proxy設定判定用オブジェクト

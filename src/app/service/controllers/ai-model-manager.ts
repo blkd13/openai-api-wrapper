@@ -1,12 +1,15 @@
 import { Request, Response } from 'express';
 import { param, body, query } from 'express-validator';
-import { In, Not, Or } from 'typeorm';
+import { EntityManager, EntityNotFoundError, In, Not, Or } from 'typeorm';
 
-import { AIProviderType, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIModelAlias, AIProviderEntity, ScopeType, OrganizationEntity, DivisionEntity, UserEntity, UserStatus, UserRoleType, AIProviderTemplateEntity } from '../entity/auth.entity.js';
+import { ScopeType, OrganizationEntity, DivisionEntity, UserEntity, UserStatus, UserRoleType } from '../entity/auth.entity.js';
+import { AIProviderType, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIModelAlias, AIProviderEntity, AIProviderTemplateEntity, TagEntity } from '../entity/ai-model-manager.entity.js';
+
 import { validationErrorHandler } from '../middleware/validation.js';
 import { ds } from '../db.js';
 import { UserRequest } from '../models/info.js';
 import { safeWhere } from '../entity/base.js';
+import { Utils } from '../../common/utils.js';
 
 /**
  * [GET] AIProvider 一覧取得
@@ -781,3 +784,243 @@ export const deleteModelPricing = [
         }
     },
 ];
+
+
+
+
+
+
+
+
+
+
+/**
+ * [user認証] 全タグ一覧取得
+ */
+export const getAllTags = [
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+
+        try {
+            const tags = await ds.getRepository(TagEntity).find({
+                where: {
+                    orgKey: req.info.user.orgKey,
+                    // isActive: true,
+                },
+                order: {
+                    uiOrder: 'ASC',
+                    name: 'ASC'
+                }
+            });
+
+            res.status(200).json(tags);
+        } catch (error) {
+            console.error('Error getting tags:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
+            res.status(500).json({ message: 'タグ一覧の取得中にエラーが発生しました' });
+        }
+    }
+];
+
+/**
+ * [user認証] タグ作成・更新（Upsert）
+ */
+export const upsertTag = [
+    param('tagId').optional().isUUID(),
+    body('name').notEmpty().isString().trim().isLength({ max: 50 }),
+    body('label').optional({ nullable: true }).isString().trim().isLength({ max: 100 }),
+    body('category').optional({ nullable: true }).isString().trim().isLength({ max: 50 }),
+    body('uiOrder').optional({ nullable: true }).isInt({ min: 0 }),
+    body('overrideOthers').optional({ nullable: true }).isBoolean(),
+    body('description').optional({ nullable: true }).isString().trim().isLength({ max: 500 }),
+    body('color').optional({ nullable: true }).isString().matches(/^#[0-9A-Fa-f]{6}$/),
+    body('isActive').optional({ nullable: true }).isBoolean(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { tagId } = req.params;
+        const { name, label, description, color, isActive = true } = req.body;
+
+        try {
+            const result = await ds.transaction(async transactionalEntityManager => {
+                let tag: TagEntity;
+                let isCreation = false;
+
+                if (tagId) {
+                    // 更新の場合
+                    const _tag = await transactionalEntityManager.findOne(TagEntity, {
+                        where: {
+                            orgKey: req.info.user.orgKey,
+                            id: tagId
+                        }
+                    });
+
+                    if (!_tag) {
+                        throw new EntityNotFoundError(TagEntity, { tagId });
+                    }
+                    tag = _tag;
+                } else {
+                    // 作成の場合
+                    tag = new TagEntity();
+                    tag.orgKey = req.info.user.orgKey;
+                    tag.createdBy = req.info.user.id;
+                    tag.createdIp = req.info.ip;
+                    tag.usageCount = 0;
+                    isCreation = true;
+                }
+
+                // 名前の重複チェック（既存のタグの名前と異なる場合のみ）
+                if (!tagId || name !== tag.name) {
+                    const existingTag = await transactionalEntityManager.findOne(TagEntity, {
+                        where: { orgKey: req.info.user.orgKey, name }
+                    });
+
+                    if (existingTag && existingTag.id !== tagId) {
+                        throw new Error('同じ名前のタグが既に存在します');
+                    }
+                }
+
+                // タグ情報を設定・更新
+                tag.name = name;
+                tag.label = label || name || null;
+                tag.description = description || null;
+                tag.category = req.body.category || null;
+                tag.uiOrder = req.body.uiOrder || 10000;
+                tag.overrideOthers = req.body.overrideOthers || false;
+                tag.color = color || null;
+                tag.isActive = isActive;
+                tag.updatedBy = req.info.user.id;
+                tag.updatedIp = req.info.ip;
+
+                const savedTag = await transactionalEntityManager.save(TagEntity, tag);
+                return { tag: savedTag, isCreation };
+            });
+
+            const statusCode = result.isCreation ? 201 : 200;
+            const message = result.isCreation ? 'タグが正常に作成されました' : 'タグ情報が正常に更新されました';
+
+            res.status(statusCode).json({
+                ...result.tag,
+                message
+            });
+
+        } catch (error) {
+            console.error('Error upserting tag:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: '指定されたタグが見つかりません' });
+            } else if ((error as any).message === '同じ名前のタグが既に存在します') {
+                res.status(400).json({ message: (error as any).message });
+            } else {
+                res.status(500).json({ message: 'タグの作成・更新中にエラーが発生しました' });
+            }
+        }
+    }
+];
+
+/**
+ * [user認証] タグ削除（論理削除）
+ */
+export const deleteTag = [
+    param('tagId').notEmpty().isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { tagId } = req.params;
+
+        try {
+            await ds.transaction(async transactionalEntityManager => {
+                // 削除対象のタグが存在するか確認
+                const tag = await transactionalEntityManager.findOne(TagEntity, {
+                    where: {
+                        orgKey: req.info.user.orgKey,
+                        id: tagId,
+                        isActive: true
+                    }
+                });
+
+                if (!tag) {
+                    throw new EntityNotFoundError(TagEntity, { tagId });
+                }
+
+                // タグを論理削除
+                tag.isActive = false;
+                tag.updatedBy = req.info.user.id;
+                tag.updatedIp = req.info.ip;
+
+                await transactionalEntityManager.save(TagEntity, tag);
+            });
+
+            res.status(200).json({ message: 'タグが正常に削除されました' });
+        } catch (error) {
+            console.error('Error deleting tag:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: '指定されたタグが見つかりません' });
+            } else {
+                res.status(500).json({ message: 'タグの削除中にエラーが発生しました' });
+            }
+        }
+    }
+];
+
+/**
+ * タグを自動作成または使用回数を増加（内部用）
+ * モデル作成時にタグが存在しなければ自動作成する
+ */
+export const getOrCreateTag = async (
+    tagName: string,
+    orgKey: string,
+    userId: string,
+    ip: string,
+    manager?: EntityManager
+): Promise<TagEntity> => {
+    const em = (manager || ds).getRepository(TagEntity);
+
+    // 既存タグを検索
+    let tag = await em.findOne({
+        where: { orgKey, name: tagName, isActive: true }
+    });
+
+    if (tag) {
+        // 使用回数を増加
+        tag.usageCount += 1;
+        tag.updatedBy = userId;
+        tag.updatedIp = ip;
+        await em.save(tag);
+    } else {
+        // 新規タグを作成
+        tag = new TagEntity();
+        tag.orgKey = orgKey;
+        tag.name = tagName;
+        tag.usageCount = 1;
+        tag.isActive = true;
+        tag.createdBy = userId;
+        tag.updatedBy = userId;
+        tag.createdIp = ip;
+        tag.updatedIp = ip;
+        await em.save(tag);
+    }
+
+    return tag;
+};
+
+/**
+ * 複数タグの一括処理（モデル保存時用）
+ */
+export const processModelTags = async (
+    tagNames: string[],
+    orgKey: string,
+    userId: string,
+    ip: string,
+    manager?: EntityManager
+): Promise<TagEntity[]> => {
+    const processedTags: TagEntity[] = [];
+
+    for (const tagName of tagNames) {
+        if (tagName && tagName.trim()) {
+            const tag = await getOrCreateTag(tagName.trim(), orgKey, userId, ip, manager);
+            processedTags.push(tag);
+        }
+    }
+
+    return processedTags;
+};

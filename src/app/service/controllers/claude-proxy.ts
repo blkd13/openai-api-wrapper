@@ -19,7 +19,8 @@ import { Message } from "@anthropic-ai/sdk/resources.js";
 import { PredictHistoryEntity } from "../entity/project-models.entity.js";
 import { ds } from "../db.js";
 import { PredictHistoryStatus } from "../models/values.js";
-import { AIModelEntity, AIModelPricingEntity, DepartmentEntity, DepartmentMemberEntity } from "../entity/auth.entity.js";
+import { DepartmentEntity, DepartmentMemberEntity } from "../entity/auth.entity.js";
+import { AIModelEntity, AIModelPricingEntity, } from '../entity/ai-model-manager.entity.js';
 
 // 履歴ディレクトリ
 const HISTORY_DIRE = `./history`;

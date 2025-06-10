@@ -47,9 +47,9 @@ import * as gitlab from './api/api-gitlab.js';
 import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
 import { registApiKey, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId } from './controllers/tool-call.js';
-import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, getAIProviders, getAIProviderTemplates, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing } from './controllers/model-manager.js';
+import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
 import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
-import { getDivisionMembers, updateDivisionMember, removeDivisionMember, getDivisionList, createDivision, getDivision, updateDivision, deleteDivision, getAllDivisions, upsertDivisionMember } from './controllers/division.js';
+import { getDivisionMembers, updateDivisionMember, removeDivisionMember, getDivisionList, getDivision, deleteDivision, getAllDivisions, upsertDivisionMember, upsertDivision } from './controllers/division.js';
 
 // routers/index.ts
 
@@ -135,8 +135,8 @@ authUserRouter.delete('/team/:teamId/member/:userId', removeTeamMember);
 
 // Division関連
 authUserRouter.get('/divisions', getDivisionList);
-authAdminRouter.post('/division', createDivision); // 管理者はDivisionを追加できる
-authAdminRouter.patch('/division/:divisionId', updateDivision); // 管理者はDivisionを更新できる
+authAdminRouter.post('/division', upsertDivision); // 管理者はDivisionを追加できる
+authAdminRouter.patch('/division/:divisionId', upsertDivision); // 管理者はDivisionを更新できる
 authAdminRouter.delete('/division/:divisionId', deleteDivision); // 管理者はDivisionを削除できる
 
 // Divisionメンバー関連
@@ -266,24 +266,28 @@ authMaintainerRouter.post('/ext-api-provider-template', upsertApiProviderTemplat
 authMaintainerRouter.put('/ext-api-provider-template/:id', upsertApiProviderTemplate); //
 authMaintainerRouter.delete('/ext-api-provider-template/:id', deleteApiProviderTemplate); //
 
-authMaintainerRouter.get('/ai-provider-templates', getAIProviderTemplates);
+authAdminRouter.get('/ai-provider-templates', getAIProviderTemplates);
 authMaintainerRouter.post('/ai-provider-template', upsertAIProviderTemplate);
 authMaintainerRouter.put('/ai-provider-template/:providerId', upsertAIProviderTemplate);
 authMaintainerRouter.delete('/ai-provider-template/:providerId', deleteAIProviderTemplate);
 
-authMaintainerRouter.get('/ai-providers', getAIProviders);
-authMaintainerRouter.post('/ai-provider', upsertAIProvider);
-authMaintainerRouter.put('/ai-provider/:providerId', upsertAIProvider);
-authMaintainerRouter.delete('/ai-provider/:providerId', deleteAIProvider);
+authAdminRouter.get('/ai-providers', getAIProviders);
+authAdminRouter.post('/ai-provider', upsertAIProvider);
+authAdminRouter.put('/ai-provider/:providerId', upsertAIProvider);
+authAdminRouter.delete('/ai-provider/:providerId', deleteAIProvider);
 
 authUserRouter.get('/ai-models', getBaseModels);
-authMaintainerRouter.post('/ai-model', upsertBaseModel);
-authMaintainerRouter.put('/ai-model/:modelId', upsertBaseModel);
-authMaintainerRouter.delete('/ai-model/:modelId', deleteBaseModel);
+authAdminRouter.post('/ai-model', upsertBaseModel);
+authAdminRouter.put('/ai-model/:modelId', upsertBaseModel);
+authAdminRouter.delete('/ai-model/:modelId', deleteBaseModel);
 authUserRouter.get('/ai-model/:modelId/pricing', getModelPricings);
-authMaintainerRouter.post('/ai-model/:modelId/pricing', upsertModelPricing);
-authMaintainerRouter.put('/ai-model/:modelId/pricing/:id?', upsertModelPricing);
-authMaintainerRouter.delete('/ai-model/:modelId/pricing/:id', deleteModelPricing);
+authAdminRouter.post('/ai-model/:modelId/pricing', upsertModelPricing);
+authAdminRouter.put('/ai-model/:modelId/pricing/:id?', upsertModelPricing);
+authAdminRouter.delete('/ai-model/:modelId/pricing/:id', deleteModelPricing);
+authUserRouter.get('/tags', getAllTags);
+authAdminRouter.post('/tag', upsertTag);
+authAdminRouter.put('/tag/:tagId', upsertTag);
+authAdminRouter.delete('/tag/:tagId', deleteTag);
 
 authAdminRouter.get('/organizations/users', getOrganizationUsers); // 組織一覧取得
 
@@ -294,7 +298,7 @@ authMaintainerRouter.delete('/organizations/:orgKey', deactivateOrganization); /
 
 authUserRouter.get('/scope-labels', getScopeLabels);
 
-// authUserRouter.post('/vertexai-claude-proxy/v1/messages', vertexAIByAnthropicAPI);
+// Claude Code用プロキシ
 authUserRouter.post('/vertexai-claude-proxy/v1/messages', vertexAIByAnthropicAPIStream);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:rawPredict', vertexAIByAnthropicAPI);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:streamRawPredict', vertexAIByAnthropicAPIStream);
