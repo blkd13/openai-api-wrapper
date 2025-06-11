@@ -156,10 +156,10 @@ export enum Modality {
 }
 
 export enum AIModelPricingUnit {
-    USD_1M_TOKENS = 'USD/1Mtokens', // 1Mトークンあたりの価格
-    USD_1M_CHARS = 'USD/1MCHARS', // 1M文字あたりの価格
-    USD_1M_TOKENS_PER_SECOND = 'USD/1Mtokens/sec', // 1Mトークンあたりの価格
-    USD_1M_CHARS_PER_SECOND = 'USD/1MCHARS/sec', // 1M文字あたりの価格
+    USD_1M_TOKENS = 'USD/1M tokens', // 1Mトークンあたりの価格
+    USD_1M_CHARS = 'USD/1M CHARS', // 1M文字あたりの価格
+    USD_1M_TOKENS_PER_SECOND = 'USD/1M tokens/sec', // 1Mトークンあたりの価格
+    USD_1M_CHARS_PER_SECOND = 'USD/1M CHARS/sec', // 1M文字あたりの価格
 }
 @Entity()
 @Index(['orgKey', 'modelId'])
@@ -283,8 +283,9 @@ export class AIModelOverrideEntity extends MyBaseEntity {
 
 
 @Entity()
-@Index(['orgKey', 'providerModelId'], { unique: true })
-@Index(['orgKey', 'name'], { unique: true })
+@Index(['orgKey', 'name'] )
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId', 'providerModelId'], { unique: true })
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId', 'name'], { unique: true })
 export class AIModelEntity extends MyBaseEntity {
 
     @Column('text', { array: true, nullable: false, default: '{}' })
@@ -295,6 +296,9 @@ export class AIModelEntity extends MyBaseEntity {
 
     @Column()
     name!: string;
+
+    @Column(type => ScopeInfo)
+    scopeInfo!: ScopeInfo;
 
     @Column({ nullable: true, length: 8, })
     shortName!: string;
@@ -492,3 +496,101 @@ export class TagEntity extends MyBaseEntity {
 // -- DROP TABLE ai_model_alias_backup;
 
 //   UPDATE ai_model_entity SET provider_name_list=ARRAY[provider_name] WHERE provider_name_list = '{}';
+
+  
+//   WITH tag_extraction AS (
+//     -- ai_model_entityのtagsカラムから全てのタグを抽出
+//     SELECT DISTINCT
+//         org_key,
+//         TRIM(tag_name) as tag_name,
+//         COUNT(*) as usage_count,
+//         -- 最初にそのタグを使用したレコードの情報を取得
+//         MIN(created_by) as first_created_by,
+//         MIN(created_at) as first_created_at,
+//         MIN(created_ip) as first_created_ip
+//     FROM (
+//         SELECT 
+//             org_key,
+//             created_by,
+//             created_at,
+//             created_ip,
+//             unnest(tags) as tag_name
+//         FROM ai_model_entity 
+//         WHERE tags IS NOT NULL 
+//         AND array_length(tags, 1) > 0
+//     ) expanded_tags
+//     WHERE tag_name IS NOT NULL 
+//     AND TRIM(tag_name) != ''
+//     AND LENGTH(TRIM(tag_name)) > 0
+//     GROUP BY org_key, TRIM(tag_name)
+// ),
+// tag_stats AS (
+//     -- 各タグの詳細な統計情報を計算
+//     SELECT 
+//         te.org_key,
+//         te.tag_name,
+//         te.usage_count,
+//         te.first_created_by,
+//         te.first_created_at,
+//         te.first_created_ip,
+//         -- 最後に更新されたレコードの情報
+//         MAX(ame.updated_by) as last_updated_by,
+//         MAX(ame.updated_at) as last_updated_at,
+//         MAX(ame.updated_ip) as last_updated_ip
+//     FROM tag_extraction te
+//     JOIN ai_model_entity ame ON (
+//         te.org_key = ame.org_key 
+//         AND te.tag_name = ANY(ame.tags)
+//     )
+//     GROUP BY 
+//         te.org_key, 
+//         te.tag_name, 
+//         te.usage_count, 
+//         te.first_created_by, 
+//         te.first_created_at, 
+//         te.first_created_ip
+// )
+// INSERT INTO tag_entity (
+//     org_key,
+//     name,
+//     label,
+//     description,
+//     color,
+//     usage_count,
+//     is_active,
+//     created_by,
+//     updated_by,
+//     created_at,
+//     updated_at,
+//     created_ip,
+//     updated_ip
+// )
+// SELECT 
+//     org_key,
+//     tag_name as name,
+//     NULL as label,  -- 初期値はNULL、後で管理画面から設定
+//     NULL as description,  -- 初期値はNULL
+//     NULL as color,  -- 初期値はNULL
+//     usage_count,
+//     true as is_active,
+//     COALESCE(first_created_by, 'system') as created_by,
+//     COALESCE(last_updated_by, 'system') as updated_by,
+//     COALESCE(first_created_at, now()) as created_at,
+//     COALESCE(last_updated_at, now()) as updated_at,
+//     first_created_ip as created_ip,
+//     last_updated_ip as updated_ip
+// FROM tag_stats
+// ON CONFLICT (org_key, name) DO UPDATE SET
+//     usage_count = EXCLUDED.usage_count,
+//     updated_by = EXCLUDED.updated_by,
+//     updated_at = EXCLUDED.updated_at,
+//     updated_ip = EXCLUDED.updated_ip;
+
+  
+  
+//   UPDATE ai_model_pricing_entity SET unit='USD/1M tokens' WHERE unit='USD/1Mtokens';
+  
+  
+  
+  
+  

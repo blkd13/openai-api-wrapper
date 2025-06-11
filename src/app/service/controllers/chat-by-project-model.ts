@@ -643,16 +643,31 @@ export async function getAIProvider(user: UserTokenPayload, modelName: string): 
     // USER>DIVISION>ORGANIZTION の優先順位で最上位のスコープのものを取得する
     const priority = [ScopeType.USER, ScopeType.DIVISION, ScopeType.ORGANIZATION];
 
+    // ユーザーのロールリストからスコープ条件を作成
+    const modelScopeConditions = user.roleList.map(role => safeWhere({
+        orgKey: user.orgKey,
+        name: modelName,
+        scopeInfo: {
+            scopeType: role.scopeInfo.scopeType,
+            scopeId: role.scopeInfo.scopeId,
+        },
+        isActive: true,
+    }));
+
     const modelList = await ds.getRepository(AIModelEntity).find({
-        where: { orgKey: user.orgKey, name: modelName, isActive: true },
+        where: modelScopeConditions,
     });
 
     if (modelList.length === 0) {
         throw new Error(`モデル ${modelName} が見つかりません。`);
-    } else if (modelList.length > 1) {
-        console.warn(`モデル ${modelName} が複数見つかりました。最初のものを使用します。`);
     }
-    const model = modelList[0];
+
+    // スコープ優先順位でソート
+    modelList.sort((a, b) => {
+        return priority.indexOf(a.scopeInfo.scopeType) - priority.indexOf(b.scopeInfo.scopeType);
+    });
+
+    const model = modelList[0]; // 最優先のモデルを使用
 
     // // modelList内でproviderNameが重複している場合は最初のものを使用する
     // const providerMap = modelList.reduce((prev, curr) => {
@@ -674,19 +689,21 @@ export async function getAIProvider(user: UserTokenPayload, modelName: string): 
     //     .map(key => providerMap[key][0]); // 最初のプロバイダ名を使用
 
     // ユーザーのロールリストからスコープ条件を作成
-    const scopeConditions = user.roleList.map(role =>
+    const providerScopeConditions = user.roleList.map(role =>
         model.providerNameList.map(providerName => safeWhere({
             orgKey: user.orgKey,
             name: providerName,
-            'scopeInfo.scopeType': role.scopeInfo.scopeType,
-            'scopeInfo.scopeId': role.scopeInfo.scopeId,
+            scopeInfo: {
+                scopeType: role.scopeInfo.scopeType,
+                scopeId: role.scopeInfo.scopeId,
+            },
             isActive: true,
         }))
     ).flat();
 
-    // console.dir(scopeConditions, { depth: null });
+    // console.dir(providerScopeConditions, { depth: null });
     const providerList = await ds.getRepository(AIProviderEntity).find({
-        where: scopeConditions,
+        where: providerScopeConditions,
     });
 
     if (providerList.length === 0) {
@@ -2077,15 +2094,16 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
             } else {
                 fileList[index].fileBodyEntity.tokenCount = {};
             }
-            const tokenCount = fileList[index].fileBodyEntity.tokenCount;
+            const tokenCount = fileList[index].fileBodyEntity.tokenCount || {};
             if (r.status === 'fulfilled') {
                 tokenCount[COUNT_TOKEN_MODEL] = r.value;;
             } else {
                 // console.error(r.reason);
                 tokenCount[COUNT_TOKEN_MODEL] = { totalTokens: 0, totalBillableCharacters: 0 };
             }
-            if (openaiResults[index].status === 'fulfilled') {
-                tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiResults[index].value;
+            const openaiResult = openaiResults[index];
+            if (openaiResult.status === 'fulfilled') {
+                tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiResult.value;
             } else {
                 // console.error(openaiResults[index].reason);
                 tokenCount[COUNT_TOKEN_OPENAI_MODEL] = { totalTokens: 0 };

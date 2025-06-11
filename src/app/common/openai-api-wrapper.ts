@@ -200,6 +200,19 @@ export class MyAnthropicVertex {
     }
 }
 
+import { SocksProxyAgent } from 'socks-proxy-agent';
+export function proxyStringToAgentObject(proxyString: string) {
+    if (!proxyString) {
+        return undefined;
+    } else if (proxyString.startsWith('http://')) {
+        return new HttpsProxyAgent(proxyString);
+    } else if (proxyString.startsWith('socks://')) {
+        return new SocksProxyAgent(proxyString);
+    }
+}
+const { AZURE_OPENAI_SOCKS_PROXY } = process.env as { AZURE_OPENAI_SOCKS_PROXY: string };
+const azurePorxyAgent = proxyStringToAgentObject(AZURE_OPENAI_SOCKS_PROXY);
+
 export class MyAzureOpenAI {
     counter = 0;
 
@@ -214,6 +227,7 @@ export class MyAzureOpenAI {
                     baseURL: resource.baseURL,
                     apiKey: resource.apiKey,
                     apiVersion: resource.apiVersion || '2024-12-01-preview',
+                    httpAgent: azurePorxyAgent,
                 });
             });
         }).flat();

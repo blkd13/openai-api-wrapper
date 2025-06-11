@@ -202,10 +202,9 @@ async function commonPreProcess(req: UserRequest, suffix: string) {
         throw new Error('Invalid request: messages が必要です');
     }
 
-    const accessToken = await my_vertexai.getAccessToken();
     const vertexUrl = buildVertexUrl(targetProject, targetLocation, model, suffix as any);
 
-    return { instance, accessToken, vertexUrl, idempotencyKey, tokenCount, logObject };
+    return { instance, vertexUrl, idempotencyKey, tokenCount, logObject };
 }
 
 /**
@@ -217,7 +216,7 @@ export const vertexAIByAnthropicAPI = [
         const req = _req as UserRequest;
 
         try {
-            const { instance, accessToken, vertexUrl, idempotencyKey, tokenCount, logObject } =
+            const { instance, vertexUrl, idempotencyKey, tokenCount, logObject } =
                 await commonPreProcess(req, 'rawPredict');
 
             // リクエストをファイルに書き出す
@@ -226,6 +225,7 @@ export const vertexAIByAnthropicAPI = [
 
             console.log(logObject.output('call'));
 
+            const accessToken = await my_vertexai.getAccessToken();
             const vertexResponse: AxiosResponse = await axios.post(vertexUrl, instance, {
                 headers: {
                     Authorization: `Bearer ${accessToken}`,
@@ -280,34 +280,69 @@ export const vertexAIByAnthropicAPIStream = [
         const req = _req as UserRequest;
 
         try {
-            const { instance, accessToken, vertexUrl, idempotencyKey, tokenCount, logObject } =
+            const { instance, vertexUrl, idempotencyKey, tokenCount, logObject } =
                 await commonPreProcess(req, 'streamRawPredict');
 
-            instance.stream = true;
-            console.log(`Forwarding to Vertex AI at ${vertexUrl}`);
+            let vertexResponse: AxiosResponse | undefined;
+            let lastError: any;
+            const maxRetries = 2; // リトライ回数
 
-            // リクエストをファイルに書き出す
-            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.request.json`,
-                JSON.stringify({ instance, url: vertexUrl }, Utils.genJsonSafer()), {}, () => { });
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
 
-            console.log(logObject.output('call'));
+                    instance.stream = true;
+                    console.log(`Forwarding to Vertex AI at ${vertexUrl}`);
 
-            const vertexResponse: AxiosResponse = await axios.post(vertexUrl, instance, {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json; charset=UTF-8',
-                },
-                responseType: 'stream',
-                httpAgent: options.httpAgent,
-            });
+                    // リクエストをファイルに書き出す
+                    fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.request.json`,
+                        JSON.stringify({ instance, url: vertexUrl }, Utils.genJsonSafer()), {}, () => { });
 
-            // レスポンスヘッダーをログ
-            const headers: { [key: string]: string } = {};
-            Object.entries(vertexResponse.headers).forEach(([key, value]) => {
-                headers[key] = Array.isArray(value) ? value.join(', ') : String(value);
-            });
-            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.response.json`,
-                JSON.stringify({ instance, url: vertexUrl, headers }, Utils.genJsonSafer()), {}, () => { });
+                    console.log(logObject.output('call'));
+
+                    const accessToken = await my_vertexai.getAccessToken();
+                    vertexResponse = await axios.post(vertexUrl, instance, {
+                        headers: {
+                            Authorization: `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json; charset=UTF-8',
+                        },
+                        responseType: 'stream',
+                        httpAgent: options.httpAgent,
+                    });
+
+                    // レスポンスヘッダーをログ
+                    const headers: { [key: string]: string } = {};
+                    if (vertexResponse) {
+                        Object.entries(vertexResponse.headers).forEach(([key, value]) => {
+                            headers[key] = Array.isArray(value) ? value.join(', ') : String(value);
+                        });
+                    } else { }
+                    fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.response.json`,
+                        JSON.stringify({ instance, url: vertexUrl, headers }, Utils.genJsonSafer()), {}, () => { });
+
+                    break; // 成功したらループを抜ける
+                } catch (error) {
+                    lastError = error;
+                    console.log(`Attempt ${attempt} failed:`, error);
+
+                    // レスポンスヘッダーをログ
+                    const headers: { [key: string]: string } = {};
+                    if (vertexResponse) {
+                        Object.entries(vertexResponse.headers).forEach(([key, value]) => {
+                            headers[key] = Array.isArray(value) ? value.join(', ') : String(value);
+                        });
+                    } else { }
+                    fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.response.json`,
+                        JSON.stringify({ instance, url: vertexUrl, headers }, Utils.genJsonSafer()), {}, () => { });
+
+                    if (attempt === maxRetries) {
+                        throw lastError; // 最後の試行で失敗したら元のエラーを投げる
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 0 * attempt));
+                }
+            }
+            if (!vertexResponse) {
+                throw new Error('Vertex AI response is undefined after retries');
+            }
 
             res.setHeader('Content-Type', 'text/event-stream;charset=utf-8');
 
