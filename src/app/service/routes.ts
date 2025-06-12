@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { changePassword, deleteUser, patchDepartmentMember, getDepartment, getDepartmentList, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, getDepartmentMemberLog, getDepartmentMemberLogForUser, genApiToken, getOAuthAccount, getDepartmentMemberForUser, getScopeLabels, getJournal, getDepartmentMemberLogSummaryForUser } from './controllers/auth.js';
+import { changePassword, deleteUser, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, genApiToken, getOAuthAccount, getScopeLabels, } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateOAuthUser, authenticateUserTokenMiddleGenerator } from './middleware/authenticate.js';
 import { chatCompletion, chatCompletionStream, codegenCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
@@ -51,6 +51,7 @@ import { upsertMCPServer, getMCPServers, deleteMCPServer } from './controllers/m
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
 import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
 import { getDivisionMembers, updateDivisionMember, removeDivisionMember, getDivisionList, getDivision, deleteDivision, getAllDivisions, upsertDivisionMember, upsertDivision } from './controllers/division.js';
+import { getDepartmentMemberLog, getDepartmentMemberLogForUser, getDepartmentMemberLogSummaryForUser, getDivisionMemberStatsList, getJournal } from './controllers/stats.js';
 
 // routers/index.ts
 
@@ -59,13 +60,23 @@ export const authNoneRouter = Router();
 export const authUserRouter = Router();
 export const authOAuthRouter = Router();
 export const authAdminRouter = Router();
-export const authMaintainerRouter = Router();
+// export const authMaintainerRouter = Router();
 export const authInviteRouter = Router();
+export const authMemberManagerRouter = Router(); // メンバー管理者
+export const authAIIntegrationAdminRouter = Router(); // AI統合管理者
+export const authSystemIntegrationAdminRouter = Router(); // システム統合管理者
+export const authAuditorRouter = Router(); // 監査者
+export const authSuperAdminRouter = Router(); // スーパーユーザー
 
 // 認証種別ごとのミドルウェアを設定
 authUserRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.User, true));
 authAdminRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.Admin, true));
-authMaintainerRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.Maintainer, true));
+// authMaintainerRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.Maintainer, true));
+authMemberManagerRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.UserAdmin, true));
+authAIIntegrationAdminRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.AIIntegrationAdmin, true));
+authSystemIntegrationAdminRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.SystemIntegrationAdmin, true));
+authAuditorRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.Auditor, true));
+// authSuperAdminRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.SuperAdmin, true));
 
 authInviteRouter.use(authenticateInviteToken);
 
@@ -90,8 +101,6 @@ authUserRouter.get('/user', getUser);
 authUserRouter.patch('/user', updateUser);
 authUserRouter.patch('/change-password', changePassword);
 authUserRouter.delete('/user', deleteUser);
-authUserRouter.get(`/predict-history`, getDepartmentMemberLogForUser);
-authUserRouter.get(`/predict-history/summary`, getDepartmentMemberLogSummaryForUser);
 
 // authUserRouter.get('/access-token', genAccessToken);
 authUserRouter.post('/api-token', genApiToken);
@@ -134,6 +143,7 @@ authUserRouter.get('/team/:teamId/members', getTeamMembers);
 authUserRouter.patch('/team/:teamId/member/:userId', updateTeamMember);
 authUserRouter.delete('/team/:teamId/member/:userId', removeTeamMember);
 
+//// 部管理用
 // Division関連
 authUserRouter.get('/divisions', getDivisionList);
 authAdminRouter.post('/division', upsertDivision); // 管理者はDivisionを追加できる
@@ -145,6 +155,11 @@ authAdminRouter.post('/division/:divisionId/member', upsertDivisionMember);
 authUserRouter.get('/division/:divisionId/members', getDivisionMembers);
 authAdminRouter.patch('/division/:divisionId/member/:userId', upsertDivisionMember);
 authAdminRouter.delete('/division/:divisionId/member/:userId', removeDivisionMember);
+
+authAdminRouter.get(`/division-stats`, getDivisionMemberStatsList); // 部署情報取得
+authAdminRouter.get(`/predict-history/:userId`, getDepartmentMemberLog); // 管理者がユーザーを指定して見る用
+authUserRouter.get(`/predict-history`, getDepartmentMemberLogForUser); // ユーザーが自分で見る用
+authUserRouter.get(`/predict-history/summary`, getDepartmentMemberLogSummaryForUser); // ユーザーが自分のサマリーを取得する用
 
 // プロジェクト関連
 authUserRouter.post('/project', createProject);
@@ -201,14 +216,6 @@ authUserRouter.put('/:id/access', updateFileAccess); // ファイルアクセス
 // authUserRouter.get('/file/:path/*', getFile); // 最低1階層は必要
 // authUserRouter.post('/file/:path/*', saveFile); // 最低1階層は必要
 
-// 部管理用
-// authUserRouter.get(`/department`, getDepartmentList); // 部署一覧取得
-// authUserRouter.get(`/department-member`, getDepartmentMemberForUser); // 部署情報取得
-authAdminRouter.get(`/department`, getDepartment); // 部署情報取得
-authAdminRouter.patch(`/department/:departmentId`, patchDepartmentMember);
-authAdminRouter.get(`/predict-history/:userId`, getDepartmentMemberLog);
-
-
 // Mattermost
 authUserRouter.get(`/mattermost/:providerName/user`, getMmUsers); // 自作のmattermost user取得API
 authUserRouter.post(`/mattermost/:providerName/user`, getMmUsers); // 自作のmattermost user取得API
@@ -263,14 +270,14 @@ authAdminRouter.put('/ext-api-provider/:id', upsertApiProvider);
 authAdminRouter.delete('/ext-api-provider/:id', deleteApiProvider);
 
 authAdminRouter.get(`/ext-api-provider-templates`, getApiProviderTemplates); // 
-authMaintainerRouter.post('/ext-api-provider-template', upsertApiProviderTemplate); //
-authMaintainerRouter.put('/ext-api-provider-template/:id', upsertApiProviderTemplate); //
-authMaintainerRouter.delete('/ext-api-provider-template/:id', deleteApiProviderTemplate); //
+authSuperAdminRouter.post('/ext-api-provider-template', upsertApiProviderTemplate); //
+authSuperAdminRouter.put('/ext-api-provider-template/:id', upsertApiProviderTemplate); //
+authSuperAdminRouter.delete('/ext-api-provider-template/:id', deleteApiProviderTemplate); //
 
 authAdminRouter.get('/ai-provider-templates', getAIProviderTemplates);
-authMaintainerRouter.post('/ai-provider-template', upsertAIProviderTemplate);
-authMaintainerRouter.put('/ai-provider-template/:providerId', upsertAIProviderTemplate);
-authMaintainerRouter.delete('/ai-provider-template/:providerId', deleteAIProviderTemplate);
+authAdminRouter.post('/ai-provider-template', upsertAIProviderTemplate);
+authAdminRouter.put('/ai-provider-template/:providerId', upsertAIProviderTemplate);
+authAdminRouter.delete('/ai-provider-template/:providerId', deleteAIProviderTemplate);
 
 authAdminRouter.get('/ai-providers', getAIProviders);
 authAdminRouter.post('/ai-provider', upsertAIProvider);
@@ -292,10 +299,10 @@ authAdminRouter.delete('/tag/:tagId', deleteTag);
 
 authAdminRouter.get('/organizations/users', getOrganizationUsers); // 組織一覧取得
 
-authMaintainerRouter.get('/organizations', getOrganizations); // 組織一覧取得
-authMaintainerRouter.post('/organizations', upsertOrganization); // 組織登録・更新
-authMaintainerRouter.put('/organizations/:orgKey', upsertOrganization); // 組織登録・更新
-authMaintainerRouter.delete('/organizations/:orgKey', deactivateOrganization); // 組織無効化
+authAdminRouter.get('/organizations', getOrganizations); // 組織一覧取得
+authAdminRouter.post('/organizations', upsertOrganization); // 組織登録・更新
+authAdminRouter.put('/organizations/:orgKey', upsertOrganization); // 組織登録・更新
+authAdminRouter.delete('/organizations/:orgKey', deactivateOrganization); // 組織無効化
 
 authUserRouter.get('/scope-labels', getScopeLabels);
 

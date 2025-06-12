@@ -18,29 +18,30 @@ import { ScopeUtils } from '../common/scope-utils.js';
  */
 export const getAIProviderTemplates = [
     query('provider').optional().isString(),
+    query('includeOverridden').optional().isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         try {
-            const { provider, scopeType, providerId } = req.query as {
+            const { provider, scopeType, providerId, includeOverridden } = req.query as {
                 provider?: string,
                 scopeType?: string,
-                providerId?: string
+                providerId?: string,
+                includeOverridden?: boolean
             };
 
-            const where: any = {
-                orgKey: req.info.user.orgKey,
-                isActive: true,
-            };
+            // 追加フィルター条件を準備
+            const additionalFilters: any = {};
+            if (providerId) additionalFilters.id = providerId;
+            if (provider) additionalFilters.provider = provider;
+            if (scopeType) additionalFilters['scopeInfo.scopeType'] = scopeType;
 
-            if (providerId) where.id = providerId;
-            if (provider) where.provider = provider;
-            if (scopeType) where['scopeInfo.scopeType'] = scopeType;
-
-            const providers = await ds.getRepository(AIProviderTemplateEntity).find({
-                where: safeWhere(where),
-                order: { createdAt: 'DESC' }
-            });
+            // 新しいサービスを使用してスコープ考慮の一覧取得
+            const providers = await ScopedEntityService.findAllWithScope(
+                ds.getRepository(AIProviderTemplateEntity),
+                req.info.user,
+                { additionalFilters, includeOverridden }
+            );
 
             res.status(200).json(providers);
         } catch (error) {
@@ -56,144 +57,43 @@ export const getAIProviderTemplates = [
 export const upsertAIProviderTemplate = [
     param('providerId').optional({ nullable: true }).isUUID(),
     body('provider').isIn(Object.values(AIProviderType)),
+    body('name').isString().notEmpty(),
     body('label').isString().notEmpty(),
     body('scopeInfo.scopeType').isIn(Object.values(ScopeType)),
     body('scopeInfo.scopeId').optional({ nullable: true }).isUUID(),
-    // body('scopeInfo.scopeId').isString().notEmpty(),
     body('metadata').optional({ nullable: true }),
     body('isActive').isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         try {
-            const repo = ds.getRepository(AIProviderTemplateEntity);
             const bodyData = req.body as AIProviderTemplateEntity;
             const { providerId } = req.params;
-            const requestScopeId = req.body.scopeInfo?.scopeId;
-            let entity: AIProviderTemplateEntity | null = null;
-            let isNew = true;
 
-            // 既存レコードチェック
-            if (providerId) {
-                entity = await repo.findOneBy(safeWhere({
-                    orgKey: req.info.user.orgKey,
-                    id: providerId,
-                }));
-                if (entity) {
-                    // scopeが異なる場合は新規作成として扱う（scope immutable）
-                    const resolvedScopeId = await ScopeUtils.resolveScopeId(bodyData.scopeInfo.scopeType, req.info.user, requestScopeId);
-                    if (entity.scopeInfo.scopeType !== bodyData.scopeInfo.scopeType ||
-                        entity.scopeInfo.scopeId !== resolvedScopeId) {
-                        entity = null;
-                        // 新規作成として扱う
-                        isNew = true;
-                    } else {
-                        isNew = false;
+            // ScopedEntityServiceを使用してupsert処理
+            const result = await ScopedEntityService.upsertWithScope(
+                ds.getRepository(AIProviderTemplateEntity),
+                req.info.user,
+                providerId,
+                bodyData,
+                req.info.ip,
+                {
+                    uniqueFields: ['name', 'provider'],
+                    beforeSave: async (entity: AIProviderTemplateEntity, isNew: boolean) => {
+                        // オプショナルフィールドの設定
+                        if ('metadata' in bodyData) entity.metadata = bodyData.metadata;
                     }
                 }
-            }
+            );
 
-            let resolvedScopeId;
-            if (bodyData.scopeInfo.scopeType === ScopeType.ORGANIZATION) {
-                const org = await ds.getRepository(OrganizationEntity).findOneBy(safeWhere({
-                    orgKey: req.info.user.orgKey,
-                }));
-                if (!org) {
-                    return res.status(400).json({ message: '指定された組織が見つかりません' });
-                }
-                resolvedScopeId = org.id;
-            } else if (bodyData.scopeInfo.scopeType === ScopeType.DIVISION) {
-                // requestScopeIdが指定されている場合
-                if (requestScopeId) {
-                    // ユーザーが指定されたdivisionに管理権限を持つかチェック
-                    const hasPermission = req.info.user.roleList.some(role =>
-                        role.scopeInfo.scopeType === ScopeType.DIVISION &&
-                        role.scopeInfo.scopeId === requestScopeId &&
-                        [UserRoleType.Admin, UserRoleType.Maintainer].includes(role.role)
-                    );
-                    if (!hasPermission) {
-                        return res.status(403).json({ message: '指定された部門に対する管理権限がありません' });
-                    }
-                    resolvedScopeId = requestScopeId;
-                } else {
-                    // divisionIdが指定されていない場合、ユーザーが管理権限を持つ部門を取得
-                    const divisionRoles = req.info.user.roleList.filter(role =>
-                        role.scopeInfo.scopeType === ScopeType.DIVISION &&
-                        [UserRoleType.Admin, UserRoleType.Maintainer].includes(role.role)
-                    );
-
-                    if (divisionRoles.length === 0) {
-                        return res.status(403).json({ message: '管理権限を持つ部門が見つかりません' });
-                    }
-
-                    if (divisionRoles.length > 1) {
-                        return res.status(400).json({
-                            message: '複数の部門に管理権限があります。scopeIdパラメータで部門を指定してください', availableDivisions: divisionRoles.map(role => ({
-                                scopeId: role.scopeInfo.scopeId,
-                                role: role.role
-                            }))
-                        });
-                    }
-                    resolvedScopeId = divisionRoles[0].scopeInfo.scopeId;
-                }
-            } else if (bodyData.scopeInfo.scopeType === ScopeType.USER) {
-                resolvedScopeId = req.info.user.id;
-            }            // 一意制約チェック: organization + scopeInfo + provider
-            const conflict = await repo.findOneBy({
-                provider: bodyData.provider,
-                orgKey: req.info.user.orgKey,
-                scopeInfo: {
-                    scopeType: bodyData.scopeInfo.scopeType,
-                    scopeId: resolvedScopeId,
-                },
-                ...(isNew ? {} : { id: Not(providerId ?? 'id') })
-            });
-
-            if (conflict) {
-                return res.status(409).json({
-                    message: `同じスコープと${bodyData.provider}のプロバイダーが既に存在します`
-                });
-            } if (isNew) {
-                // 新規作成
-                entity = repo.create({
-                    provider: bodyData.provider,
-                    label: bodyData.label,
-                    scopeInfo: {
-                        scopeType: bodyData.scopeInfo.scopeType,
-                        scopeId: resolvedScopeId,
-                    },
-                    metadata: bodyData.metadata,
-                    isActive: bodyData.isActive ?? true,
-                });
-            } else {
-                // 更新 - scopeは不変なので更新しない
-                Object.assign(entity!, {
-                    provider: bodyData.provider,
-                    label: bodyData.label,
-                    // scopeInfo: scopeは不変なので更新しない
-                    isActive: bodyData.isActive,
-                });
-            }
-
-            // オプショナルフィールドの設定
-            if ('metadata' in bodyData) entity!.metadata = bodyData.metadata;
-
-            // 共通フィールドの設定
-            entity!.orgKey = req.info.user.orgKey;
-            entity!.updatedBy = req.info.user.id;
-            entity!.updatedIp = req.info.ip;
-
-            // createdBy, createdAtは新規作成時のみ設定
-            if (isNew) {
-                entity!.createdBy = req.info.user.id;
-                entity!.createdIp = req.info.ip;
-            }
-
-            const saved = await repo.save(entity!);
-            res.status(isNew ? 201 : 200).json(saved);
+            res.status(result.isNew ? 201 : 200).json(result.entity);
         } catch (error) {
             console.error('Error upserting AIProvider:', error);
-            res.status(500).json({ message: 'AIProviderの保存に失敗しました' });
+            if (error instanceof Error && error.message.includes('Conflict')) {
+                res.status(409).json({ message: error.message });
+            } else {
+                res.status(500).json({ message: 'AIProviderの保存に失敗しました' });
+            }
         }
     }
 ];
@@ -208,28 +108,26 @@ export const deleteAIProviderTemplate = [
         const req = _req as UserRequest;
         try {
             const { providerId } = req.params;
-            const repo = ds.getRepository(AIProviderTemplateEntity);
-            const entity = await repo.findOne({
-                where: safeWhere({
-                    id: providerId,
-                    orgKey: req.info.user.orgKey
-                }),
-            });
 
-            if (!entity) {
+            const deleted = await ScopedEntityService.deleteWithScope(
+                ds.getRepository(AIProviderTemplateEntity),
+                req.info.user,
+                providerId,
+                { userIp: req.info.ip }
+            );
+
+            if (!deleted) {
                 return res.status(404).json({ message: 'AIProviderが見つかりません' });
             }
-
-            // 論理削除
-            entity.isActive = false;
-            entity.updatedBy = req.info.user.id;
-            entity.updatedIp = req.info.ip;
-            await repo.save(entity);
 
             res.status(204).send();
         } catch (error) {
             console.error('Error deleting AIProvider:', error);
-            res.status(500).json({ message: 'AIProviderの削除に失敗しました' });
+            if (error instanceof Error && error.message.includes('Access denied')) {
+                res.status(403).json({ message: error.message });
+            } else {
+                res.status(500).json({ message: 'AIProviderの削除に失敗しました' });
+            }
         }
     }
 ];
@@ -288,101 +186,40 @@ export const upsertAIProvider = [
     body('description').optional({ nullable: true }).isString(),
     body('scopeInfo.scopeType').isIn(Object.values(ScopeType)),
     body('scopeInfo.scopeId').optional({ nullable: true }).isUUID(),
-    // body('scopeInfo.scopeId').isString().notEmpty(),
     body('config').optional({ nullable: true }),
     body('isActive').isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         try {
-            const repo = ds.getRepository(AIProviderEntity);
             const bodyData = req.body as AIProviderEntity;
             const { providerId } = req.params;
-            const scopeId = req.body.scopeInfo?.scopeId;
-            let entity: AIProviderEntity | null = null;
-            let isNew = true;
 
-            // 既存レコードチェック
-            if (providerId) {
-                entity = await repo.findOneBy(safeWhere({
-                    orgKey: req.info.user.orgKey,
-                    id: providerId,
-                }));
-                if (entity) {
-                    // scopeが異なる場合は新規作成として扱う（scope immutable）
-                    const resolvedScopeId = await ScopeUtils.resolveScopeId(bodyData.scopeInfo.scopeType, req.info.user, scopeId);
-                    if (entity.scopeInfo.scopeType !== bodyData.scopeInfo.scopeType ||
-                        entity.scopeInfo.scopeId !== resolvedScopeId) {
-                        entity = null;
-                        // 新規作成として扱う
-                        isNew = true;
-                    } else {
-                        isNew = false;
-                    }
-                }
-            }
-            // 重複チェック（同一スコープ内）
-            const conflict = await ScopedEntityService.checkDuplicateInScope(
-                repo,
-                bodyData,
+            // ScopedEntityServiceを使用してupsert処理
+            const result = await ScopedEntityService.upsertWithScope(
+                ds.getRepository(AIProviderEntity),
                 req.info.user,
                 providerId,
-                scopeId
-            );
-            if (conflict) {
-                return res.status(409).json({
-                    message: `同じスコープに${bodyData.type},${bodyData.name}のプロバイダーが既に存在します`
-                });
-            }
-
-            // スコープ情報を準備
-            const preparedEntity = await ScopedEntityService.prepareScopedEntity(
                 bodyData,
-                req.info.user,
-                scopeId
+                req.info.ip,
+                {
+                    uniqueFields: ['type', 'name'],
+                    beforeSave: async (entity: AIProviderEntity, isNew: boolean) => {
+                        // オプショナルフィールドの設定
+                        if ('description' in bodyData) entity.description = bodyData.description;
+                        if ('config' in bodyData) entity.config = bodyData.config;
+                    }
+                }
             );
-            if (isNew) {
-                // 新規作成
-                entity = repo.create({
-                    type: bodyData.type,
-                    name: bodyData.name,
-                    label: bodyData.label,
-                    description: bodyData.description,
-                    scopeInfo: preparedEntity.scopeInfo,
-                    config: bodyData.config,
-                    isActive: bodyData.isActive ?? true,
-                });
-            } else {
-                // 更新 - scopeは不変なので更新しない
-                Object.assign(entity!, {
-                    type: bodyData.type,
-                    name: bodyData.name,
-                    label: bodyData.label,
-                    description: bodyData.description,
-                    // scopeInfo: scopeは不変なので更新しない
-                    isActive: bodyData.isActive,
-                });
-            }
 
-            // オプショナルフィールドの設定
-            if ('config' in bodyData) entity!.config = bodyData.config;
-
-            // 共通フィールドの設定
-            entity!.orgKey = req.info.user.orgKey;
-            entity!.updatedBy = req.info.user.id;
-            entity!.updatedIp = req.info.ip;
-
-            // createdBy, createdAtは新規作成時のみ設定
-            if (isNew) {
-                entity!.createdBy = req.info.user.id;
-                entity!.createdIp = req.info.ip;
-            }
-
-            const saved = await repo.save(entity!);
-            res.status(isNew ? 201 : 200).json(saved);
+            res.status(result.isNew ? 201 : 200).json(result.entity);
         } catch (error) {
             console.error('Error upserting AIProvider:', error);
-            res.status(500).json({ message: 'AIProviderの保存に失敗しました' });
+            if (error instanceof Error && error.message.includes('Conflict')) {
+                res.status(409).json({ message: error.message });
+            } else {
+                res.status(500).json({ message: 'AIProviderの保存に失敗しました' });
+            }
         }
     }
 ];
@@ -397,28 +234,26 @@ export const deleteAIProvider = [
         const req = _req as UserRequest;
         try {
             const { providerId } = req.params;
-            const repo = ds.getRepository(AIProviderEntity);
-            const entity = await repo.findOne({
-                where: safeWhere({
-                    id: providerId,
-                    orgKey: req.info.user.orgKey
-                })
-            });
 
-            if (!entity) {
+            const deleted = await ScopedEntityService.deleteWithScope(
+                ds.getRepository(AIProviderEntity),
+                req.info.user,
+                providerId,
+                { userIp: req.info.ip }
+            );
+
+            if (!deleted) {
                 return res.status(404).json({ message: 'AIProviderが見つかりません' });
             }
-
-            // 論理削除
-            entity.isActive = false;
-            entity.updatedBy = req.info.user.id;
-            entity.updatedIp = req.info.ip;
-            await repo.save(entity);
 
             res.status(204).send();
         } catch (error) {
             console.error('Error deleting AIProvider:', error);
-            res.status(500).json({ message: 'AIProviderの削除に失敗しました' });
+            if (error instanceof Error && error.message.includes('Access denied')) {
+                res.status(403).json({ message: error.message });
+            } else {
+                res.status(500).json({ message: 'AIProviderの削除に失敗しました' });
+            }
         }
     }
 ];
@@ -477,7 +312,22 @@ export const getBaseModels = [
             });
             // プライスリストをモデルにマージ
             models.forEach(model => {
-                (model as any).pricingHistory = pricingHistory.filter(pricing => pricing.modelId === model.id);
+                const modelPricingHistory = pricingHistory.filter(pricing => pricing.modelId === model.id);
+                if (modelPricingHistory.length > 0) {
+                    (model as any).pricingHistory = modelPricingHistory;
+                } else {
+                    console.error(`Model ${model.id} ${model.name} has no pricing history, adding dummy entry`);
+                    // モデルに価格履歴がない場合、ダミーを入れておく。画面側が壊れないように
+                    (model as any).pricingHistory = [{
+                        modelId: model.id,
+                        orgKey: req.info.user.orgKey,
+                        validFrom: new Date(),
+                        inputPricePerUnit: 0,
+                        outputPricePerUnit: 0,
+                        unit: 'dummy', // デフォルト値
+                        isActive: true
+                    }] as AIModelPricingEntity[]; // 空の配列を設定
+                }
             });
 
             res.status(200).json(models);
@@ -528,52 +378,12 @@ export const upsertBaseModel = [
     body('uiOrder').optional({ nullable: true }).isInt(),
     body('isStream').isBoolean(),
     body('isActive').isBoolean(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
+    validationErrorHandler, async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         try {
-            const repo = ds.getRepository(AIModelEntity);
-            const repoAlias = ds.getRepository(AIModelAlias);
             const bodyData = req.body as AIModelEntity;
             const aliases: string[] = req.body.aliases || [];
             const { modelId } = req.params;
-            const scopeId = req.body.scopeInfo?.scopeId;
-            let entity: AIModelEntity | null = null;
-            let isNew = true;
-            // 既存レコードチェック
-            if (modelId) {
-                entity = await repo.findOne({ where: safeWhere({ id: modelId, orgKey: req.info.user.orgKey }) });
-                if (entity) {
-                    // scopeが異なる場合は新規作成として扱う（scope immutable）
-                    const resolvedScopeId = await ScopeUtils.resolveScopeId(bodyData.scopeInfo.scopeType, req.info.user, scopeId);
-                    if (entity.scopeInfo.scopeType !== bodyData.scopeInfo.scopeType ||
-                        entity.scopeInfo.scopeId !== resolvedScopeId) {
-                        entity = null;
-                        // 新規作成として扱う
-                        isNew = true;
-                    } else {
-                        isNew = false;
-                    }
-                }
-
-            }
-            // 重複チェック（同一スコープ内）
-            const conflict = await ScopedEntityService.checkDuplicateInScope(
-                repo,
-                bodyData,
-                req.info.user,
-                modelId,
-                scopeId
-            );
-            if (conflict) {
-                console.log('Conflict:', modelId, conflict);
-                return res.status(409).json({ message: `同じスコープと${bodyData.name} のモデルが既に存在します` });
-            }            // スコープ情報を準備
-            const preparedEntity = await ScopedEntityService.prepareScopedEntity(
-                bodyData,
-                req.info.user,
-                scopeId
-            );
 
             // providerNameListの存在チェック
             const providers = await ds.getRepository(AIProviderEntity).find({
@@ -583,101 +393,65 @@ export const upsertBaseModel = [
                 return res.status(400).json({ message: 'providerNameListに存在しないプロバイダーが含まれています' });
             }
 
-            // aliasesの整備
-            if (aliases.length > 0) {
-                // エイリアスの重複チェック
-                const uniqueAliases = new Set(aliases);
-                aliases.length = 0; // 元の配列を空にする
-                uniqueAliases.forEach(alias => aliases.push(alias));
-            } else {
-                // エイリアスが空の場合はデフォルトエイリアスを追加
-                aliases.push(bodyData.providerModelId);
-            } if (isNew) {
-                // 新規作成
-                entity = repo.create({
-                    providerNameList: bodyData.providerNameList,
-                    providerModelId: bodyData.providerModelId,
-                    name: bodyData.name,
-                    scopeInfo: preparedEntity.scopeInfo,
-                    status: bodyData.status,
-                    modalities: bodyData.modalities,
-                    maxContextTokens: bodyData.maxContextTokens,
-                    maxOutputTokens: bodyData.maxOutputTokens,
-                    isActive: bodyData.isActive ?? true,
-                    shortName: bodyData.shortName,
-                    throttleKey: bodyData.throttleKey,
-                    isStream: bodyData.isStream,
-                });
-            } else {
-                // 更新 - scopeは不変なので更新しない
-                Object.assign(entity!, {
-                    providerNameList: bodyData.providerNameList,
-                    providerModelId: bodyData.providerModelId,
-                    name: bodyData.name,
-                    // scopeInfo: scopeは不変なので更新しない
-                    status: bodyData.status,
-                    modalities: bodyData.modalities,
-                    maxContextTokens: bodyData.maxContextTokens,
-                    maxOutputTokens: bodyData.maxOutputTokens,
-                    isActive: bodyData.isActive,
-                    shortName: bodyData.shortName,
-                    throttleKey: bodyData.throttleKey,
-                    isStream: bodyData.isStream,
-                });
-            }
+            // エイリアスの整備
+            const processedAliases = aliases.length > 0
+                ? [...new Set(aliases)] // 重複除去
+                : [bodyData.providerModelId]; // デフォルトエイリアス
 
-            // オプショナルフィールドの設定
-            // nullの場合は明示的にnullに設定、undefinedの場合は既存値を維持
-            if ('shortName' in bodyData) entity!.shortName = bodyData.shortName;
-            if ('throttleKey' in bodyData) entity!.throttleKey = bodyData.throttleKey;
-            if ('description' in bodyData) entity!.description = bodyData.description;
-            if ('details' in bodyData) entity!.details = bodyData.details;
-            if ('inputFormats' in bodyData) entity!.inputFormats = bodyData.inputFormats || [];
-            if ('outputFormats' in bodyData) entity!.outputFormats = bodyData.outputFormats || [];
-            if ('defaultParameters' in bodyData) entity!.defaultParameters = bodyData.defaultParameters;
-            if ('capabilities' in bodyData) entity!.capabilities = bodyData.capabilities;
-            if ('metadata' in bodyData) entity!.metadata = bodyData.metadata;
-            if ('endpointTemplate' in bodyData) entity!.endpointTemplate = bodyData.endpointTemplate;
-            if ('documentationUrl' in bodyData) entity!.documentationUrl = bodyData.documentationUrl;
-            if ('licenseType' in bodyData) entity!.licenseType = bodyData.licenseType;
-            if ('knowledgeCutoff' in bodyData) entity!.knowledgeCutoff = bodyData.knowledgeCutoff ? new Date(bodyData.knowledgeCutoff) : undefined;
-            if ('releaseDate' in bodyData) entity!.releaseDate = bodyData.releaseDate ? new Date(bodyData.releaseDate) : undefined;
-            if ('deprecationDate' in bodyData) entity!.deprecationDate = bodyData.deprecationDate ? new Date(bodyData.deprecationDate) : undefined;
-            if ('tags' in bodyData) entity!.tags = bodyData.tags || [];
-            if ('uiOrder' in bodyData) entity!.uiOrder = bodyData.uiOrder;
-            if ('isStream' in bodyData) entity!.isStream = bodyData.isStream;
+            // ScopedEntityServiceを使用してupsert処理
+            const result = await ScopedEntityService.upsertWithScope(
+                ds.getRepository(AIModelEntity),
+                req.info.user,
+                modelId,
+                bodyData,
+                req.info.ip,
+                {
+                    uniqueFields: ['name', 'providerModelId'],
+                    beforeSave: async (entity: AIModelEntity, isNew: boolean) => {
+                        // オプショナルフィールドの設定
+                        if ('description' in bodyData) entity.description = bodyData.description;
+                        if ('details' in bodyData) entity.details = bodyData.details;
+                        if ('inputFormats' in bodyData) entity.inputFormats = bodyData.inputFormats;
+                        if ('outputFormats' in bodyData) entity.outputFormats = bodyData.outputFormats;
+                        if ('defaultParameters' in bodyData) entity.defaultParameters = bodyData.defaultParameters;
+                        if ('capabilities' in bodyData) entity.capabilities = bodyData.capabilities;
+                        if ('metadata' in bodyData) entity.metadata = bodyData.metadata;
+                        if ('endpointTemplate' in bodyData) entity.endpointTemplate = bodyData.endpointTemplate;
+                        if ('documentationUrl' in bodyData) entity.documentationUrl = bodyData.documentationUrl;
+                        if ('licenseType' in bodyData) entity.licenseType = bodyData.licenseType;
+                        if ('knowledgeCutoff' in bodyData) entity.knowledgeCutoff = bodyData.knowledgeCutoff ? new Date(bodyData.knowledgeCutoff) : undefined;
+                        if ('releaseDate' in bodyData) entity.releaseDate = bodyData.releaseDate ? new Date(bodyData.releaseDate) : undefined;
+                        if ('deprecationDate' in bodyData) entity.deprecationDate = bodyData.deprecationDate ? new Date(bodyData.deprecationDate) : undefined;
+                        if ('tags' in bodyData) entity.tags = bodyData.tags || [];
+                        if ('uiOrder' in bodyData) entity.uiOrder = bodyData.uiOrder;
+                        if ('isStream' in bodyData) entity.isStream = bodyData.isStream;
+                    }
+                }
+            );
 
-            // 共通フィールドの設定
-            entity!.orgKey = req.info.user.orgKey;
-            entity!.updatedBy = req.info.user.id;
-            entity!.updatedIp = req.info.ip;
-            // createdBy, createdAtは新規作成時のみ設定
-            if (isNew) {
-                entity!.createdBy = req.info.user.id;
-                entity!.createdIp = req.info.ip;
-            }
+            // エイリアスの処理
+            const repoAlias = ds.getRepository(AIModelAlias);
+            const existingAliases = await repoAlias.find({
+                where: { modelId: result.entity.id, orgKey: req.info.user.orgKey }
+            });
 
-            const saved = await repo.save(entity!);
-
-
-            // 重複エイリアスが存在しない場合は既存のエイリアスを削除して新しいエイリアスを追加
-            const existingAliases = await repoAlias.find({ where: { modelId: saved.id, orgKey: req.info.user.orgKey } });
             // 削除されたエイリアスを削除
-            const deletedAliases = existingAliases.filter(alias => !aliases.includes(alias.alias));
+            const deletedAliases = existingAliases.filter(alias => !processedAliases.includes(alias.alias));
             if (deletedAliases.length > 0) {
                 await repoAlias.remove(deletedAliases);
-            } else { }
+            }
+
             // 新しいエイリアスを追加
-            const newAliases = aliases.filter(alias => !existingAliases.some(existingAlias => existingAlias.alias === alias));
+            const newAliases = processedAliases.filter(alias =>
+                !existingAliases.some(existingAlias => existingAlias.alias === alias)
+            );
             if (newAliases.length > 0) {
                 const newAliasEntities = newAliases.map(alias => {
                     const aliasEntity = new AIModelAlias();
                     aliasEntity.orgKey = req.info.user.orgKey;
-                    // aliasEntity.provider = bodyData.providerType;
-                    // aliasEntity.providerType = bodyData.providerType;
-                    // aliasEntity.providerName = bodyData.providerName;
+                    aliasEntity.scopeInfo = result.entity.scopeInfo; // 親モデルのscopeInfoを継承
                     aliasEntity.alias = alias;
-                    aliasEntity.modelId = saved.id;
+                    aliasEntity.modelId = result.entity.id;
                     aliasEntity.createdBy = req.info.user.id;
                     aliasEntity.createdIp = req.info.ip;
                     aliasEntity.updatedBy = req.info.user.id;
@@ -685,15 +459,19 @@ export const upsertBaseModel = [
                     return aliasEntity;
                 });
                 await repoAlias.save(newAliasEntities);
-            } else { }
+            }
 
-            // 無理矢理 any型にキャストしてエイリアスを保存
-            (saved as any).aliases = aliases;
+            // レスポンスにエイリアスを含める
+            (result.entity as any).aliases = processedAliases;
 
-            res.status(isNew ? 201 : 200).json(saved);
+            res.status(result.isNew ? 201 : 200).json(result.entity);
         } catch (error) {
             console.error('Error upserting BaseModel:', error);
-            res.status(500).json({ message: 'BaseModelの保存に失敗しました' });
+            if (error instanceof Error && error.message.includes('Conflict')) {
+                res.status(409).json({ message: error.message });
+            } else {
+                res.status(500).json({ message: 'BaseModelの保存に失敗しました' });
+            }
         }
     }
 ];
@@ -708,26 +486,26 @@ export const deleteBaseModel = [
         const req = _req as UserRequest;
         try {
             const { modelId } = req.params;
-            const repo = ds.getRepository(AIModelEntity);
-            const entity = await repo.findOne({
-                where: safeWhere({ id: modelId, orgKey: req.info.user.orgKey })
-            });
-            if (!entity) {
+
+            const deleted = await ScopedEntityService.deleteWithScope(
+                ds.getRepository(AIModelEntity),
+                req.info.user,
+                modelId,
+                { userIp: req.info.ip }
+            );
+
+            if (!deleted) {
                 return res.status(404).json({ message: 'BaseModelが見つかりません' });
             }
-            // 論理削除フラグがなければ物理削除
-            if ('isActive' in entity) {
-                entity.isActive = false;
-                entity.updatedBy = req.info.user.id;
-                entity.updatedIp = req.info.ip;
-                await repo.save(entity);
-            } else {
-                await repo.delete(safeWhere({ id: modelId, orgKey: req.info.user.orgKey }));
-            }
+
             res.status(204).send();
         } catch (error) {
             console.error('Error deleting BaseModel:', error);
-            res.status(500).json({ message: 'BaseModelの削除に失敗しました' });
+            if (error instanceof Error && error.message.includes('Access denied')) {
+                res.status(403).json({ message: error.message });
+            } else {
+                res.status(500).json({ message: 'BaseModelの削除に失敗しました' });
+            }
         }
     }
 ];
@@ -759,37 +537,41 @@ export const getModelPricings = [
 // PUT: 新規/更新 (Upsert)
 export const upsertModelPricing = [
     param('modelId').optional().isUUID(),
+    body('modelId').isUUID(),
+    body('name').isString().notEmpty(),
+    body('scopeInfo.scopeType').isIn(Object.values(ScopeType)),
+    body('scopeInfo.scopeId').optional({ nullable: true }).isUUID(),
     body('validFrom').isISO8601(),
     body('inputPricePerUnit').isFloat({ min: 0 }),
     body('outputPricePerUnit').isFloat({ min: 0 }),
     body('unit').isString().notEmpty(),
+    body('isActive').optional({ nullable: true }).isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { modelId } = req.params;
-        const payload = req.body as AIModelPricingEntity;
-        try {
-            const repo = ds.getRepository(AIModelPricingEntity);
-            let entity;
-            if (modelId) {
-                entity = await repo.findOne({ where: { id: modelId, orgKey: req.info.user.orgKey } });
-            }
-            if (entity) {
-                repo.merge(entity, payload);
+        const { modelId: paramModelId } = req.params;
+        const bodyData = req.body as AIModelPricingEntity;
+
+        try {            // ScopedEntityServiceを使用してupsert処理
+            const result = await ScopedEntityService.upsertWithScope(
+                ds.getRepository(AIModelPricingEntity),
+                req.info.user,
+                paramModelId,
+                bodyData,
+                req.info.ip,
+                {
+                    uniqueFields: ['name'], // nameで一意性を保証（スコープを考慮）
+                }
+            );
+
+            res.status(result.isNew ? 201 : 200).json(result.entity);
+        } catch (error) {
+            console.error('Error upserting model pricing:', error);
+            if (error instanceof Error && error.message.includes('Conflict')) {
+                res.status(409).json({ message: error.message });
             } else {
-                entity = repo.create(payload);
-                entity.createdBy = req.info.user.id;
-                entity.createdIp = req.info.ip;
+                res.status(500).json({ message: '料金履歴の保存に失敗しました' });
             }
-            // 共通フィールドの設定
-            entity.orgKey = req.info.user.orgKey;
-            entity.updatedBy = req.info.user.id;
-            entity.updatedIp = req.info.ip;
-            const saved = await repo.save(entity);
-            res.status(modelId ? 200 : 201).json(saved);
-        } catch (err) {
-            console.error(err);
-            res.status(500).json({ message: '料金履歴の保存に失敗しました' });
         }
     }
 ];
@@ -838,20 +620,28 @@ export const deleteModelPricing = [
  * [user認証] 全タグ一覧取得
  */
 export const getAllTags = [
+    query('includeOverridden').optional().isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
 
         try {
-            const tags = await ds.getRepository(TagEntity).find({
-                where: {
-                    orgKey: req.info.user.orgKey,
-                    // isActive: true,
-                },
-                order: {
-                    uiOrder: 'ASC',
-                    name: 'ASC'
+            const { includeOverridden } = req.query as { includeOverridden?: boolean };
+
+            // ScopedEntityServiceを使用してスコープ考慮の一覧取得
+            const tags = await ScopedEntityService.findAllWithScope(
+                ds.getRepository(TagEntity),
+                req.info.user,
+                { includeOverridden }
+            );
+
+            // UIソート順でソート
+            tags.sort((a, b) => {
+                // まずuiOrderでソート、次にnameでソート
+                if (a.uiOrder !== b.uiOrder) {
+                    return a.uiOrder - b.uiOrder;
                 }
+                return a.name.localeCompare(b.name);
             });
 
             res.status(200).json(tags);
@@ -870,6 +660,8 @@ export const upsertTag = [
     body('name').notEmpty().isString().trim().isLength({ max: 50 }),
     body('label').optional({ nullable: true }).isString().trim().isLength({ max: 100 }),
     body('category').optional({ nullable: true }).isString().trim().isLength({ max: 50 }),
+    body('scopeInfo.scopeType').optional().isIn(Object.values(ScopeType)),
+    body('scopeInfo.scopeId').optional({ nullable: true }).isUUID(),
     body('uiOrder').optional({ nullable: true }).isInt({ min: 0 }),
     body('overrideOthers').optional({ nullable: true }).isBoolean(),
     body('description').optional({ nullable: true }).isString().trim().isLength({ max: 500 }),
@@ -879,77 +671,56 @@ export const upsertTag = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { tagId } = req.params;
-        const { name, label, description, color, isActive = true } = req.body;
+        const bodyData = req.body as TagEntity;
 
         try {
-            const result = await ds.transaction(async transactionalEntityManager => {
-                let tag: TagEntity;
-                let isCreation = false;
+            // デフォルトスコープをORGANIZATIONに設定（指定されていない場合）
+            if (!bodyData.scopeInfo?.scopeType) {
+                bodyData.scopeInfo = {
+                    scopeType: ScopeType.ORGANIZATION,
+                    scopeId: '' // ScopedEntityServiceが解決する
+                };
+            }
 
-                if (tagId) {
-                    // 更新の場合
-                    const _tag = await transactionalEntityManager.findOne(TagEntity, {
-                        where: {
-                            orgKey: req.info.user.orgKey,
-                            id: tagId
+            // ScopedEntityServiceを使用してupsert処理
+            const result = await ScopedEntityService.upsertWithScope(
+                ds.getRepository(TagEntity),
+                req.info.user,
+                tagId,
+                bodyData,
+                req.info.ip,
+                {
+                    uniqueFields: ['name'],
+                    beforeSave: async (entity: TagEntity, isNew: boolean) => {
+                        // オプショナルフィールドの設定
+                        if ('label' in bodyData) entity.label = bodyData.label || bodyData.name;
+                        if ('category' in bodyData) entity.category = bodyData.category;
+                        if ('description' in bodyData) entity.description = bodyData.description;
+                        if ('color' in bodyData) entity.color = bodyData.color;
+                        if ('uiOrder' in bodyData) entity.uiOrder = bodyData.uiOrder || 10000;
+                        if ('overrideOthers' in bodyData) entity.overrideOthers = bodyData.overrideOthers || false;
+
+                        // 新規作成時のデフォルト値設定
+                        if (isNew) {
+                            entity.usageCount = 0;
+                            entity.uiOrder = entity.uiOrder || 10000;
                         }
-                    });
-
-                    if (!_tag) {
-                        throw new EntityNotFoundError(TagEntity, { tagId });
-                    }
-                    tag = _tag;
-                } else {
-                    // 作成の場合
-                    tag = new TagEntity();
-                    tag.orgKey = req.info.user.orgKey;
-                    tag.createdBy = req.info.user.id;
-                    tag.createdIp = req.info.ip;
-                    tag.usageCount = 0;
-                    isCreation = true;
-                }
-
-                // 名前の重複チェック（既存のタグの名前と異なる場合のみ）
-                if (!tagId || name !== tag.name) {
-                    const existingTag = await transactionalEntityManager.findOne(TagEntity, {
-                        where: { orgKey: req.info.user.orgKey, name }
-                    });
-
-                    if (existingTag && existingTag.id !== tagId) {
-                        throw new Error('同じ名前のタグが既に存在します');
                     }
                 }
+            );
 
-                // タグ情報を設定・更新
-                tag.name = name;
-                tag.label = label || name || null;
-                tag.description = description || null;
-                tag.category = req.body.category || null;
-                tag.uiOrder = req.body.uiOrder || 10000;
-                tag.overrideOthers = req.body.overrideOthers || false;
-                tag.color = color || null;
-                tag.isActive = isActive;
-                tag.updatedBy = req.info.user.id;
-                tag.updatedIp = req.info.ip;
-
-                const savedTag = await transactionalEntityManager.save(TagEntity, tag);
-                return { tag: savedTag, isCreation };
-            });
-
-            const statusCode = result.isCreation ? 201 : 200;
-            const message = result.isCreation ? 'タグが正常に作成されました' : 'タグ情報が正常に更新されました';
+            const statusCode = result.isNew ? 201 : 200;
+            const message = result.isNew ? 'タグが正常に作成されました' : 'タグ情報が正常に更新されました';
 
             res.status(statusCode).json({
-                ...result.tag,
+                ...result.entity,
                 message
             });
 
         } catch (error) {
             console.error('Error upserting tag:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
-            if (error instanceof EntityNotFoundError) {
-                res.status(404).json({ message: '指定されたタグが見つかりません' });
-            } else if ((error as any).message === '同じ名前のタグが既に存在します') {
-                res.status(400).json({ message: (error as any).message });
+            if (error instanceof Error && error.message.includes('Conflict')) {
+                res.status(409).json({ message: '同じ名前のタグが既に存在します' });
             } else {
                 res.status(500).json({ message: 'タグの作成・更新中にエラーが発生しました' });
             }
@@ -968,33 +739,22 @@ export const deleteTag = [
         const { tagId } = req.params;
 
         try {
-            await ds.transaction(async transactionalEntityManager => {
-                // 削除対象のタグが存在するか確認
-                const tag = await transactionalEntityManager.findOne(TagEntity, {
-                    where: {
-                        orgKey: req.info.user.orgKey,
-                        id: tagId,
-                        isActive: true
-                    }
-                });
+            const deleted = await ScopedEntityService.deleteWithScope(
+                ds.getRepository(TagEntity),
+                req.info.user,
+                tagId,
+                { userIp: req.info.ip }
+            );
 
-                if (!tag) {
-                    throw new EntityNotFoundError(TagEntity, { tagId });
-                }
-
-                // タグを論理削除
-                tag.isActive = false;
-                tag.updatedBy = req.info.user.id;
-                tag.updatedIp = req.info.ip;
-
-                await transactionalEntityManager.save(TagEntity, tag);
-            });
+            if (!deleted) {
+                return res.status(404).json({ message: '指定されたタグが見つかりません' });
+            }
 
             res.status(200).json({ message: 'タグが正常に削除されました' });
         } catch (error) {
             console.error('Error deleting tag:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
-            if (error instanceof EntityNotFoundError) {
-                res.status(404).json({ message: '指定されたタグが見つかりません' });
+            if (error instanceof Error && error.message.includes('Access denied')) {
+                res.status(403).json({ message: error.message });
             } else {
                 res.status(500).json({ message: 'タグの削除中にエラーが発生しました' });
             }

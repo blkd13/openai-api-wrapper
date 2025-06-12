@@ -126,7 +126,7 @@ export const getApiProviders = [
         const { type } = req.query as { type: string };
         // 認証済み経路の方はパラメータに orgKey が無いので、ユーザー情報から取得する
         const nonAuth = !!req.params.orgKey;
-        const isAdmin = req.info && req.info.user && req.info.user.roleList.find(role => [UserRoleType.Admin, UserRoleType.Maintainer].includes(role.role));
+        const isAdmin = req.info && req.info.user && req.info.user.roleList.find(role => [UserRoleType.Admin, UserRoleType.SuperAdmin].includes(role.role));
         const orgKey = isAdmin ? req.info.user.orgKey : req.params.orgKey;
         // console.log('isAdmin:', isAdmin);
         // orgKey が指定されている場合、ユーザーのテナントキーと一致しない場合は403エラーを返す

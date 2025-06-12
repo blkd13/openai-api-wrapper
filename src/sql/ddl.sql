@@ -1,4 +1,5 @@
 -- 重複しないように作り直した VIEW
+--   DROP VIEW predict_history_view;
 CREATE OR REPLACE VIEW predict_history_view AS
 WITH p1_ranked AS (
     SELECT
@@ -42,6 +43,7 @@ SELECT
     p2.connection_id,
     p2.stream_id,
     p2.message_id,
+    u.org_key,
     COALESCE(u.id, u2.id) AS user_id
 FROM
     p1_ranked p1

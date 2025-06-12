@@ -163,9 +163,17 @@ export enum AIModelPricingUnit {
 }
 @Entity()
 @Index(['orgKey', 'modelId'])
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId', 'name'], { unique: true })
 export class AIModelPricingEntity extends MyBaseEntity {
     @Column({ type: 'uuid' })
     modelId!: string; // ModelのIDを参照する
+
+    @Column(type => ScopeInfo)
+    scopeInfo!: ScopeInfo;
+
+    @Column()
+    name!: string; // 価格設定の識別名（例: "GPT-4 Pricing 2024-01-01"）
 
     @Column('decimal', { precision: 10, scale: 6 })
     inputPricePerUnit!: number;
@@ -178,15 +186,21 @@ export class AIModelPricingEntity extends MyBaseEntity {
 
     @Column({ type: 'timestamptz' })
     validFrom!: Date;
+
+    @Column({ default: true })
+    isActive!: boolean; // 有効/無効フラグ
 }
 
 @Entity()
 @Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId', 'name'], { unique: true })
 @Index(['orgKey', 'provider']) // プロバイダ検索に備える
 export class AIProviderTemplateEntity extends MyBaseEntity {
     @Column({ type: 'enum', enum: AIProviderType })
-
     provider!: AIProviderType;
+
+    @Column()
+    name!: string;
 
     @Column(type => ScopeInfo)
     scopeInfo!: ScopeInfo;
@@ -377,29 +391,29 @@ export class AIModelEntity extends MyBaseEntity {
 }
 
 @Entity()
-@Index(['orgKey', 'alias'], { unique: true })
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId', 'alias'], { unique: true })
 export class AIModelAlias extends MyBaseEntity {
 
     @Column({ type: 'uuid' })
     modelId!: string;
 
-    // // 同名でのオーバーライドを許可するため、providerTypeとproviderNameの組み合わせでproviderを指定する。（providerIdを使ってしまうとオーバーライドができないため）
-    // @Column({ type: 'enum', enum: AIProviderType })
-    // providerType!: AIProviderType;
-
-    // @Column() 
-    // providerName?: string; // プロバイダ名（例: 'openai', 'azure_openai'）
+    @Column(type => ScopeInfo)
+    scopeInfo!: ScopeInfo;
 
     @Column({ type: 'text' })
     alias!: string;
 }
 
 @Entity()
-@Index(['orgKey'])
-@Index(['orgKey', 'name'], { unique: true })
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId', 'name'], { unique: true })
 export class TagEntity extends MyBaseEntity {
     @Column()
     name!: string;
+
+    @Column(type => ScopeInfo)
+    scopeInfo!: ScopeInfo;
 
     @Column({ nullable: true })
     category?: string; // タグのカテゴリ（例: '企業別', '技術別'など）
@@ -598,3 +612,41 @@ export class TagEntity extends MyBaseEntity {
 //   --DROP TABLE ai_model_entity;
 //   INSERT INTO ai_model_entity (id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,provider_name_list,provider_model_id,name,short_name,throttle_key,status,description,details,modalities,max_context_tokens,max_output_tokens,is_stream,input_formats,output_formats,default_parameters,capabilities,metadata,endpoint_template,documentation_url,license_type,knowledge_cutoff,release_date,deprecation_date,tags,ui_order,is_active,scope_info_scope_type,scope_info_scope_id)
 //   SELECT                       id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,provider_name_list,provider_model_id,name,short_name,throttle_key,status,description,details,modalities,max_context_tokens,max_output_tokens,is_stream,input_formats,output_formats,default_parameters,capabilities,metadata,endpoint_template,documentation_url,license_type,knowledge_cutoff,release_date,deprecation_date,tags,ui_order,is_active,'DIVISION','{1a7dcedc-5a7d-4aa6-828d-9c5aadec4f3f}' FROM ai_model_entity_bk;
+
+//   CREATE TABLE ai_provider_template_entity_bk AS SELECT * FROM ai_provider_template_entity; 
+//   CREATE TABLE ai_model_entity_bk AS SELECT * FROM ai_model_entity;
+//   CREATE TABLE ai_model_pricing_entity_bk AS SELECT * FROM ai_model_pricing_entity; 
+//   CREATE TABLE ai_model_alias_bk AS SELECT * FROM ai_model_alias;
+   
+//   DROP TABLE ai_provider_template_entity;
+//   DROP TABLE ai_model_entity;
+//   DROP TABLE ai_model_pricing_entity;
+//   DROP TABLE ai_model_alias;
+  
+//   -- 指定したテーブル群の全INSERT文を一括生成
+// WITH target_tables AS (
+//   SELECT unnest(ARRAY[
+//     'ai_provider_template_entity',
+//     'ai_model_entity', 
+//     'ai_model_pricing_entity',
+//     'ai_model_alias',
+//     'tag_entity'
+//   ]) AS table_name
+// ),
+// column_lists AS (
+//   SELECT 
+//     t.table_name,
+//     string_agg(c.column_name, ', ' ORDER BY c.ordinal_position) AS columns
+//   FROM target_tables t
+//   JOIN information_schema.columns c 
+//     ON c.table_name = t.table_name 
+//     AND c.table_schema = 'ribbon'
+//   GROUP BY t.table_name
+// )
+// SELECT 
+//   'INSERT INTO ' || table_name || ' (' || columns || ') ' ||
+//   'SELECT ' || columns || ' FROM ' || table_name || '_bk;' AS insert_statement
+// FROM column_lists
+// ORDER BY table_name;
+  
+  

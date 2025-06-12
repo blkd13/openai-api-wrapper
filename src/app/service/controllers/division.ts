@@ -37,7 +37,7 @@ const checkOrganizationPermission = async (
             scopeInfo: {
                 scopeType: ScopeType.ORGANIZATION
             },
-            role: In([UserRoleType.Admin, UserRoleType.Maintainer, UserRoleType.BizAdmin, UserRoleType.SysAdmin])
+            role: In([UserRoleType.Admin, UserRoleType.SuperAdmin])
         }
     });
 
@@ -63,7 +63,7 @@ const checkDivisionPermission = async (
                 scopeType: ScopeType.DIVISION,
                 scopeId: divisionId
             },
-            role: In([UserRoleType.Admin, UserRoleType.Maintainer])
+            role: In([UserRoleType.Admin, UserRoleType.SuperAdmin])
         }
     });
 
@@ -410,7 +410,7 @@ export const getAllDivisions = [
                                 scopeType: ScopeType.DIVISION,
                                 scopeId: division.id
                             },
-                            role: In([UserRoleType.Admin, UserRoleType.Maintainer]),
+                            role: In([UserRoleType.Admin, UserRoleType.SuperAdmin]),
                             status: UserStatus.Active
                         }
                     });
@@ -605,12 +605,13 @@ export const updateDivisionMember = [
     param('divisionId').notEmpty().isUUID(),
     param('userId').notEmpty().isUUID(),
     body('role').notEmpty().isIn(Object.values(UserRoleType)),
+    body('status').optional().isIn(Object.values(UserStatus)),
     body('priority').optional().isInt({ min: 0 }),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { divisionId, userId } = req.params;
-        const { role, priority } = req.body;
+        const { role, status, priority } = req.body;
 
         try {
             await ds.transaction(async transactionalEntityManager => {
@@ -635,7 +636,7 @@ export const updateDivisionMember = [
                             scopeType: ScopeType.DIVISION,
                             scopeId: divisionId
                         },
-                        status: UserStatus.Active
+                        // status: UserStatus.Active
                     }
                 });
 
@@ -643,9 +644,9 @@ export const updateDivisionMember = [
                     throw new EntityNotFoundError(UserRoleEntity, { divisionId, userId });
                 }
 
-                // Admin/Maintainerは最低1人必要なので、最後のAdmin/Maintainerの役割を変更しようとしている場合はエラー
-                if ((targetRole.role === UserRoleType.Admin || targetRole.role === UserRoleType.Maintainer) &&
-                    (role !== UserRoleType.Admin && role !== UserRoleType.Maintainer)) {
+                // Admin/SuperAdminは最低1人必要なので、最後のAdmin/SuperAdminの役割を変更しようとしている場合はエラー
+                if ((targetRole.role === UserRoleType.Admin || targetRole.role === UserRoleType.SuperAdmin) &&
+                    (role !== UserRoleType.Admin && role !== UserRoleType.SuperAdmin)) {
                     const adminCount = await transactionalEntityManager.count(UserRoleEntity, {
                         where: {
                             orgKey: req.info.user.orgKey,
@@ -653,13 +654,13 @@ export const updateDivisionMember = [
                                 scopeType: ScopeType.DIVISION,
                                 scopeId: divisionId
                             },
-                            role: In([UserRoleType.Admin, UserRoleType.Maintainer]),
+                            role: In([UserRoleType.Admin, UserRoleType.SuperAdmin]),
                             status: UserStatus.Active
                         }
                     });
 
                     if (adminCount <= 1) {
-                        throw new Error('Divisionには最低1人のAdmin/Maintainerが必要です');
+                        throw new Error('Divisionには最低1人のAdmin/SuperAdminが必要です');
                     }
                 }
 
@@ -694,18 +695,25 @@ export const updateDivisionMember = [
  */
 export const upsertDivisionMember = [
     param('divisionId').notEmpty().isUUID(),
+    param('userId').optional({ nullable: true }).isUUID(),
     body('userId').notEmpty().isUUID(),
     body('role').notEmpty().isIn(Object.values(UserRoleType)),
+    body('status').optional().isIn(Object.values(UserStatus)),
     body('priority').optional().isInt({ min: 0 }),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { divisionId } = req.params as { divisionId: string };
-        const { userId, role, priority = 0 } = req.body;
+        const { userId, role, status, priority = 0 } = req.body;
+
+        if (userId && req.params.userId !== userId) {
+            res.status(400).json({ message: 'User IDが一致しません' });
+            return;
+        }
 
         try {
             const result = await ds.transaction(async transactionalEntityManager => {
-                // 権限チェック: リクエスト元ユーザーがDivisionのAdmin/Maintainerかチェック
+                // 権限チェック: リクエスト元ユーザーがDivisionのAdmin/SuperAdminかチェック
                 const hasPermission = await checkDivisionPermission(
                     req.info.user.id,
                     req.info.user.orgKey,
@@ -745,9 +753,9 @@ export const upsertDivisionMember = [
                 let targetRole: UserRoleEntity;
 
                 if (existingRole) {
-                    // 更新の場合：Admin/Maintainerは最低1人必要なので、最後のAdmin/Maintainerの役割を変更しようとしている場合はエラー
-                    if ((existingRole.role === UserRoleType.Admin || existingRole.role === UserRoleType.Maintainer) &&
-                        (role !== UserRoleType.Admin && role !== UserRoleType.Maintainer)) {
+                    // 更新の場合：Admin/SuperAdminは最低1人必要なので、最後のAdmin/SuperAdminの役割を変更しようとしている場合はエラー
+                    if ((existingRole.role === UserRoleType.Admin || existingRole.role === UserRoleType.SuperAdmin) &&
+                        (role !== UserRoleType.Admin && role !== UserRoleType.SuperAdmin)) {
                         const adminCount = await transactionalEntityManager.count(UserRoleEntity, {
                             where: {
                                 orgKey: req.info.user.orgKey,
@@ -755,13 +763,13 @@ export const upsertDivisionMember = [
                                     scopeType: ScopeType.DIVISION,
                                     scopeId: divisionId
                                 },
-                                role: In([UserRoleType.Admin, UserRoleType.Maintainer]),
+                                role: In([UserRoleType.Admin, UserRoleType.SuperAdmin]),
                                 status: UserStatus.Active
                             }
                         });
 
                         if (adminCount <= 1) {
-                            throw new Error('Divisionには最低1人のAdmin/Maintainerが必要です');
+                            throw new Error('Divisionには最低1人のAdmin/SuperAdminが必要です');
                         }
                     }
 
@@ -770,7 +778,7 @@ export const upsertDivisionMember = [
                     existingRole.priority = priority;
                     existingRole.updatedBy = req.info.user.id;
                     existingRole.updatedIp = req.info.ip;
-                    existingRole.status = UserStatus.Active; // 更新時は必ずActiveにする
+                    existingRole.status = status || UserStatus.Active; // 更新時は必ずActiveにする
                     targetRole = existingRole;
                 } else {
                     // 新規作成
@@ -781,7 +789,7 @@ export const upsertDivisionMember = [
                     newRole.scopeInfo.scopeType = ScopeType.DIVISION;
                     newRole.scopeInfo.scopeId = divisionId;
                     newRole.priority = priority;
-                    newRole.status = UserStatus.Active;
+                    newRole.status = status || UserStatus.Active;
 
                     newRole.orgKey = req.info.user.orgKey;
                     newRole.createdBy = req.info.user.id;
@@ -864,8 +872,8 @@ export const removeDivisionMember = [
                     throw new Error('自身をDivisionから削除することはできません');
                 }
 
-                // Admin/Maintainerを削除しようとしている場合、他のAdmin/Maintainerが存在するか確認
-                if (targetRole.role === UserRoleType.Admin || targetRole.role === UserRoleType.Maintainer) {
+                // Admin/SuperAdminを削除しようとしている場合、他のAdmin/SuperAdminが存在するか確認
+                if (targetRole.role === UserRoleType.Admin || targetRole.role === UserRoleType.SuperAdmin) {
                     const adminCount = await transactionalEntityManager.count(UserRoleEntity, {
                         where: {
                             orgKey: req.info.user.orgKey,
@@ -873,13 +881,13 @@ export const removeDivisionMember = [
                                 scopeType: ScopeType.DIVISION,
                                 scopeId: divisionId
                             },
-                            role: In([UserRoleType.Admin, UserRoleType.Maintainer]),
+                            role: In([UserRoleType.Admin, UserRoleType.SuperAdmin]),
                             status: UserStatus.Active
                         }
                     });
 
                     if (adminCount <= 1) {
-                        throw new Error('Divisionには最低1人のAdmin/Maintainerが必要です');
+                        throw new Error('Divisionには最低1人のAdmin/SuperAdminが必要です');
                     }
                 }
 

@@ -13,6 +13,12 @@ export interface ScopedEntity {
     };
     orgKey: string;
     isActive: boolean;
+    createdAt?: Date;
+    updatedAt?: Date;
+    createdBy?: string;
+    updatedBy?: string;
+    updatedIp?: string;
+    createdIp?: string;
 }
 
 export interface ScopeQueryOptions {
@@ -30,7 +36,7 @@ export class ScopeUtils {
      * USER > DIVISION > ORGANIZATION の順で優先
      */
     static readonly SCOPE_PRIORITY = [ScopeType.USER, ScopeType.PROJECT, ScopeType.TEAM, ScopeType.DIVISION, ScopeType.ORGANIZATION, ScopeType.GLOBAL] as const;
-    static readonly ADMIN_ROLE_TYPES = [UserRoleType.Admin, UserRoleType.Maintainer, UserRoleType.Owner,] as UserRoleType[];
+    static readonly ADMIN_ROLE_TYPES = [UserRoleType.Admin, UserRoleType.SuperAdmin] as UserRoleType[];
 
     /**
      * スコープタイプに基づいてスコープIDを解決
@@ -146,5 +152,15 @@ export class ScopeUtils {
             // 管理権限のチェック
             return ScopeUtils.ADMIN_ROLE_TYPES.includes(role.role);
         });
+    }
+
+    /**
+     * ユーザーが指定されたスコープにアクセス権を持つかチェック
+     */
+    static async hasAccessToScope(user: UserTokenPayload, scopeType: ScopeType, scopeId: string): Promise<boolean> {
+        return user.roleList.some(role =>
+            role.scopeInfo.scopeType === scopeType &&
+            role.scopeInfo.scopeId === scopeId
+        );
     }
 }

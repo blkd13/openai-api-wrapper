@@ -19,13 +19,17 @@ export enum UserRoleType {
     Maintainer = 'Maintainer', // メンテナ
     User = 'User', // ユーザー
 
-    Owner = 'Owner', // 所有者
-    BizAdmin = 'BizAdmin', // ビジネス管理者
-    SysAdmin = 'SysAdmin', // システム管理者
-    Admin = 'Admin', // 管理者（
     Member = 'Member', // メンバー（スレッドの作成、編集、削除ができる）
     Viewer = 'Viewer', // 閲覧者（スレッドの閲覧のみ）
     Guest = 'Guest', // ゲスト（スレッドの閲覧のみ）
+
+    UserAdmin = 'UserAdmin', // ユーザー管理者
+    AIIntegrationAdmin = 'AIIntegrationAdmin', // ユーザー管理者
+    SystemIntegrationAdmin = 'SystemIntegrationAdmin', // ユーザー管理者
+
+    Auditor = 'Auditor', // 監査者
+    Admin = 'Admin', // 管理者
+    SuperAdmin = 'SuperAdmin', // スーパーユーザー
 }
 // CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 // SELECT uuid_generate_v4();

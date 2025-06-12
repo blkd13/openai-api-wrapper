@@ -332,10 +332,8 @@ export const authenticateUserTokenWsMiddleGenerator = (roleType?: UserRoleType) 
                                     // user.dataValuesはそのままだとゴミがたくさん付くので、項目ごとにUserModelにマッピングする。
                                     // TODO ここはもっとスマートに書けるはず。マッパーを用意するべきか？
 
-                                    if (roleType === UserRoleType.Admin) {
-                                        // 管理者用の認証チェック
-                                        where['role'] = In([UserRoleType.Admin, UserRoleType.Maintainer]);
-                                    } else { }
+                                    // 管理者用の認証チェック
+                                    where['role'] = In([roleType, UserRoleType.SuperAdmin]);
 
                                     const userTokenPayload = {
                                         type: 'user',

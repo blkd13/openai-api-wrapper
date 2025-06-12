@@ -11,7 +11,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import moment, { Moment } from "moment-timezone";
 
-import { authAdminRouter, authInviteRouter, authMaintainerRouter, authNoneRouter, authOAuthRouter, authUserRouter } from './routes.js';
+import { authAdminRouter, authAIIntegrationAdminRouter, authAuditorRouter, authInviteRouter, authMemberManagerRouter, authNoneRouter, authOAuthRouter, authSuperAdminRouter, authSystemIntegrationAdminRouter, authUserRouter } from './routes.js';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { getAccessToken, getOAuthApiProxy } from './api/api-proxy.js';
 import { authenticateUserTokenMiddleGenerator, authenticateUserTokenWsMiddleGenerator } from './middleware/authenticate.js';
@@ -44,8 +44,18 @@ rootRouter.use('/public', authNoneRouter);
 rootRouter.use('/user', authUserRouter);
 // admin認証が必要なルート
 rootRouter.use('/admin', authAdminRouter);
-// maintainer認証が必要なルート
-rootRouter.use('/maintainer', authMaintainerRouter);
+// // maintainer認証が必要なルート
+// rootRouter.use('/maintainer', authMaintainerRouter);
+// AI管理者認証が必要なルート
+rootRouter.use('/ai-manager', authAIIntegrationAdminRouter);
+// API管理者認証が必要なルート
+rootRouter.use('/api-manager', authSystemIntegrationAdminRouter);
+// Auditor認証が必要なルート
+rootRouter.use('/auditor', authAuditorRouter);
+// SuperAdmin認証が必要なルート
+rootRouter.use('/super-admin', authSuperAdminRouter);
+// MemberManager認証が必要なルート
+rootRouter.use('/member-manager', authMemberManagerRouter);
 // ワンタイムトークン認証が必要なルート
 rootRouter.use('/invite', authInviteRouter);
 
