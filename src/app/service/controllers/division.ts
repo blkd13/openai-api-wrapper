@@ -141,17 +141,23 @@ export const getDivision = [
 
 /**
  * [user認証] Division 作成・更新（Upsert）
+ * 
+ * Division作成時の注意点：
+ * - adminUserIdパラメーターを指定することで、最初のAdminユーザーを指定できます
+ * - adminUserIdが指定されない場合は、リクエスト元ユーザーが自動的にAdminになります
+ * - 少なくとも1人のAdminが必要なため、作成時には必ずAdminユーザーが設定されます
  */
 export const upsertDivision = [
     param('divisionId').optional().isUUID(),
     body('name').notEmpty().isString().trim(),
     body('label').notEmpty().isString().trim(),
     body('isActive').optional().isBoolean(),
+    body('adminUserId').optional().isUUID(), // division作成時の最初のAdminユーザーを指定（未指定だとリクエスト元ユーザーがAdminになる）
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { divisionId } = req.params;
-        const { name, label, isActive = true } = req.body;
+        const { name, label, isActive = true, adminUserId = req.info.user.id } = req.body;
 
         try {
             const result = await ds.transaction(async transactionalEntityManager => {
@@ -212,7 +218,6 @@ export const upsertDivision = [
                         throw new Error('同じ名前のDivisionが既に存在します');
                     }
                 }
-
                 // Division情報を設定・更新
                 division.name = name;
                 division.label = label;
@@ -222,10 +227,20 @@ export const upsertDivision = [
 
                 const savedDivision = await transactionalEntityManager.save(DivisionEntity, division);
 
-                // 作成の場合のみ、作成者をDivision のAdminとして自動追加
+                // 作成の場合のみ、Admin ユーザーを追加
                 if (isCreation) {
+                    // adminUserIdが指定されている場合は、そのユーザーをAdminとして追加
+                    const targetAdminUserId = adminUserId || req.info.user.id;
+
+                    // 指定されたユーザーが存在するか確認
+                    if (adminUserId) {
+                        await transactionalEntityManager.findOneOrFail(UserEntity, {
+                            where: { orgKey: req.info.user.orgKey, id: adminUserId, status: UserStatus.Active }
+                        });
+                    }
+
                     const creatorRole = new UserRoleEntity();
-                    creatorRole.userId = req.info.user.id;
+                    creatorRole.userId = targetAdminUserId;
                     creatorRole.role = UserRoleType.Admin;
                     creatorRole.scopeInfo = new ScopeInfo();
                     creatorRole.scopeInfo.scopeType = ScopeType.DIVISION;
@@ -247,7 +262,6 @@ export const upsertDivision = [
 
             const statusCode = result.isCreation ? 201 : 200;
             const message = result.isCreation ? 'Divisionが正常に作成されました' : 'Division情報が正常に更新されました';
-
             res.status(statusCode).json({
                 ...result.division,
                 message
@@ -256,7 +270,7 @@ export const upsertDivision = [
         } catch (error) {
             console.error('Error upserting division:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
             if (error instanceof EntityNotFoundError) {
-                res.status(404).json({ message: '指定されたDivisionが見つかりません' });
+                res.status(404).json({ message: '指定されたDivisionまたはAdminユーザーが見つかりません' });
             } else if ((error as any).message === 'Divisionを作成する権限がありません' ||
                 (error as any).message === 'このDivisionを更新する権限がありません' ||
                 (error as any).message === '同じ名前のDivisionが既に存在します') {
@@ -778,7 +792,7 @@ export const upsertDivisionMember = [
                     existingRole.priority = priority;
                     existingRole.updatedBy = req.info.user.id;
                     existingRole.updatedIp = req.info.ip;
-                    existingRole.status = status || UserStatus.Active; // 更新時は必ずActiveにする
+                    existingRole.status = status || UserStatus.Active;
                     targetRole = existingRole;
                 } else {
                     // 新規作成

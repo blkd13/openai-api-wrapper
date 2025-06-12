@@ -206,7 +206,7 @@ export function proxyStringToAgentObject(proxyString: string) {
         return undefined;
     } else if (proxyString.startsWith('http://')) {
         return new HttpsProxyAgent(proxyString);
-    } else if (proxyString.startsWith('socks://')) {
+    } else if (proxyString.startsWith('socks5://')) {
         return new SocksProxyAgent(proxyString);
     }
 }

@@ -215,7 +215,7 @@ export const getDepartmentMemberLog = [
             const isContainRole = await ds.getRepository(UserRoleEntity).findOneOrFail({ where });
             const targetUser = await ds.getRepository(UserEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, id: userId } });
             const predictHistory = await ds.query(`
-                SELECT created_at, model, provider, take, cost, req_token, res_token, status
+                SELECT created_at, model, provider, take, cost, req_token, res_token, status, idempotency_key, args_hash
                 FROM predict_history_view 
                 WHERE user_id = $1
                 ORDER BY created_at DESC
@@ -339,6 +339,7 @@ export async function readRequestLog(
     }
     // 見つかったファイルを読み込む
     const jsonString = await fs.readFile(filePath, 'utf8');
+    // console.log(`readRequestLog: ${filePath}`);
     if (type === 'response') {
         const jsonObj = JSON.parse(jsonString);
         if (jsonObj.response.headers && jsonObj.response.headers['set-cookie']) {
