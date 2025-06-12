@@ -238,6 +238,9 @@ export class AIProviderEntity extends MyBaseEntity {
     @Column()
     label!: string;
 
+    @Column({ type: 'text', nullable: true })
+    description?: string;
+
     @Column({ type: 'jsonb' })
     config!: AIProviderConfig;
 
@@ -590,7 +593,8 @@ export class TagEntity extends MyBaseEntity {
   
 //   UPDATE ai_model_pricing_entity SET unit='USD/1M tokens' WHERE unit='USD/1Mtokens';
   
-  
-  
-  
-  
+
+//   CREATE TABLE ai_model_entity_bk AS SELECT * FROM ai_model_entity;
+//   --DROP TABLE ai_model_entity;
+//   INSERT INTO ai_model_entity (id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,provider_name_list,provider_model_id,name,short_name,throttle_key,status,description,details,modalities,max_context_tokens,max_output_tokens,is_stream,input_formats,output_formats,default_parameters,capabilities,metadata,endpoint_template,documentation_url,license_type,knowledge_cutoff,release_date,deprecation_date,tags,ui_order,is_active,scope_info_scope_type,scope_info_scope_id)
+//   SELECT                       id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,provider_name_list,provider_model_id,name,short_name,throttle_key,status,description,details,modalities,max_context_tokens,max_output_tokens,is_stream,input_formats,output_formats,default_parameters,capabilities,metadata,endpoint_template,documentation_url,license_type,knowledge_cutoff,release_date,deprecation_date,tags,ui_order,is_active,'DIVISION','{1a7dcedc-5a7d-4aa6-828d-9c5aadec4f3f}' FROM ai_model_entity_bk;
