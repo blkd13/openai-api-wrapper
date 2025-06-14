@@ -720,7 +720,7 @@ export const upsertDivisionMember = [
         const { divisionId } = req.params as { divisionId: string };
         const { userId, role, status, priority = 0 } = req.body;
 
-        if (userId && req.params.userId !== userId) {
+        if (userId && req.params.userId && req.params.userId !== userId) {
             res.status(400).json({ message: 'User IDが一致しません' });
             return;
         }
