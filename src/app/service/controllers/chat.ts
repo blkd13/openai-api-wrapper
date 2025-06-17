@@ -24,7 +24,7 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
 import { countChars, GenerateContentRequestForCache, mapForGemini, MyVertexAiClient } from '../../common/my-vertexai.js';
 import { Utils } from '../../common/utils.js';
 import { Observer } from 'rxjs/dist/types/index.js';
-import { COUNT_TOKEN_MODEL } from './chat-by-project-model.js';
+import { COUNT_TOKEN_MODEL, getAIProvider } from './chat-by-project-model.js';
 
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
@@ -108,7 +108,7 @@ export const chatCompletionStream = [
 
         const label = inDto.options?.idempotencyKey || `api-${clientId}`;
 
-        const provider = genClientByProvider(inDto.args.model);
+        const provider = await getAIProvider(req.info.user, inDto.args.model);
 
         let subscriber: Partial<Observer<ChatCompletionChunk>> | ((value: ChatCompletionChunk) => void) | undefined;
 
@@ -197,7 +197,7 @@ export const codegenCompletion = [
     body('model').notEmpty(),
     body('prompt'),
     validationErrorHandler,
-    (_req: Request, res: Response) => {
+    async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const inDto = {
             args: {
@@ -216,7 +216,7 @@ export const codegenCompletion = [
         let text = '';
         const label = req.body.options?.idempotencyKey || `chat-${req.info.user.id}`;
         const aiApi = new OpenAIApiWrapper();
-        const provider = genClientByProvider(inDto.args.model);
+        const provider = await getAIProvider(req.info.user, inDto.args.model);
 
         aiApi.chatCompletionObservableStream(
             inDto.args, { label }, provider
@@ -270,7 +270,7 @@ export const chatCompletion = [
     query('streamId').trim().notEmpty(),
     body('args').notEmpty(),
     validationErrorHandler,
-    (_req: Request, res: Response) => {
+    async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const clientId = `${req.info.user.id}-${req.query.connectionId}` as string;
 
@@ -278,7 +278,7 @@ export const chatCompletion = [
 
         const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.streamId}`;
         // const aiApi = new OpenAIApiWrapper();
-        const provider = genClientByProvider(inDto.args.model);
+        const provider = await getAIProvider(req.info.user, inDto.args.model);
 
         // console.log(aiApi.wrapperOptions.provider);
         aiApi.chatCompletionObservableStream(
@@ -311,10 +311,11 @@ export const chatCompletion = [
 export const geminiCountTokens = [
     body('args').notEmpty(),
     validationErrorHandler,
-    (_req: Request, res: Response) => {
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
         const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
         const args = inDto.args;
-        const my_vertexai = (genClientByProvider(args.model).client as MyVertexAiClient);
+        const my_vertexai = (await getAIProvider(req.info.user, args.model)).client as MyVertexAiClient;
         const client = my_vertexai.client as VertexAI;
         const generativeModel = client.preview.getGenerativeModel({
             model: 'gemini-1.5-flash',
@@ -370,11 +371,14 @@ export const geminiCreateContextCache = [
     body('args').notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
         const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
         const args = inDto.args;
         const projectId: string = GCP_PROJECT_ID || 'dummy';
         const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
         const url = `${CONTEXT_CACHE_API_ENDPOINT}/projects/${projectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`;
+
+        const my_vertexai = (await getAIProvider(req.info.user, args.model)).client as MyVertexAiClient;
         normalizeMessage(args, false).subscribe({
             next: next => {
                 const args = next.args;
@@ -402,8 +406,6 @@ export const geminiCreateContextCache = [
                 }
                 // fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
 
-                const my_vertexai = (genClientByProvider(args.model).client as MyVertexAiClient);
-                const client = my_vertexai.client as VertexAI;
                 // アクセストークンを取得してリクエスト
                 my_vertexai.getAuthorizedHeaders().then(headers =>
                     axios.post(url, requestBody, headers)
@@ -426,11 +428,10 @@ export const geminiUpdateContextCache = [
     body('expire_time').notEmpty(),
     body('cache_name').notEmpty(),
     validationErrorHandler,
-    async (_req: Request, res: Response) => {
+    async (_req: UserRequest, res: Response) => {
         const inDto = _req.body as { expire_time: string, cache_name: string };
         // myVertex取るために仕方なくCOUNT_TOKEN_MODELを使う
-        const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
-        const client = my_vertexai.client as VertexAI;
+        const my_vertexai = (await getAIProvider(_req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient;
         my_vertexai.getAuthorizedHeaders().then(headers =>
             axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${inDto.cache_name}`, { expire_time: inDto.expire_time }, headers)
         ).then(response => {
@@ -448,11 +449,10 @@ export const geminiUpdateContextCache = [
 export const geminiDeleteContextCache = [
     body('cache_name').notEmpty(),
     validationErrorHandler,
-    async (_req: Request, res: Response) => {
+    async (_req: UserRequest, res: Response) => {
         const inDto = _req.body as { cache_name: string };
         // myVertex取るために仕方なくCOUNT_TOKEN_MODELを使う
-        const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
-        const client = my_vertexai.client as VertexAI;
+        const my_vertexai = (await getAIProvider(_req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient;
         my_vertexai.getAuthorizedHeaders().then(headers =>
             axios.delete(`${CONTEXT_CACHE_API_ENDPOINT}/${inDto.cache_name}`, headers)
         ).then(response => {
@@ -468,10 +468,9 @@ export const geminiDeleteContextCache = [
  */
 export const geminiGetContextCache = [
     validationErrorHandler,
-    async (_req: Request, res: Response) => {
+    async (_req: UserRequest, res: Response) => {
         // myVertex取るために仕方なくCOUNT_TOKEN_MODELを使う
-        const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
-        const client = my_vertexai.client as VertexAI;
+        const my_vertexai = (await getAIProvider(_req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient;
         my_vertexai.getAuthorizedHeaders().then(headers =>
             axios.get(`${CONTEXT_CACHE_API_ENDPOINT}/projects/${GCP_PROJECT_ID}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`, headers)
         ).then(response => {

@@ -109,7 +109,7 @@ export const fetchCommit = [
                 const descriptionObject = { provider, owner, repo, refType, refId, commitId };
                 const http_url_to_repo = repository.html_url;
                 const path_with_namespace = repository.full_name;
-                const object = await gitFetchCommitId(req.info.user.orgKey, req.info.user.id, req.info.ip, projectId, FileGroupType.GITEA, repository.name, provider, descriptionObject, repository.id, e.uriBase, http_url_to_repo, path_with_namespace, encodeURIComponent(req.info.oAuth.providerEmail || ''), accessToken, commitId);
+                const object = await gitFetchCommitId(req.info.user.orgKey, req.info.user.id, req.info.ip, projectId, FileGroupType.GITEA, repository.name, provider, descriptionObject, repository.id, e.uriBase, http_url_to_repo, path_with_namespace, encodeURIComponent(req.info.oAuth.providerEmail || ''), accessToken, commitId, req.info.user);
                 gitProjectCommit = object.gitProjectCommit;
                 fileGroup = object.fileGroup;
             }

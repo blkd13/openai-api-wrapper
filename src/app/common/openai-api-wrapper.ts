@@ -637,6 +637,18 @@ class RunBit {
                                     if (done) {
                                         // ストリームが終了したらループを抜ける
                                         tokenCount.cost = tokenCount.calcCost();
+
+                                        // console.dir(TokenCount.COST_TABLE[args.model]);
+
+                                        if ((usageMetadata as any).cache_creation_input_tokens && TokenCount.COST_TABLE[args.model] && (TokenCount.COST_TABLE[args.model] as any).metadata?.cache_creation_input_tokens > 0) {
+                                            console.log(logObject.output('fine', '', `Cache creation input tokens: ${(usageMetadata as any).cache_creation_input_tokens}`));
+                                            tokenCount.cost += (usageMetadata as any).cache_creation_input_tokens * (TokenCount.COST_TABLE[args.model] as any).metadata?.cache_creation_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                                        }
+                                        if ((usageMetadata as any).cache_read_input_tokens && TokenCount.COST_TABLE[args.model] && (TokenCount.COST_TABLE[args.model] as any).metadata?.cache_read_input_tokens > 0) {
+                                            console.log(logObject.output('fine', '', `Cache read input tokens: ${(usageMetadata as any).cache_read_input_tokens}`));
+                                            tokenCount.cost += (usageMetadata as any).cache_read_input_tokens * (TokenCount.COST_TABLE[args.model] as any).metadata?.cache_read_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                                        }
+
                                         console.log(logObject.output('fine', '', JSON.stringify(usageMetadata)));
                                         observer.complete();
 

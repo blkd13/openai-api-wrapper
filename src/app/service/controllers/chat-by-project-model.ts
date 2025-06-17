@@ -6,7 +6,7 @@ import axios from 'axios';
 import { concat, concatMap, from, map, Observable, of, retry, tap, toArray } from 'rxjs';
 import { ChatCompletionAssistantMessageParam, ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionMessageParam, ChatCompletionMessageToolCall, ChatCompletionTool, ChatCompletionToolMessageParam, FileContent } from "openai/resources";
 
-import { AIProviderClient, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, aiApi, calculateTokenCost, genClientByProvider, getTiktokenEncoder, invalidMimeList, normalizeMessage, providerInstances, providerPrediction } from '../../common/openai-api-wrapper.js';
+import { AIProviderClient, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, TokenCount, aiApi, calculateTokenCost, genClientByProvider, getTiktokenEncoder, invalidMimeList, normalizeMessage, providerInstances, providerPrediction } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ds } from '../db.js';
@@ -33,7 +33,7 @@ import { EntityManager, In, IsNull, Not } from 'typeorm';
 import { clients } from './chat.js';
 import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
 import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus, ScopeType, UserEntity, UserRoleEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
-import { AIModelEntity, AIProviderEntity, AIProviderType, AzureOpenAIConfig, getAIProviderConfig, OpenAIConfig, } from '../entity/ai-model-manager.entity.js';
+import { AIModelEntity, AIModelPricingEntity, AIProviderEntity, AIProviderType, AzureOpenAIConfig, getAIProviderConfig, OpenAIConfig, } from '../entity/ai-model-manager.entity.js';
 import { Utils, EnhancedRequestLimiter } from '../../common/utils.js';
 import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
 import { functionDefinitions } from '../tool/_index.js';
@@ -669,6 +669,40 @@ export async function getAIProvider(user: UserTokenPayload, modelName: string): 
 
     const model = modelList[0]; // 最優先のモデルを使用
 
+    if (!TokenCount.COST_TABLE[modelName]) {
+        // console.log(`モデル ${modelName} の価格情報が見つからないので、デフォルトの価格を設定します。`);
+        // TODO 本来はidじゃなくてnameで当ててscopeの優先順位計算をすべきだが一旦手抜き
+        const price = await ds.getRepository(AIModelPricingEntity).findOne({
+            where: safeWhere({ orgKey: user.orgKey, modelId: model.id, isActive: true }),
+        }) || {} as AIModelPricingEntity;
+        if (!price.id) {
+            // errorでもよかったが一応、、
+            // throw new Error(`モデル ${modelName} の価格情報が見つかりません。`);
+            Object.assign(price, {
+                id: '',
+                orgKey: user.orgKey,
+                modelId: model.id,
+                scopeInfo: {
+                    scopeType: ScopeType.ORGANIZATION,
+                    scopeId: user.orgKey,
+                },
+                name: modelName,
+                inputPricePerUnit: 0,
+                outputPricePerUnit: 0,
+                unit: '',
+                validFrom: new Date(),
+                isActive: true,
+            });
+        } else { }
+
+        // CONST_TABLEに無理やり追加。本当はこんなやり方はしたくない。
+        TokenCount.COST_TABLE[modelName] = {
+            prompt: price.inputPricePerUnit,
+            completion: price.outputPricePerUnit,
+            metadata: price.metadata,
+        } as { prompt: number, completion: number, metadata?: any };
+    }
+
     // // modelList内でproviderNameが重複している場合は最初のものを使用する
     // const providerMap = modelList.reduce((prev, curr) => {
     //     if (prev[curr.providerName]) {
@@ -735,7 +769,7 @@ export async function getAIProvider(user: UserTokenPayload, modelName: string): 
             return providerInstances[provider.id].client;
         } else { }
 
-        console.log(`Using AI provider: ${provider.name} (${provider.type})`);
+        console.log(`Using AI provider: ${provider.name} (${provider.type}) ${provider.id})`);
 
         let aiProviderClient: AIProviderClient;
 
@@ -829,7 +863,7 @@ export const chatCompletionByProjectModel = [
         }[] = [];
         try {
 
-            const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
+            const my_vertexai = ((await getAIProvider(req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient);
             const client = my_vertexai.client;
             const generativeModel = client.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
@@ -1551,7 +1585,7 @@ export const chatCompletionByProjectModel = [
                                         const savedContentPart = await transactionalEntityManager.save(ContentPartEntity, newContentPart);
 
                                         // トークンカウントを更新
-                                        await geminiCountTokensByContentPart(transactionalEntityManager, [savedContentPart]);
+                                        await geminiCountTokensByContentPart(transactionalEntityManager, [savedContentPart], req.info.user);
                                     } else { }
                                 }
                             } else { }
@@ -1592,7 +1626,7 @@ export const chatCompletionByProjectModel = [
                         // コンテンツ内容が無いものは保存する意味ないので削除しておかないと geminiCountTokensByContentPart の中で保存されてしまう。
                         res.messageSet.contentParts = res.messageSet.contentParts.filter(contentPart => contentPart.text && contentPart.text.length > 0);
                         // トークンカウントを更新
-                        await geminiCountTokensByContentPart(transactionalEntityManager, res.messageSet.contentParts);
+                        await geminiCountTokensByContentPart(transactionalEntityManager, res.messageSet.contentParts, req.info.user);
                     });
                 }).catch(async error => {
                     await saveStock();
@@ -1634,7 +1668,7 @@ export const chatCompletionByProjectModel = [
                                         const savedContentPart = await transactionalEntityManager.save(ContentPartEntity, newContentPart);
 
                                         // トークンカウントを更新
-                                        await geminiCountTokensByContentPart(transactionalEntityManager, [savedContentPart]);
+                                        await geminiCountTokensByContentPart(transactionalEntityManager, [savedContentPart], req.info.user);
                                     } else { }
                                 }
                             } else { }
@@ -1720,6 +1754,7 @@ export const geminiCountTokensByProjectModel = [
         try {
             // カウントしたいだけだからパラメータは適当でOK。
             const args = { messages: [], model: COUNT_TOKEN_MODEL, temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, providerName: 'vertex_ai' } as MyChatCompletionCreateParamsStreaming;
+            const client = (await getAIProvider(req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient;
 
             // const preTokenCount = { totalTokens: 0, totalBillableCharacters: 0 };
             const tokenCountSummaryList: { [model: string]: { totalTokens: number, totalBillableCharacters?: number } }[] = [];
@@ -1805,8 +1840,7 @@ export const geminiCountTokensByProjectModel = [
                             const req: GenerateContentRequest = mapForGemini(args);
                             const countCharsObj = countChars(args);
                             // console.dir(req, { depth: null });
-                            const client = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient).client;
-                            const generativeModel = client.preview.getGenerativeModel({
+                            const generativeModel = client.client.preview.getGenerativeModel({
                                 model: COUNT_TOKEN_MODEL,
                                 safetySettings: [],
                             });
@@ -1908,8 +1942,9 @@ export const geminiCountTokensByThread = [
     }
 ];
 
-export async function geminiCountTokensByContentPart(transactionalEntityManager: EntityManager, contents: ContentPartEntity[], model: string = COUNT_TOKEN_MODEL): Promise<ContentPartEntity[]> {
-    const client = (genClientByProvider(model).client as MyVertexAiClient).client;
+export async function geminiCountTokensByContentPart(transactionalEntityManager: EntityManager, contents: ContentPartEntity[], user: UserTokenPayload, model: string = COUNT_TOKEN_MODEL): Promise<ContentPartEntity[]> {
+    const client = ((await getAIProvider(user, model)).client as MyVertexAiClient).client;
+    // console.dir(contents, { depth: null });
     const generativeModel = client.preview.getGenerativeModel({
         model, safetySettings: [],
     });
@@ -1988,8 +2023,8 @@ export async function geminiCountTokensByContentPart(transactionalEntityManager:
     }
 }
 
-export async function geminiCountTokensByFile(transactionalEntityManager: EntityManager, fileList: { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }[], model: string = COUNT_TOKEN_MODEL): Promise<FileBodyEntity[]> {
-    const my_vertexai = (genClientByProvider(model).client as MyVertexAiClient);
+export async function geminiCountTokensByFile(transactionalEntityManager: EntityManager, fileList: { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }[], user: UserTokenPayload, model: string = COUNT_TOKEN_MODEL): Promise<FileBodyEntity[]> {
+    const my_vertexai = ((await getAIProvider(user, model)).client as MyVertexAiClient);
     const client = my_vertexai.client;
     const generativeModel = client.preview.getGenerativeModel({
         model, safetySettings: [],
@@ -2184,7 +2219,7 @@ export const geminiCreateContextCacheByProjectModel = [
                         // } else { }
 
                         const countCharsObj = countChars(args);
-                        const my_vertexai = (genClientByProvider(model).client as MyVertexAiClient);
+                        const my_vertexai = (await getAIProvider(req.info.user, model)).client as MyVertexAiClient;
                         const client = my_vertexai.client;
                         const generativeModel = client.preview.getGenerativeModel({
                             model: COUNT_TOKEN_MODEL,
@@ -2309,7 +2344,7 @@ export const geminiUpdateContextCacheByProjectModel = [
 
             let savedCachedContent: VertexCachedContentEntity | undefined;
 
-            const my_vertexai = (genClientByProvider(inDto.args.model).client as MyVertexAiClient);
+            const my_vertexai = (await getAIProvider(req.info.user, inDto.args.model)).client as MyVertexAiClient;
             my_vertexai.getAuthorizedHeaders().then(headers =>
                 axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${cachedContent.name}`, { ttl }, headers)
             ).then(async response => {
@@ -2372,7 +2407,7 @@ export const geminiDeleteContextCacheByProjectModel = [
                     const inDto = thread.inDto;
                     const cachedContent: VertexCachedContentEntity = (inDto.args as any).cachedContent;
 
-                    const my_vertexai = (genClientByProvider(inDto.args.model).client as MyVertexAiClient);
+                    const my_vertexai = (await getAIProvider(req.info.user, inDto.args.model)).client as MyVertexAiClient;
                     // cachedContentを消して更新
                     delete (inDto.args as any).cachedContent;
                     thread.inDto = inDto;
@@ -2419,8 +2454,9 @@ export const geminiDeleteContextCacheByProjectModel = [
 export const geminiGetContextCache = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
         try {
-            const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
+            const my_vertexai = (await getAIProvider(req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient;
             my_vertexai.getAuthorizedHeaders().then(headers =>
                 axios.get(`${CONTEXT_CACHE_API_ENDPOINT}/projects/${GCP_PROJECT_ID}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`, headers)
             ).then(response => {

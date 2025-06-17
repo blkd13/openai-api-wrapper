@@ -14,7 +14,6 @@ import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
 import { geminiCountTokensByContentPart } from './chat-by-project-model.js';
 import { isActiveFile } from './file-manager.js';
 import { ToolCallGroupEntity, ToolCallPartEntity } from '../entity/tool-call.entity.js';
-import { UUID } from 'typeorm/driver/mongodb/bson.typings.js';
 
 /**
  * [user認証] チーム作成
@@ -1911,7 +1910,7 @@ export const upsertMessageWithContents3 = [
                     }));
 
                     // トークンカウントの更新
-                    await geminiCountTokensByContentPart(transactionalEntityManager, updatedContentParts);
+                    await geminiCountTokensByContentPart(transactionalEntityManager, updatedContentParts, req.info.user);
 
                     // 不要になったContentPartsを削除
                     const contentPartIdsToKeep = updatedContentParts.map(cp => cp.id);

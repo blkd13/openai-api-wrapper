@@ -5,7 +5,7 @@ const { GITEA_CONFIDENCIAL_OWNERS = '' } = process.env as { GITEA_CONFIDENCIAL_O
 import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
 import { UserRequest } from "../models/info.js";
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
 import { Utils } from "../../common/utils.js";
 import { ds } from "../db.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
@@ -978,6 +978,8 @@ export async function giteaFunctionDefinitions(providerName: string,
             handler: async (args: { userPrompt?: string, owner: string, repo: string, file_path_list: string[], ref: string }): Promise<string> => {
                 const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { userPrompt = '要約してください', owner, repo, file_path_list, ref } = args;
+                const aiProvider = await getAIProvider(req.info.user, obj.inDto.args.model);
+
                 if (GITEA_CONFIDENCIAL_OWNERS.split(',').includes(owner)) {
                     return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\n\`\`\``);
                 } else { }
@@ -1023,8 +1025,6 @@ export async function giteaFunctionDefinitions(providerName: string,
                         // toolは使わないので空にしておく
                         delete inDto.args.tool_choice;
                         delete inDto.args.tools;
-
-                        const aiProvider = genClientByProvider(inDto.args.model);
 
                         const newLabel = `${label}-call_ai-${inDto.args.model}`;
                         // レスポンス返した後にゆるりとヒストリーを更新しておく。

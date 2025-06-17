@@ -181,6 +181,9 @@ export class AIModelPricingEntity extends MyBaseEntity {
     @Column('decimal', { precision: 10, scale: 6 })
     outputPricePerUnit!: number;
 
+    @Column({type:'jsonb', nullable: true})
+    metadata?: Record<string, any>; // 任意のメタデータ（例: "currency": "USD", "model": "gpt-4"）
+
     @Column({ type: 'varchar', default: 'USD/1Mtokens' })
     unit!: string;
 
@@ -568,6 +571,7 @@ export class TagEntity extends MyBaseEntity {
 //         te.first_created_ip
 // )
 // INSERT INTO tag_entity (
+//     id,
 //     org_key,
 //     name,
 //     label,
@@ -575,6 +579,8 @@ export class TagEntity extends MyBaseEntity {
 //     color,
 //     usage_count,
 //     is_active,
+//     scope_info_scope_type,
+//     scope_info_scope_id,
 //     created_by,
 //     updated_by,
 //     created_at,
@@ -583,13 +589,16 @@ export class TagEntity extends MyBaseEntity {
 //     updated_ip
 // )
 // SELECT 
+//     gen_random_uuid() as id,  -- UUIDを生成
 //     org_key,
 //     tag_name as name,
-//     NULL as label,  -- 初期値はNULL、後で管理画面から設定
-//     NULL as description,  -- 初期値はNULL
-//     NULL as color,  -- 初期値はNULL
+//     NULL as label,
+//     NULL as description,
+//     NULL as color,
 //     usage_count,
 //     true as is_active,
+//     'ORGANIZATION'::tag_entity_scope_info_scope_type_enum as scope_info_scope_type,  -- 適切なスコープタイプを設定
+//     '{f31006cf-1d10-4a48-ab5e-af6003deac32}' as scope_info_scope_id,  -- 組織レベルの場合はNULL
 //     COALESCE(first_created_by, 'system') as created_by,
 //     COALESCE(last_updated_by, 'system') as updated_by,
 //     COALESCE(first_created_at, now()) as created_at,
@@ -597,12 +606,13 @@ export class TagEntity extends MyBaseEntity {
 //     first_created_ip as created_ip,
 //     last_updated_ip as updated_ip
 // FROM tag_stats
-// ON CONFLICT (org_key, name) DO UPDATE SET
+// ON CONFLICT (org_key, scope_info_scope_type, scope_info_scope_id, name) DO UPDATE SET
 //     usage_count = EXCLUDED.usage_count,
 //     updated_by = EXCLUDED.updated_by,
 //     updated_at = EXCLUDED.updated_at,
 //     updated_ip = EXCLUDED.updated_ip;
 
+ 
   
   
 //   UPDATE ai_model_pricing_entity SET unit='USD/1M tokens' WHERE unit='USD/1Mtokens';

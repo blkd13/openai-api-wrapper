@@ -13,6 +13,7 @@ import { uploadFileFunction } from '../controllers/file-manager.js';
 import { FileGroupType } from '../models/values.js';
 import { getExtApiClient } from '../controllers/auth.js';
 import { getProxyUrl } from '../../common/http-client.js';
+import { UserTokenPayload } from '../middleware/authenticate.js';
 
 const { GIT_REPOSITORIES } = process.env as { GIT_REPOSITORIES: string };
 
@@ -283,6 +284,7 @@ export async function gitFetchCommitId(
     username: string,
     accessToken: string,
     commitId: string,
+    user: UserTokenPayload,
 ): Promise<{ fileGroup: FileGroupEntity, gitProjectCommit: GitProjectCommitEntity }> {
     console.log(`http_url_to_repo=${http_url_to_repo}`);
     const { repoUrlWithoutAuth, repoUrlWithAuth } = replaceDomain(http_url_to_repo, uriBase, username, accessToken);
@@ -293,7 +295,7 @@ export async function gitFetchCommitId(
     }));
 
     // アップロードしてファイルグループを取得
-    const uploadedFileGroupList = await uploadFileFunction(userId, projectId, contents, fileGroupType, orgKey, ip, repositoryName, JSON.stringify(descriptionObject));
+    const uploadedFileGroupList = await uploadFileFunction(userId, projectId, contents, fileGroupType, orgKey, ip, user, repositoryName, JSON.stringify(descriptionObject));
 
     // 成功
     if (uploadedFileGroupList.length === 1) {

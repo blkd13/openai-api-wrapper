@@ -13,6 +13,7 @@ import { FileEntity, FileTagEntity, FileVersionEntity, FileAccessEntity, FileBod
 import { ProjectEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
 import { FileGroupType, ProjectVisibility, TeamMemberRoleType } from '../models/values.js';
 import { UserRequest } from '../models/info.js';
+import { UserTokenPayload } from '../middleware/authenticate.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { convertPptxToPdf, convertAndOptimizeImage, detectMimeType, getMetaDataFromFile, minimizeVideoForMinutes, normalizeAndMinimizeAudio } from '../../common/media-funcs.js';
 import { Utils } from '../../common/utils.js';
@@ -36,7 +37,7 @@ type FileBodyMapSet = {
     // pathMap: { [key: string]: string },
     hashList: string[];
 };
-export async function convertToMapSet(tm: EntityManager, contents: { filePath: string, base64Data: string }[], orgKey: string, userId: string, ip: string): Promise<FileBodyMapSet> {
+export async function convertToMapSet(tm: EntityManager, contents: { filePath: string, base64Data: string }[], orgKey: string, userId: string, ip: string, user: UserTokenPayload): Promise<FileBodyMapSet> {
     // { filePath: string, base64Data: string }
     // ハッシュ値は編集前の状態で取得しておく。
     const mapSet = contents.reduce((_mapSet, content, currentIndex) => {
@@ -163,7 +164,7 @@ export async function convertToMapSet(tm: EntityManager, contents: { filePath: s
         }
     }).filter(v => v !== null) as { buffer: Buffer, fileBodyEntity: FileBodyEntity }[];
 
-    const tokenCountedFileBodyList = await geminiCountTokensByFile(tm, tokenCountFileList);
+    const tokenCountedFileBodyList = await geminiCountTokensByFile(tm, tokenCountFileList, user);
     // console.dir(tokenCountedFileBodyList.map(fileBodyEntity => fileBodyEntity.tokenCount));
     console.log(tokenCountFileList.length + ' files to tokenize');
 
@@ -413,7 +414,7 @@ export const uploadFiles = [
         const req = _req as UserRequest;
         const { uploadType, projectId, contents } = req.body as { uploadType: 'Single' | 'Group', projectId: string, contents: { filePath: string, base64Data: string }[] };
         try {
-            const savedFileGroups = await uploadFileFunction(req.info.user.id, projectId, contents, uploadType, req.info.user.orgKey, req.info.ip);
+            const savedFileGroups = await uploadFileFunction(req.info.user.id, projectId, contents, uploadType, req.info.user.orgKey, req.info.ip, req.info.user);
             let successCount = 0;
             let failureCount = 0;
             // console.dir(savedFileGroups);
@@ -442,7 +443,7 @@ export const uploadFiles = [
     }
 ];
 
-export async function uploadFileFunction(userId: string, projectId: string, contents: { filePath: string, base64Data: string }[], uploadType: 'Single' | 'Group' | FileGroupType, orgKey: string, ip: string, label: string = '', description: string = ''):
+export async function uploadFileFunction(userId: string, projectId: string, contents: { filePath: string, base64Data: string }[], uploadType: 'Single' | 'Group' | FileGroupType, orgKey: string, ip: string, user: UserTokenPayload, label: string = '', description: string = ''):
     Promise<FileGroupEntityForView[]> {
     const project = await ds.getRepository(ProjectEntity).findOne({ where: { orgKey, id: projectId } });
     if (!project) {
@@ -461,7 +462,7 @@ export async function uploadFileFunction(userId: string, projectId: string, cont
     const fileIdBodyMas: { [fileEntityId: string]: FileBodyEntity } = {};
     const savedFileGroups: FileGroupEntityForView[] = [];
     await ds.transaction(async transactionalEntityManager => {
-        const fileBodyMapSet = await convertToMapSet(transactionalEntityManager, contents, orgKey, userId, ip);
+        const fileBodyMapSet = await convertToMapSet(transactionalEntityManager, contents, orgKey, userId, ip, user);
 
         // ルートディレクトリが同じかどうかでラベルを決定する
         if (label) {

@@ -5,7 +5,7 @@ import { detect } from 'jschardet';
 import { genClientByProvider, MyToolType, OpenAIApiWrapper, plainExtensions, plainMime, providerPrediction } from "../../common/openai-api-wrapper.js";
 import { UserRequest } from "../models/info.js";
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
 import { Utils } from "../../common/utils.js";
 import { ds } from "../db.js";
 import { BoxApiItemCollection, BoxFileBodyEntity } from "../entity/api-box.entity.js";
@@ -13,6 +13,7 @@ import { getOAuthAccountForTool, reform } from "./common.js";
 import { boxDownloadCore } from "../api/api-box.js";
 import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
 import { convertPptxToPdf } from '../../common/media-funcs.js';
+import { MyVertexAiClient } from "../../common/my-vertexai.js";
 
 
 // 1. 関数マッピングの作成
@@ -144,7 +145,7 @@ export async function boxFunctionDefinitions(
                 delete inDto.args.tool_choice;
                 delete inDto.args.tools;
 
-                const aiProvider = genClientByProvider(inDto.args.model);
+                const aiProvider = await getAIProvider(req.info.user, inDto.args.model);
 
                 const newLabel = `${label}-call_ai-${model}`;
                 // レスポンス返した後にゆるりとヒストリーを更新しておく。

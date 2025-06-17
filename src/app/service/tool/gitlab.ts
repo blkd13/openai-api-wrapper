@@ -3,7 +3,7 @@ import { map, toArray } from "rxjs";
 import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
 import { UserRequest } from "../models/info.js";
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
 import { ds } from "../db.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
 
@@ -685,6 +685,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
             handler: async (args: { userPrompt?: string, project_id: number, file_path_list: string[], ref: string }): Promise<any> => {
                 const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { userPrompt = '要約してください', project_id, file_path_list, ref } = args;
+                const aiProvider = await getAIProvider(req.info.user, obj.inDto.args.model);
 
                 if (ref) {
                     // ブランチ名、タグ名、SHAのいずれかが指定されている場合
@@ -726,8 +727,6 @@ export async function gitlabFunctionDefinitions(providerName: string,
                     // toolは使わないので空にしておく
                     delete inDto.args.tool_choice;
                     delete inDto.args.tools;
-
-                    const aiProvider = genClientByProvider(inDto.args.model);
 
                     const newLabel = `${label}-call_ai-${inDto.args.model}`;
                     // レスポンス返した後にゆるりとヒストリーを更新しておく。

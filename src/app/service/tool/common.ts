@@ -14,7 +14,7 @@ import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction }
 import { UserRequest } from '../models/info.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
 import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
-import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
+import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
 import { OAuthAccountEntity } from '../entity/auth.entity.js';
@@ -330,6 +330,10 @@ export function commonFunctionDefinitions(
                 const GOOGLE_CUSTOM_SEARCH_API_KEY = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY || '';
                 const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID || '';
 
+                const systemPrompt = 'アシスタントAI';
+                const model = 'gemini-2.5-flash-preview-05-20';
+                const aiProvider = (await getAIProvider(req.info.user, model));
+
                 // 10件ずつ分割してリクエストするための処理
                 const maxResultsPerRequest = 10; // Google APIの制限
                 const totalRequests = Math.min(Math.ceil(num / maxResultsPerRequest), 100); // 最大100リクエストまで
@@ -377,9 +381,6 @@ export function commonFunctionDefinitions(
 
                         const sanitizedBody = sanitizeHTML(html.body);
 
-                        const systemPrompt = 'アシスタントAI';
-                        const model = 'gemini-2.5-flash-preview-05-20';
-
                         const inDto = JSON.parse(JSON.stringify(obj.inDto)) as MessageArgsSet; // deep copy
                         inDto.args.model = model || inDto.args.model; // modelが指定されていない場合は元のモデルを使う
                         // console.log(`call_ai: model=${inDto.args.model}, type=${html.type} ${item.title} ${item.link}`);
@@ -397,8 +398,6 @@ export function commonFunctionDefinitions(
                         // toolは使わないので空にしておく
                         delete inDto.args.tool_choice;
                         delete inDto.args.tools;
-
-                        const aiProvider = genClientByProvider(inDto.args.model);
 
                         // const newLabel = `call_ai-${model}-${index}`;
                         const newLabel = `${label}-call_ai`;
@@ -711,7 +710,7 @@ export function commonFunctionDefinitions(
                 delete inDto.args.tool_choice;
                 delete inDto.args.tools;
 
-                const provider = genClientByProvider(inDto.args.model);
+                const aiProvider = await getAIProvider(req.info.user, inDto.args.model);
 
                 const newLabel = `${label}-call_ai-${model}`;
                 // レスポンス返した後にゆるりとヒストリーを更新しておく。
@@ -722,7 +721,7 @@ export function commonFunctionDefinitions(
                 history.messageId = message.id;
                 history.label = newLabel;
                 history.model = inDto.args.model;
-                history.provider = provider.type;
+                history.provider = aiProvider.type;
                 history.createdBy = req.info.user.id;
                 history.updatedBy = req.info.user.id;
                 history.createdIp = req.info.ip;
@@ -733,7 +732,7 @@ export function commonFunctionDefinitions(
                     let text = '';
                     // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
                     aiApi.chatCompletionObservableStream(
-                        inDto.args, { label: newLabel }, provider,
+                        inDto.args, { label: newLabel }, aiProvider,
                     ).pipe(
                         map(res => res.choices.map(choice => choice.delta.content).join('')),
                         toArray(),

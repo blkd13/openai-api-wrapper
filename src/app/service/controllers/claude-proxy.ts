@@ -225,15 +225,41 @@ export const vertexAIByAnthropicAPI = [
 
             console.log(logObject.output('call'));
 
-            const accessToken = await my_vertexai.getAccessToken();
-            const vertexResponse: AxiosResponse = await axios.post(vertexUrl, instance, {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json; charset=UTF-8',
-                },
-                responseType: 'json',
-                httpAgent: options.httpAgent,
-            });
+            let vertexResponse: AxiosResponse | undefined;
+            const maxRetries = 2;
+            let lastError: any;
+
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    // 401エラーで再試行する場合はトークンを強制リフレッシュ
+                    const forceTokenRefresh = attempt > 1 && lastError?.response?.status === 401;
+                    const accessToken = await my_vertexai.getAccessToken(forceTokenRefresh);
+                    vertexResponse = await axios.post(vertexUrl, instance, {
+                        headers: {
+                            Authorization: `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json; charset=UTF-8',
+                        },
+                        responseType: 'json',
+                        httpAgent: options.httpAgent,
+                    });
+                    break; // 成功したらループを抜ける
+                } catch (error) {
+                    lastError = error;
+                    console.log(`Attempt ${attempt} failed:`, error);
+
+                    if (attempt === maxRetries) {
+                        throw lastError; // 最後の試行で失敗したら元のエラーを投げる
+                    }
+                    // 401エラーの場合は短時間で再試行、それ以外は遅延なし
+                    if (lastError?.response?.status === 401) {
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                    }
+                }
+            }
+
+            if (!vertexResponse) {
+                throw new Error('Vertex AI response is undefined after retries');
+            }
 
             // レスポンスからトークン数を取得
             if (vertexResponse.data?.usage) {
@@ -291,7 +317,7 @@ export const vertexAIByAnthropicAPIStream = [
                 try {
 
                     instance.stream = true;
-                    console.log(`Forwarding to Vertex AI at ${vertexUrl}`);
+                    // console.log(`Forwarding to Vertex AI at ${vertexUrl}`);
 
                     // リクエストをファイルに書き出す
                     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.request.json`,
@@ -299,7 +325,9 @@ export const vertexAIByAnthropicAPIStream = [
 
                     console.log(logObject.output('call'));
 
-                    const accessToken = await my_vertexai.getAccessToken();
+                    // 401エラーで再試行する場合はトークンを強制リフレッシュ
+                    const forceTokenRefresh = attempt > 1 && lastError?.response?.status === 401;
+                    const accessToken = await my_vertexai.getAccessToken(forceTokenRefresh);
                     vertexResponse = await axios.post(vertexUrl, instance, {
                         headers: {
                             Authorization: `Bearer ${accessToken}`,
@@ -337,7 +365,12 @@ export const vertexAIByAnthropicAPIStream = [
                     if (attempt === maxRetries) {
                         throw lastError; // 最後の試行で失敗したら元のエラーを投げる
                     }
-                    await new Promise(resolve => setTimeout(resolve, 0 * attempt));
+                    // 401エラーの場合は短時間で再試行、それ以外は遅延なし
+                    if (lastError?.response?.status === 401) {
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                    } else {
+                        await new Promise(resolve => setTimeout(resolve, 0 * attempt));
+                    }
                 }
             }
             if (!vertexResponse) {
@@ -373,7 +406,7 @@ export const vertexAIByAnthropicAPIStream = [
                     if (line.startsWith('data: ')) {
                         try {
                             const jsonString = line.substring(6);
-                            fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}.txt`, jsonString, {}, () => { });
+                            fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}.txt`, jsonString + '\n', {}, () => { });
                             const data = JSON.parse(jsonString);
                             if (data.type === 'content_block_delta' && data.delta?.text) {
                                 tokenBuilder += data.delta.text;

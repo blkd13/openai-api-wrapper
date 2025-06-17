@@ -85,12 +85,14 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
 
                         // アクセストークン検証
                         const userTokenPayload = await verifyJwt<UserTokenPayload>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user');
-                        // console.log(`acc:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
+                        // console.log(`acc:userToken=${JSON.stringify(userTokenPayload, Utils.genJsonSafer())}`);
 
                         (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies, };
                         return { isAuth: true, obj: userTokenPayload };
                     } catch (err) {
-                        // アクセストークン無し
+                        // // アクセストークン無し
+                        // console.log(`アクセストークンの検証に失敗しました。`);
+                        // console.log(err);
                     }
                 } else { }
 
@@ -107,11 +109,13 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                             sameSite: false, // CSRF保護のためのオプション
                         });
 
-                        // console.log(`ref:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
+                        // console.log(`ref:userToken=${JSON.stringify(userTokenPayload, Utils.genJsonSafer())}`);
                         (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
                         return { isAuth: true, obj: userTokenPayload };
                     } catch (err) {
-                        // リフレッシュトークン無し
+                        // // リフレッシュトークン無し
+                        // console.log(`リフレッシュトークンの検証に失敗しました。`);
+                        // console.log(err);
                     }
 
                 } else { }
@@ -122,11 +126,13 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                         // API用トークンの検証
                         const { userTokenPayload, accessToken } = await ds.transaction(async manager => await tryRefreshCore(manager, xRealIp, 'api', req.headers.authorization?.split(' ')[1] || '', roleType));
 
-                        // console.log(`api:userToken=${JSON.stringify(userToken, Utils.genJsonSafer())}`);
+                        // console.log(`api:userToken=${JSON.stringify(userTokenPayload, Utils.genJsonSafer())}`);
                         (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
                         return { isAuth: true, obj: userTokenPayload };
                     } catch (err) {
-                        // API用トークン無し
+                        // // API用トークン無し
+                        // console.log(`APIトークンの検証に失敗しました。`);
+                        // console.log(req.headers.authorization?.split(' ')[1] || '');
                         // console.log(err);
                     }
                 }
@@ -332,7 +338,7 @@ export const authenticateUserTokenWsMiddleGenerator = (roleType?: UserRoleType) 
                                     // user.dataValuesはそのままだとゴミがたくさん付くので、項目ごとにUserModelにマッピングする。
                                     // TODO ここはもっとスマートに書けるはず。マッパーを用意するべきか？
 
-                                    // 管理者用の認証チェック
+                                    // // 管理者用の認証チェック
                                     where['role'] = In([roleType, UserRoleType.SuperAdmin]);
 
                                     const userTokenPayload = {
