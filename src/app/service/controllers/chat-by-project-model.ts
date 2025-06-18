@@ -1090,27 +1090,27 @@ export const chatCompletionByProjectModel = [
                         // TODO コンテンツキャッシュはIDさえ合っていれば誰でも使える状態。権限付けなくていいか悩み中。
                         const cachedContent = (inDto.args as any).cachedContent as VertexCachedContentEntity;
 
-                        // 課金用にプロジェクト振り分ける。当たらなかったら当たらなかったでよい。
-                        const departmentMember = await transactionalEntityManager.getRepository(DepartmentMemberEntity).findOne({
-                            where: safeWhere({
-                                orgKey: req.info.user.orgKey,
-                                name: req.info.user.name || '',
-                                departmentRole: DepartmentRoleType.Member
-                            })
-                        });
-                        // console.log(departmentMember);
-                        if (departmentMember) {
-                            const department = await transactionalEntityManager.getRepository(DepartmentEntity).findOne({
-                                where: safeWhere({
-                                    orgKey: req.info.user.orgKey,
-                                    id: departmentMember.departmentId
-                                })
-                            });
-                            (inDto.args as any).gcpProjectId = department?.gcpProjectId || GCP_PROJECT_ID;
-                            // console.log(department?.gcpProjectId);
-                        } else {
-                            // 未設定なら未設定で良しとする。（その場合はAI部課金）
-                        }
+                        // // 課金用にプロジェクト振り分ける。当たらなかったら当たらなかったでよい。
+                        // const departmentMember = await transactionalEntityManager.getRepository(DepartmentMemberEntity).findOne({
+                        //     where: safeWhere({
+                        //         orgKey: req.info.user.orgKey,
+                        //         name: req.info.user.name || '',
+                        //         departmentRole: DepartmentRoleType.Member
+                        //     })
+                        // });
+                        // // console.log(departmentMember);
+                        // if (departmentMember) {
+                        //     const department = await transactionalEntityManager.getRepository(DepartmentEntity).findOne({
+                        //         where: safeWhere({
+                        //             orgKey: req.info.user.orgKey,
+                        //             id: departmentMember.departmentId
+                        //         })
+                        //     });
+                        //     (inDto.args as any).gcpProjectId = department?.gcpProjectId || GCP_PROJECT_ID;
+                        //     // console.log(department?.gcpProjectId);
+                        // } else {
+                        //     // 未設定なら未設定で良しとする。（その場合はAI部課金）
+                        // }
 
                         // chatCompletionObservableStreamがDB登録より先に帰ってきたらバグるので直列にしているが、本来は並列で投げてDB登録が先に終わったらその後の処理をするようにしたい。
                         return await new Promise<{

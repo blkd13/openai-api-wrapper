@@ -1036,7 +1036,7 @@ class RunBit {
                 // console.log(generativeModel);
                 commonArgs.messages[0].content = commonArgs.messages[0].content || '';
                 // argsをGemini用に変換
-                const req: GenerateContentRequestExtended = mapForGeminiExtend(commonArgs, mapForGemini(commonArgs));
+                const req: GenerateContentRequestExtended = mapForGeminiExtend(commonArgs, this.provider, mapForGemini(commonArgs));
                 // 文字数をカウント
                 const countCharsObj = countChars(commonArgs);
                 let promptChars = countCharsObj.audio + countCharsObj.text + countCharsObj.image + countCharsObj.video;
@@ -1051,7 +1051,7 @@ class RunBit {
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify(req, Utils.genJsonSafer()), {}, (err) => { });
 
                 let isOver128 = false;
-                runPromise = generateContentStream(req.region, req.resourcePath, this.provider.client.getAccessToken(), args, `${req.region}-${GCP_API_BASE_PATH}`, req.generationConfig, req.safetySettings, req.tools, {}).then(async streamingResp => {
+                runPromise = generateContentStream(req.region, req.resourcePath, this.provider.client.getAccessToken(), args, req.apiEndpoint, req.generationConfig, req.safetySettings, req.tools, {}).then(async streamingResp => {
                     // かつてはModelを使って投げていた。
                     // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
 
@@ -1246,7 +1246,7 @@ class RunBit {
                 // console.log(generativeModel);
                 commonArgs.messages[0].content = commonArgs.messages[0].content || '';
                 // argsをGemini用に変換
-                const req: GenerateContentRequestExtended = mapForGeminiExtend(commonArgs, mapForGemini(commonArgs));
+                const req: GenerateContentRequestExtended = mapForGeminiExtend(commonArgs, this.provider, mapForGemini(commonArgs));
                 // 文字数をカウント
                 const countCharsObj = countChars(commonArgs);
                 let promptChars = countCharsObj.audio + countCharsObj.text + countCharsObj.image + countCharsObj.video;

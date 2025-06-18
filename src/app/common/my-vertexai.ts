@@ -4,7 +4,7 @@ import { promisify } from 'util';
 import { detect } from "jschardet";
 import { ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionFunctionMessageParam, ChatCompletionMessageParam, ChatCompletionRole, ChatCompletionSystemMessageParam, ChatCompletionTool, ChatCompletionToolMessageParam } from "openai/resources/chat/completions";
 
-import { plainMime } from "./openai-api-wrapper.js";
+import { AIProviderClient, plainMime } from "./openai-api-wrapper.js";
 import { CompletionUsage } from "openai/resources/completions.js";
 import { VertexAIConfig } from "../service/entity/ai-model-manager.entity.js";
 
@@ -20,7 +20,7 @@ class GCloudAuthError extends Error {
     }
 }
 
-const { GCP_PROJECT_ID, GCP_REGION, GCP_CONTEXT_CACHE_LOCATION } = process.env;
+const { GCP_PROJECT_ID, GCP_REGION, GCP_CONTEXT_CACHE_LOCATION, GCP_API_BASE_PATH } = process.env;
 
 export interface CachedContent {
     name: string;
@@ -38,6 +38,7 @@ export interface CountCharsResponse {
 }
 export type TokenCharCount = CountCharsResponse & CountTokensResponse;
 export interface GenerateContentRequestExtended extends GenerateContentRequest {
+    apiEndpoint?: string; // APIエンドポイントはオプションにする。
     resourcePath: string;
     region: string;
     cached_content?: string;
@@ -57,18 +58,24 @@ export class MyVertexAiClient {
     private accessTokenStock: string | undefined;
 
     private clients: VertexAI[] = [];
+    private clientsParams: (Omit<VertexAIConfig, 'locationList'> & { location: string })[] = [];
 
     constructor(public params: VertexAIConfig[]) {
         // this.client = new VertexAI({ project: this.params.projectId, location: this.params.region, apiEndpoint: this.params.baseURL, httpAgent: this.params.httpAgent });
         this.params.forEach(param => {
             param.locationList.forEach(location => {
                 this.clients.push(new VertexAI({ ...param, location }));
+                this.clientsParams.push({ ...param, location });
             });
         });
     }
 
     get client(): VertexAI {
         return this.clients[this.counter++ % this.clients.length];
+    }
+
+    get clientParam(): Omit<VertexAIConfig, 'locationList'> & { location: string } {
+        return this.clientsParams[this.counter++ % this.clientsParams.length];
     }
 
     async getAccessToken(force: boolean = false): Promise<string> {
@@ -312,7 +319,7 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
     return req;
 }
 
-export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: GenerateContentRequest): GenerateContentRequestExtended {
+export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, aiProvider: AIProviderClient, _req?: GenerateContentRequest): GenerateContentRequestExtended {
     const req: GenerateContentRequestExtended = (_req || mapForGemini(args)) as GenerateContentRequestExtended;
     req.generationConfig = {
         maxOutputTokens: args.max_tokens || undefined,
@@ -349,6 +356,11 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: 
         (req.generationConfig as any).thinking_config = { thinking_budget: 0 };
     } else if (args.model === 'gemini-2.5-flash-thinking-preview-05-20') {
         args.model = 'gemini-2.5-flash-preview-05-20';
+    } else if (args.model.includes('gemini-2.5-flash')) {
+        (req.generationConfig as any).thinking_config = { thinking_budget: 0 };
+    } else if (args.model.includes('-thinking')) {
+        args.model = args.model.replace('-thinking', '');
+        (req.generationConfig as any).thinking_config = { thinking_budget: -1 };
     }
 
     // コンテンツキャッシュ
@@ -356,7 +368,15 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: 
     delete (args as any).cachedContent;
 
     // console.dir(cachedContent);
+    const vertexAiClientParam = (aiProvider.client as MyVertexAiClient).clientParam;
+    req.region = vertexAiClientParam.location;
+    req.resourcePath = `projects/${vertexAiClientParam.project}/locations/${req.region}/publishers/google/models/${args.model}`;
+    req.apiEndpoint = req.region === 'global' // globalの場合はエンドポイントに地域を付けない
+        ? `https://${vertexAiClientParam.apiEndpoint || GCP_API_BASE_PATH || `aiplatform.googleapis.com`}`
+        : `https://${req.region}-${vertexAiClientParam.apiEndpoint || GCP_API_BASE_PATH || `aiplatform.googleapis.com`}`;
+
     if (cachedContent) {
+        (aiProvider.client.client as VertexAI)
         req.region = 'asia-northeast1';
         req.resourcePath = cachedContent.model;
         req.cached_content = cachedContent.name;
@@ -365,18 +385,18 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, _req?: 
         // 何も設定しなくてもいいかも。。
         // req.region = 'us-central1';
         // req.resourcePath = `projects/${GCP_PROJECT_ID}/locations/${req.region}/endpoints/openapi/chat/completions`;
-    } else if ((args.model.startsWith('gemini-') && args.model.includes('-exp')) || args.model.startsWith('gemini-2')) { // gemini系のexp（実験版）はus-central1に固定
-        // 何も設定しなくてもいいかも。。
-        // req.region = 'us-central1';
-        // req.resourcePath = `projects/${GCP_PROJECT_ID}/locations/${req.region}/endpoints/openapi/chat/completions`;
-        const gcpProjectId = (args as any).gcpProjectId || GCP_PROJECT_ID;
-        req.region = 'us-central1'; // experimental は us-central1でしか使えない。
-        req.resourcePath = `projects/${gcpProjectId}/locations/${req.region}/publishers/google/models/${args.model}`;
-    } else {
-        // 無理矢理だけど指定されてたらプロジェクト切替。無理矢理すぎるので直したい。
-        const gcpProjectId = (args as any).gcpProjectId || GCP_PROJECT_ID;
-        req.region = 'asia-northeast1'; // 国内で固定。
-        req.resourcePath = `projects/${gcpProjectId}/locations/${req.region}/publishers/google/models/${args.model}`;
+        // } else if ((args.model.startsWith('gemini-') && args.model.includes('-exp')) || args.model.startsWith('gemini-2')) { // gemini系のexp（実験版）はus-central1に固定
+        //     // 何も設定しなくてもいいかも。。
+        //     // req.region = 'us-central1';
+        //     // req.resourcePath = `projects/${GCP_PROJECT_ID}/locations/${req.region}/endpoints/openapi/chat/completions`;
+        //     const gcpProjectId = (args as any).gcpProjectId || GCP_PROJECT_ID;
+        //     req.region = 'us-central1'; // experimental は us-central1でしか使えない。
+        //     req.resourcePath = `projects/${gcpProjectId}/locations/${req.region}/publishers/google/models/${args.model}`;
+        // } else {
+        //     // 無理矢理だけど指定されてたらプロジェクト切替。無理矢理すぎるので直したい。
+        //     const gcpProjectId = (args as any).gcpProjectId || GCP_PROJECT_ID;
+        //     req.region = 'asia-northeast1'; // 国内で固定。
+        //     req.resourcePath = `projects/${gcpProjectId}/locations/${req.region}/publishers/google/models/${args.model}`;
     }
     return req;
 }
