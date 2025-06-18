@@ -21,6 +21,38 @@ import { ToolCallPartType } from '../../service/entity/tool-call.entity.js';
 import { getTiktokenEncoder } from '../../common/openai-api-wrapper.js';
 import { MyVertexAiClient } from '../../common/my-vertexai.js';
 import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL } from '../../service/controllers/chat-by-project-model.js';
+import { UserEntity, UserStatus } from '../../service/entity/auth.entity.js';
+import { UserTokenPayload } from '../../service/middleware/authenticate.js';
+
+/**
+ * Get user configuration for agent scripts
+ */
+async function getAgentUser(): Promise<UserTokenPayload> {
+    const { AGENT_USER_ID, AGENT_ORG_KEY = 'public' } = process.env;
+    
+    if (!AGENT_USER_ID) {
+        throw new Error('AGENT_USER_ID environment variable is required for agent scripts');
+    }
+
+    const user = await ds.getRepository(UserEntity).findOne({
+        where: { orgKey: AGENT_ORG_KEY, id: AGENT_USER_ID, status: UserStatus.Active }
+    });
+
+    if (!user) {
+        throw new Error(`User not found: orgKey=${AGENT_ORG_KEY}, id=${AGENT_USER_ID}`);
+    }
+
+    // Convert UserEntity to UserTokenPayload format
+    return {
+        type: 'user',
+        orgKey: user.orgKey,
+        id: user.id,
+        email: user.email,
+        name: user.name || user.email,
+        roleList: [], // Agent scripts typically don't need specific roles
+        authGeneration: user.authGeneration || 0
+    };
+}
 
 
 // CREATE TABLE message_group_entity_bk AS SELECT * FROM message_group_entity;
@@ -69,7 +101,8 @@ async function fileEntity() {
         await ds.transaction(async transactionalEntityManager => {
             console.log(`text time ${new Date()} chunk ${chunkData.length}`);
             // console.dir(chunkData.map(content => ({ id: content.id, type: content.type, text: content.text?.substring(0, 20) })));
-            await geminiCountTokensByContentPart(transactionalEntityManager, chunkData);
+            const agentUser = await getAgentUser();
+            await geminiCountTokensByContentPart(transactionalEntityManager, chunkData, agentUser);
             // console.dir(chunkData.map(content => ({ id: content.id, type: content.type, text: content.text?.substring(0, 20), tokenCount: content.tokenCount })));
         });
     }
@@ -183,7 +216,8 @@ async function fileEntity() {
             }
         }).filter(Boolean) as ({ buffer: Buffer; fileBodyEntity: FileBodyEntity; base64Data?: undefined; } | { base64Data: string; fileBodyEntity: FileBodyEntity; buffer?: undefined; })[];
         await ds.transaction(async transactionalEntityManager => {
-            const tokenCountedFileBodyList = await geminiCountTokensByFile(transactionalEntityManager, tokenCountFileList);
+            const agentUser = await getAgentUser();
+            const tokenCountedFileBodyList = await geminiCountTokensByFile(transactionalEntityManager, tokenCountFileList, agentUser);
         });
     }
 

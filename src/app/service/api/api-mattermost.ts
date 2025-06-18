@@ -4,6 +4,7 @@ import { body, param, query } from "express-validator";
 
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
+import { UserTokenPayload } from "../middleware/authenticate.js";
 import { MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity } from '../entity/api-mattermost.entity.js';
 import { ds } from '../db.js';
 import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
@@ -699,7 +700,7 @@ export const mattermostToAi = [
                 const contentsImageUrlList = contents
                     .filter(content => content.type === 'file')
                     .map((content, index) => ({ filePath: content.text, base64Data: (content as FileContentPart).dataUrl, content, postId: (content as any).postId, index } as FileTypeTemp));
-                const fileBodyMapSet = await convertToMapSet(tm, contentsImageUrlList, req.info.user.orgKey, req.info.user.id, req.info.ip);
+                const fileBodyMapSet = await convertToMapSet(tm, contentsImageUrlList, req.info.user.orgKey, req.info.user.id, req.info.ip, req.info.user);
 
 
                 // -----------------------------------------------
@@ -722,9 +723,8 @@ export const mattermostToAi = [
                     } else {
                         return null;
                     }
-                }).filter(Boolean);
-                // { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }
-                const tokenCountedFileBodyList = await geminiCountTokensByFile(tm, tokenCountFileList as any);
+                }).filter(Boolean);                // { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }
+                const tokenCountedFileBodyList = await geminiCountTokensByFile(tm, tokenCountFileList as any, req.info.user);
                 // console.dir(tokenCountedFileBodyList.map(fileBodyEntity => fileBodyEntity.tokenCount));
                 console.log(tokenCountFileList.length + ' files to tokenize');
                 // -----------------------------------------------
@@ -873,12 +873,11 @@ export const mattermostToAi = [
                                 break;
                         }
                         if (content.type === ContentPartType.FILE && fileGroupIdSet.has(contentPart.linkId)) {
-                            // 追加済みのファイルグループの人だったら追加しない。
-                        } else {
+                            // 追加済みのファイルグループの人だったら追加しない。                        } else {
                             contentPart = await tm.save(ContentPartEntity, contentPart);
                             updatedContentParts.push(contentPart);
                             // トークンカウントの更新
-                            await geminiCountTokensByContentPart(tm, updatedContentParts);
+                            await geminiCountTokensByContentPart(tm, updatedContentParts, req.info.user);
                         }
                         if (content.type === ContentPartType.FILE) {
                             fileGroupIdSet.add(contentPart.linkId);

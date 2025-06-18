@@ -15,12 +15,14 @@ import { body, param } from "express-validator/lib/index.js";
 // ファイルシステム関連のimport
 import fss from '../../common/fss.js';
 import { Utils } from "../../common/utils.js";
-import { Message } from "@anthropic-ai/sdk/resources.js";
+import { Message, Usage } from "@anthropic-ai/sdk/resources.js";
 import { PredictHistoryEntity } from "../entity/project-models.entity.js";
 import { ds } from "../db.js";
 import { PredictHistoryStatus } from "../models/values.js";
-import { DepartmentEntity, DepartmentMemberEntity } from "../entity/auth.entity.js";
-import { AIModelEntity, AIModelPricingEntity, } from '../entity/ai-model-manager.entity.js';
+import { DepartmentEntity, DepartmentMemberEntity, DivisionEntity } from "../entity/auth.entity.js";
+import { getAIProvider, getAIProviderAndModel } from "./chat-by-project-model.js";
+import { TokenCount } from "../../common/openai-api-wrapper.js";
+import { GPTModels } from "../../common/model-definition.js";
 
 // 履歴ディレクトリ
 const HISTORY_DIRE = `./history`;
@@ -38,50 +40,6 @@ const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? 
 } : {};
 
 /**
- * トークン数を管理するクラス
- */
-class TokenCount {
-    public modelShort: string;
-
-    constructor(
-        public model?: AIModelEntity,
-        public modelPrice?: AIModelPricingEntity,
-        public prompt_tokens: number = 0,
-        public completion_tokens: number = 0,
-        public tokenBuilder: string = '',
-        public cost: number = 0
-    ) {
-        if (model) {
-            this.modelShort = model.shortName || model.name;
-        } else {
-            this.modelShort = 'unknown';
-        }
-        if (modelPrice) {
-            this.cost = (this.prompt_tokens / 1_000_000) * modelPrice.inputPricePerUnit + (this.completion_tokens / 1_000_000) * modelPrice.outputPricePerUnit;
-        }
-    }
-
-    add(obj: TokenCount): TokenCount {
-        this.prompt_tokens += obj.prompt_tokens;
-        this.completion_tokens += obj.completion_tokens;
-        this.cost += obj.cost;
-        return this;
-    }
-
-    calcCost(): number {
-        if (this.modelPrice) {
-            return (this.prompt_tokens / 1_000_000) * this.modelPrice.inputPricePerUnit +
-                (this.completion_tokens / 1_000_000) * this.modelPrice.outputPricePerUnit;
-        }
-        return 0;
-    }
-
-    toString(): string {
-        return `${this.modelShort.padEnd(8)} ${this.prompt_tokens.toLocaleString().padStart(6, ' ')} ${this.completion_tokens.toLocaleString().padStart(6, ' ')}`;
-    }
-}
-
-/**
  * ログ出力用クラス
  */
 class LogObject {
@@ -97,7 +55,7 @@ class LogObject {
 
         const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} 0 ${take} ${prompt_tokens} ${completion_tokens} ${this.tokenCount.modelShort} ${this.label} ${error}`;
 
-        fss.appendFile(`history.log`, `${logString}\n`, {}, () => { });
+        fss.appendFile(`history.log`, `${logString} ${message}\n`, {}, () => { });
         return logString;
     }
 }
@@ -122,13 +80,15 @@ async function initializeRequest(req: UserRequest, modelName: string, suffix: st
     const idempotencyKey = `${timestamp}-${argsHash}-${suffix}`;
     const label = argsHash;
 
-    const modelObject = await ds.getRepository(AIModelEntity).findOneByOrFail({ name: modelName || 'claude-3-5-sonnet-20241022' });
-    const modelPrice = await ds.getRepository(AIModelPricingEntity).findOneOrFail({ where: { modelId: modelObject.id }, order: { validFrom: 'DESC' } });
+    // const modelObject = await ds.getRepository(AIModelEntity).findOneByOrFail({ name: modelName || 'claude-3-5-sonnet-20241022' });
+    // const modelPrice = await ds.getRepository(AIModelPricingEntity).findOneOrFail({ where: { modelId: modelObject.id }, order: { validFrom: 'DESC' } });
 
-    const tokenCount = new TokenCount(modelObject, modelPrice);
+    const { aiProvider, aiModel } = await getAIProviderAndModel(req.info.user, modelName);
+
+    const tokenCount = new TokenCount(modelName as GPTModels, 0, 0);
     const logObject = new LogObject(Date.now(), tokenCount, idempotencyKey, label);
 
-    return { idempotencyKey, label, tokenCount, logObject };
+    return { idempotencyKey, label, tokenCount, aiProvider, aiModel, logObject };
 }
 
 /**
@@ -140,13 +100,13 @@ function handleError(err: any, logObject: LogObject, idempotencyKey: string, res
 
     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.error.json`, JSON.stringify({
         error: err.message,
-        response: err.response?.data,
-        stack: err.stack,
+        // response: err.response?.data,
+        // stack: err.stack,
     }, Utils.genJsonSafer()), {}, () => { });
 
     const status = err.response?.status || 500;
     const data = err.response?.data || { error: err.message };
-    res.status(status).json(data);
+    res.status(status).json(err.message);
 }
 
 /**
@@ -179,22 +139,11 @@ const my_vertexai = new MyVertexAiClient([{
 async function commonPreProcess(req: UserRequest, suffix: string) {
     const { project, location, model } = req.params;
 
-    let gcpProjectId;
-    const depmen = await ds.getRepository(DepartmentMemberEntity).findOneBy({
-        orgKey: req.info.user.orgKey,
-        name: req.info.user.name,
-    });
-    if (!depmen) {
-    } else {
-        const dep = await ds.getRepository(DepartmentEntity).findOneByOrFail({ orgKey: req.info.user.orgKey, id: depmen.departmentId });
-        gcpProjectId = dep.gcpProjectId;
-    }
-
-    const targetProject = gcpProjectId || GCP_PROJECT_ID || project || 'default-project';
-    const targetLocation = GCP_REGION_ANTHROPIC || location || 'us-central1';
-
-    const { idempotencyKey, label, tokenCount, logObject } = await initializeRequest(req, model, suffix);
+    const { idempotencyKey, label, aiModel, aiProvider, tokenCount, logObject } = await initializeRequest(req, model, suffix);
     console.log(logObject.output('start'));
+
+    const targetProject = (aiProvider.config as { projectId: string }).projectId || GCP_PROJECT_ID || project || 'default-project';
+    const targetLocation = (aiProvider.config as { regionList: string[] }).regionList[Math.floor(Math.random() * (aiProvider.config as { regionList: string[] }).regionList.length)] || GCP_REGION_ANTHROPIC || location || 'us-central1';
 
     const instance = req.body;
     if (!instance || !Array.isArray(instance.messages)) {
@@ -204,7 +153,7 @@ async function commonPreProcess(req: UserRequest, suffix: string) {
 
     const vertexUrl = buildVertexUrl(targetProject, targetLocation, model, suffix as any);
 
-    return { instance, vertexUrl, idempotencyKey, tokenCount, logObject };
+    return { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject };
 }
 
 /**
@@ -216,7 +165,7 @@ export const vertexAIByAnthropicAPI = [
         const req = _req as UserRequest;
 
         try {
-            const { instance, vertexUrl, idempotencyKey, tokenCount, logObject } =
+            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject } =
                 await commonPreProcess(req, 'rawPredict');
 
             // リクエストをファイルに書き出す
@@ -263,8 +212,18 @@ export const vertexAIByAnthropicAPI = [
 
             // レスポンスからトークン数を取得
             if (vertexResponse.data?.usage) {
-                tokenCount.prompt_tokens = vertexResponse.data.usage.input_tokens || 0;
-                tokenCount.completion_tokens = vertexResponse.data.usage.output_tokens || 0;
+                const usage = vertexResponse.data.usage as Usage;
+                const costTable = TokenCount.COST_TABLE[aiModel.name];
+                tokenCount.cost = 0;
+                tokenCount.cost += usage.input_tokens * costTable.prompt / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                tokenCount.cost += usage.output_tokens * costTable.completion / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                // args.modelはthinkingが外れてるのでcommonArgsのmodelを使う
+                if (usage.cache_creation_input_tokens && costTable && (costTable as any).metadata?.cache_creation_input_tokens > 0) {
+                    tokenCount.cost += usage.cache_creation_input_tokens * (costTable as any).metadata?.cache_creation_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                } else { }
+                if (usage.cache_read_input_tokens && costTable && (costTable as any).metadata?.cache_read_input_tokens > 0) {
+                    tokenCount.cost += usage.cache_read_input_tokens * (costTable as any).metadata?.cache_read_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                } else { }
             }
 
             // レスポンステキストを抽出（ログ用）
@@ -278,19 +237,36 @@ export const vertexAIByAnthropicAPI = [
             // ファイル書き出し
             fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.response.json`,
                 JSON.stringify({ instance, url: vertexUrl, headers: vertexResponse.headers, response: vertexResponse.data }, Utils.genJsonSafer()), {}, () => { });
-            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.result.json`,
-                tokenCount.tokenBuilder || JSON.stringify(vertexResponse.data), {}, () => { });
+            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.result.md`, tokenCount.tokenBuilder || '', {}, () => { });
 
-            console.log(logObject.output('fine', '', JSON.stringify({
-                prompt_tokens: tokenCount.prompt_tokens,
-                completion_tokens: tokenCount.completion_tokens
-            })));
+            console.log(logObject.output('fine', '', JSON.stringify(vertexResponse.data.usage)));
+
+            const entity = new PredictHistoryEntity();
+            entity.idempotencyKey = idempotencyKey;
+            entity.argsHash = idempotencyKey.split('-')[1];
+            entity.label = `vertexai-claude-proxy-${idempotencyKey.split('-')[2]}`;
+            entity.provider = aiProvider?.name || 'anthropic_vertex';
+            entity.model = aiModel?.name || 'claude-3-5-sonnet-20241022';
+            entity.take = Date.now() - logObject.baseTime;
+            entity.reqToken = tokenCount.prompt_tokens;
+            entity.resToken = tokenCount.completion_tokens;
+            entity.cost = tokenCount.cost;
+            entity.status = PredictHistoryStatus.Fine;
+            entity.message = JSON.stringify(vertexResponse.data.usage); // 追加メッセージがあれば書く。
+            entity.orgKey = req.info.user.orgKey; // ここでは利用者不明
+            entity.createdBy = req.info.user.id; // ここでは利用者不明
+            entity.updatedBy = req.info.user.id; // ここでは利用者不明
+            if (req.info.ip) {
+                entity.createdIp = req.info.ip; // ここでは利用者不明
+                entity.updatedIp = req.info.ip; // ここでは利用者不明
+            } else { }
+            await ds.getRepository(PredictHistoryEntity).save(entity);
 
             res.status(vertexResponse.status).json(vertexResponse.data);
         } catch (err: any) {
             const { idempotencyKey, logObject } = await commonPreProcess(req, 'predict').catch(() => ({
                 idempotencyKey: 'error',
-                logObject: new LogObject(Date.now(), new TokenCount(), 'error', 'error')
+                logObject: new LogObject(Date.now(), new TokenCount(req.params.model as GPTModels), 'error', 'error')
             }));
             handleError(err, logObject, idempotencyKey, res);
         }
@@ -304,9 +280,10 @@ export const vertexAIByAnthropicAPIStream = [
     ...commonValidation,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
+        console.log(`Request: ${req.method} ${req.originalUrl}`);
 
         try {
-            const { instance, vertexUrl, idempotencyKey, tokenCount, logObject } =
+            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject } =
                 await commonPreProcess(req, 'streamRawPredict');
 
             let vertexResponse: AxiosResponse | undefined;
@@ -386,7 +363,12 @@ export const vertexAIByAnthropicAPIStream = [
             // バッファを初期化（関数の外で定義）
             let dataBuffer = '';
 
-            const usage = {};
+            const usage = {
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            };
 
             // ストリーミングデータの監視
             vertexResponse.data.on('data', (chunk: Buffer) => {
@@ -411,20 +393,16 @@ export const vertexAIByAnthropicAPIStream = [
                             if (data.type === 'content_block_delta' && data.delta?.text) {
                                 tokenBuilder += data.delta.text;
                             } else if (data.type === 'message_delta') {
-                                if (data.usage) {
-                                    tokenCount.prompt_tokens = data.usage.input_tokens || tokenCount.prompt_tokens || 0;
-                                    tokenCount.completion_tokens = data.usage.output_tokens || tokenCount.completion_tokens || 0;
-                                    Object.assign(usage, data.usage);
-                                }
                             } else if (data.type === 'message_start') {
-                                if (data.message && data.message.usage) {
-                                    tokenCount.prompt_tokens = data.message.usage.input_tokens || tokenCount.prompt_tokens || 0;
-                                    tokenCount.completion_tokens = data.message.usage.output_tokens || tokenCount.completion_tokens || 0;
-                                    Object.assign(usage, data.message.usage);
-                                }
                             }
-                            if (data.usage) {
-                                Object.assign(usage, data.usage);
+                            let _usage = data.usage ? data.usage as Usage : (data.message && data.message.usage ? data.message.usage : null);
+                            if (_usage) {
+                                usage.input_tokens += _usage.input_tokens || 0;
+                                usage.output_tokens += _usage.output_tokens || 0;
+                                usage.cache_creation_input_tokens += _usage.cache_creation_input_tokens || 0;
+                                usage.cache_read_input_tokens += _usage.cache_read_input_tokens || 0;
+                                tokenCount.prompt_tokens += _usage.input_tokens || 0;
+                                tokenCount.completion_tokens += _usage.output_tokens || 0;
                             }
                         } catch (e) {
                             // JSON parse error - 無効な行をスキップ
@@ -443,14 +421,34 @@ export const vertexAIByAnthropicAPIStream = [
                         if (data.type === 'content_block_delta' && data.delta?.text) {
                             tokenBuilder += data.delta.text;
                         } else if (data.type === 'message_delta' && data.usage) {
-                            message = JSON.stringify(data.usage, Utils.genJsonSafer());
-                            tokenCount.prompt_tokens = data.usage.input_tokens || 0;
-                            tokenCount.completion_tokens = data.usage.output_tokens || 0;
+                        }
+                        let _usage = data.usage ? data.usage as Usage : (data.message && data.message.usage ? data.message.usage : null);
+                        if (_usage) {
+                            usage.input_tokens += _usage.input_tokens || 0;
+                            usage.output_tokens += _usage.output_tokens || 0;
+                            usage.cache_creation_input_tokens += _usage.cache_creation_input_tokens || 0;
+                            usage.cache_read_input_tokens += _usage.cache_read_input_tokens || 0;
+                            tokenCount.prompt_tokens += _usage.input_tokens || 0;
+                            tokenCount.completion_tokens += _usage.output_tokens || 0;
                         }
                     } catch (e) {
                         console.warn('Invalid JSON in final buffer:', dataBuffer);
                     }
                 }
+
+                const costTable = TokenCount.COST_TABLE[aiModel.name];
+                message = JSON.stringify(usage, Utils.genJsonSafer());
+                tokenCount.cost = 0;
+                tokenCount.cost += usage.input_tokens * costTable.prompt / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                tokenCount.cost += usage.output_tokens * costTable.completion / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                // args.modelはthinkingが外れてるのでcommonArgsのmodelを使う
+                if (usage.cache_creation_input_tokens && costTable && (costTable as any).metadata?.cache_creation_input_tokens > 0) {
+                    tokenCount.cost += usage.cache_creation_input_tokens * (costTable as any).metadata?.cache_creation_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                } else { }
+                if (usage.cache_read_input_tokens && costTable && (costTable as any).metadata?.cache_read_input_tokens > 0) {
+                    tokenCount.cost += usage.cache_read_input_tokens * (costTable as any).metadata?.cache_read_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                } else { }
+
                 // バッファをクリア
                 dataBuffer = '';
 
@@ -465,14 +463,14 @@ export const vertexAIByAnthropicAPIStream = [
                 entity.idempotencyKey = idempotencyKey;
                 entity.argsHash = idempotencyKey.split('-')[1];
                 entity.label = `vertexai-claude-proxy-${idempotencyKey.split('-')[2]}`;
-                entity.provider = tokenCount.model?.providerNameList[0] || 'anthropic_vertex';
-                entity.model = tokenCount.model?.name || 'claude-3-5-sonnet-20241022';
+                entity.provider = aiProvider?.name || 'anthropic_vertex';
+                entity.model = aiModel?.name || 'claude-3-5-sonnet-20241022';
                 entity.take = Date.now() - logObject.baseTime;
                 entity.reqToken = tokenCount.prompt_tokens;
                 entity.resToken = tokenCount.completion_tokens;
-                entity.cost = tokenCount.calcCost();
+                entity.cost = tokenCount.cost;
                 entity.status = PredictHistoryStatus.Fine;
-                entity.message = JSON.stringify(usage); // 追加メッセージがあれば書く。
+                entity.message = message; // 追加メッセージがあれば書く。
                 entity.orgKey = req.info.user.orgKey; // ここでは利用者不明
                 entity.createdBy = req.info.user.id; // ここでは利用者不明
                 entity.updatedBy = req.info.user.id; // ここでは利用者不明
@@ -493,7 +491,7 @@ export const vertexAIByAnthropicAPIStream = [
         } catch (err: any) {
             const { idempotencyKey, logObject } = await commonPreProcess(req, 'streamRawPredict').catch(() => ({
                 idempotencyKey: 'error',
-                logObject: new LogObject(Date.now(), new TokenCount(), 'error', 'error')
+                logObject: new LogObject(Date.now(), new TokenCount(req.params.model as GPTModels, 0, 0), 'error', 'error')
             }));
             handleError(err, logObject, idempotencyKey, res);
         }

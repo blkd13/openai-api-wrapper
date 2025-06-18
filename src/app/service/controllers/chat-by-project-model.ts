@@ -639,6 +639,118 @@ async function buildArgs(
     return { messageArgsSetList };
 }
 
+
+export async function getAIProviderAndModel(user: UserTokenPayload, modelName: string): Promise<{ aiProvider: AIProviderEntity, aiModel: AIModelEntity }> {
+    // USER>DIVISION>ORGANIZTION の優先順位で最上位のスコープのものを取得する
+    const priority = [ScopeType.USER, ScopeType.DIVISION, ScopeType.ORGANIZATION];
+
+    // ユーザーのロールリストからスコープ条件を作成
+    const modelScopeConditions = user.roleList.map(role => safeWhere({
+        orgKey: user.orgKey,
+        name: modelName,
+        scopeInfo: {
+            scopeType: role.scopeInfo.scopeType,
+            scopeId: role.scopeInfo.scopeId,
+        },
+        isActive: true,
+    }));
+
+    const modelList = await ds.getRepository(AIModelEntity).find({
+        where: modelScopeConditions,
+    });
+
+    if (modelList.length === 0) {
+        throw new Error(`モデル ${modelName} が見つかりません。`);
+    }
+
+    // スコープ優先順位でソート
+    modelList.sort((a, b) => {
+        return priority.indexOf(a.scopeInfo.scopeType) - priority.indexOf(b.scopeInfo.scopeType);
+    });
+
+    const model = modelList[0]; // 最優先のモデルを使用
+
+    if (!TokenCount.COST_TABLE[modelName]) {
+        // TODO 本来はidじゃなくてnameで当ててscopeの優先順位計算をすべきだが一旦手抜き
+        const price = await ds.getRepository(AIModelPricingEntity).findOne({
+            where: safeWhere({ orgKey: user.orgKey, modelId: model.id, isActive: true }),
+        }) || {} as AIModelPricingEntity;
+        if (!price.id) {
+            // console.log(`モデル ${modelName} の価格情報が見つからないので、デフォルトの価格を設定します。`);
+            // errorでもよかったが一応、、
+            // throw new Error(`モデル ${modelName} の価格情報が見つかりません。`);
+            Object.assign(price, {
+                id: '',
+                orgKey: user.orgKey,
+                modelId: model.id,
+                scopeInfo: {
+                    scopeType: ScopeType.ORGANIZATION,
+                    scopeId: user.orgKey,
+                },
+                name: modelName,
+                inputPricePerUnit: 0,
+                outputPricePerUnit: 0,
+                unit: '',
+                validFrom: new Date(),
+                isActive: true,
+            });
+        } else { }
+
+        // CONST_TABLEに無理やり追加。本当はこんなやり方はしたくない。
+        TokenCount.COST_TABLE[modelName] = {
+            prompt: price.inputPricePerUnit,
+            completion: price.outputPricePerUnit,
+            metadata: price.metadata,
+        } as { prompt: number, completion: number, metadata?: any };
+        // console.log(`モデル ${modelName} の価格情報をデフォルト値で設定しました。`, TokenCount.COST_TABLE[modelName]);
+    } else { }
+
+    // ユーザーのロールリストからスコープ条件を作成
+    const providerScopeConditions = user.roleList.map(role =>
+        model.providerNameList.map(providerName => safeWhere({
+            orgKey: user.orgKey,
+            name: providerName,
+            scopeInfo: {
+                scopeType: role.scopeInfo.scopeType,
+                scopeId: role.scopeInfo.scopeId,
+            },
+            isActive: true,
+        }))
+    ).flat();
+
+    // console.dir(providerScopeConditions, { depth: null });
+    const providerList = await ds.getRepository(AIProviderEntity).find({
+        where: providerScopeConditions,
+    });
+
+    if (providerList.length === 0) {
+        throw new Error(`モデル ${modelName} に対応するプロバイダが見つかりません。`);
+    }
+
+    // スコープ優先順位でソート
+    const providerSetMap = providerList.reduce((prev, curr) => {
+        if (prev[curr.id]) {
+            // 既に存在する場合は何もしない
+        } else {
+            prev[curr.id] = [];
+        }
+        prev[curr.id].push(curr);
+        return prev;
+    }, {} as Record<string, AIProviderEntity[]>);
+    Object.keys(providerSetMap).forEach(key => {
+        providerSetMap[key].sort((a, b) => {
+            return priority.indexOf(b.scopeInfo.scopeType) - priority.indexOf(a.scopeInfo.scopeType);
+        });
+    });
+    // console.log(`\n\nproviderSetMap=${JSON.stringify(providerSetMap, null, 2)}`);
+    // providerSetMapのキーをプロバイダIDにして最初のプロバイダ名を使用
+    const activeProviderList = Object.keys(providerSetMap).map(key => providerSetMap[key][0]);
+    return {
+        aiProvider: activeProviderList[Math.floor(Math.random() * activeProviderList.length)],
+        aiModel: model, // 最優先のモデルを使用
+    };
+}
+
 export async function getAIProvider(user: UserTokenPayload, modelName: string): Promise<AIProviderClient> {
     // USER>DIVISION>ORGANIZTION の優先順位で最上位のスコープのものを取得する
     const priority = [ScopeType.USER, ScopeType.DIVISION, ScopeType.ORGANIZATION];
@@ -670,12 +782,12 @@ export async function getAIProvider(user: UserTokenPayload, modelName: string): 
     const model = modelList[0]; // 最優先のモデルを使用
 
     if (!TokenCount.COST_TABLE[modelName]) {
-        // console.log(`モデル ${modelName} の価格情報が見つからないので、デフォルトの価格を設定します。`);
         // TODO 本来はidじゃなくてnameで当ててscopeの優先順位計算をすべきだが一旦手抜き
         const price = await ds.getRepository(AIModelPricingEntity).findOne({
             where: safeWhere({ orgKey: user.orgKey, modelId: model.id, isActive: true }),
         }) || {} as AIModelPricingEntity;
         if (!price.id) {
+            // console.log(`モデル ${modelName} の価格情報が見つからないので、デフォルトの価格を設定します。`);
             // errorでもよかったが一応、、
             // throw new Error(`モデル ${modelName} の価格情報が見つかりません。`);
             Object.assign(price, {
@@ -701,7 +813,8 @@ export async function getAIProvider(user: UserTokenPayload, modelName: string): 
             completion: price.outputPricePerUnit,
             metadata: price.metadata,
         } as { prompt: number, completion: number, metadata?: any };
-    }
+        // console.log(`モデル ${modelName} の価格情報をデフォルト値で設定しました。`, TokenCount.COST_TABLE[modelName]);
+    } else { }
 
     // // modelList内でproviderNameが重複している場合は最初のものを使用する
     // const providerMap = modelList.reduce((prev, curr) => {
@@ -764,7 +877,7 @@ export async function getAIProvider(user: UserTokenPayload, modelName: string): 
     const activeProviderList = Object.keys(providerSetMap).map(key => providerSetMap[key][0]);
 
     const activeProviderClients = activeProviderList.map(provider => {
-        if (providerInstances[provider.id] && providerInstances[provider.id].updatedAt === provider.updatedAt) {
+        if (providerInstances[provider.id] && providerInstances[provider.id].updatedAt.getTime() === provider.updatedAt.getTime()) {
             // 既にクライアントが生成されている場合はそれを返す
             return providerInstances[provider.id].client;
         } else { }

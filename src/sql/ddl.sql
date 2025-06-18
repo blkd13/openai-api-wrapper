@@ -43,7 +43,7 @@ SELECT
     p2.connection_id,
     p2.stream_id,
     p2.message_id,
-    u.org_key,
+    COALESCE(u.org_key, u2.org_key, p1.org_key) AS org_key,
     COALESCE(u.id, u2.id) AS user_id
 FROM
     p1_ranked p1

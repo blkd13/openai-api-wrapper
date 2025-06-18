@@ -17,6 +17,38 @@ import { convertToPdfMimeList, extractPdfData } from '../../common/pdf-funcs.js'
 import { convertPptxToPdf } from '../../common/media-funcs.js';
 import { MyVertexAiClient } from '../../common/my-vertexai.js';
 import { VertexAI } from '@google-cloud/vertexai/build/src/vertex_ai.js';
+import { UserEntity, UserStatus } from '../../service/entity/auth.entity.js';
+import { UserTokenPayload } from '../../service/middleware/authenticate.js';
+
+/**
+ * Get user configuration for agent scripts
+ */
+async function getAgentUser(): Promise<UserTokenPayload> {
+    const { AGENT_USER_ID, AGENT_ORG_KEY = 'public' } = process.env;
+    
+    if (!AGENT_USER_ID) {
+        throw new Error('AGENT_USER_ID environment variable is required for agent scripts');
+    }
+
+    const user = await ds.getRepository(UserEntity).findOne({
+        where: { orgKey: AGENT_ORG_KEY, id: AGENT_USER_ID, status: UserStatus.Active }
+    });
+
+    if (!user) {
+        throw new Error(`User not found: orgKey=${AGENT_ORG_KEY}, id=${AGENT_USER_ID}`);
+    }
+
+    // Convert UserEntity to UserTokenPayload format
+    return {
+        type: 'user',
+        orgKey: user.orgKey,
+        id: user.id,
+        email: user.email,
+        name: user.name || user.email,
+        roleList: [], // Agent scripts typically don't need specific roles
+        authGeneration: user.authGeneration || 0
+    };
+}
 
 /**
  * 必ず main() という関数を定義する。
@@ -223,7 +255,8 @@ export async function main() {
                 }
             }).filter(Boolean) as ({ buffer: Buffer; fileBodyEntity: FileBodyEntity; base64Data?: undefined; } | { base64Data: string; fileBodyEntity: FileBodyEntity; buffer?: undefined; })[];
             await ds.transaction(async transactionalEntityManager => {
-                const tokenCountedFileBodyList = await geminiCountTokensByFile(transactionalEntityManager, tokenCountFileList);
+                const agentUser = await getAgentUser();
+                const tokenCountedFileBodyList = await geminiCountTokensByFile(transactionalEntityManager, tokenCountFileList, agentUser);
             });
         }
 

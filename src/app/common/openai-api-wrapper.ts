@@ -65,7 +65,7 @@ export const providerInstances: { [aiProviderId: string]: { client: AIProviderCl
 
 // const apiVersion = '2024-08-01-preview';
 import { CachedContent, countChars, GenerateContentRequestExtended, mapForGemini, mapForGeminiExtend, MyVertexAiClient } from './my-vertexai.js';
-import { MessageStreamEvent, MessageStreamParams } from '@anthropic-ai/sdk/resources/index.js';
+import { MessageStreamEvent, MessageStreamParams, Usage } from '@anthropic-ai/sdk/resources/index.js';
 import { ReadableStream } from '@anthropic-ai/sdk/_shims/index.js';
 import { convertAnthropicToOpenAI, remapAnthropic } from './my-anthropic.js';
 import { AIProviderType, AnthropicVertexAIConfig, AzureOpenAIConfig, CohereConfig, OpenAICompatibleConfig, OpenAIConfig } from '../service/entity/ai-model-manager.entity.js';
@@ -621,6 +621,12 @@ class RunBit {
                         const reader = response.getReader();
 
                         let tokenBuilder: string = '';
+                        const usageMetadata = {
+                            input_tokens: 0,
+                            output_tokens: 0,
+                            cache_creation_input_tokens: 0,
+                            cache_read_input_tokens: 0,
+                        };
 
                         const _that = this;
 
@@ -636,18 +642,21 @@ class RunBit {
                                     const { value, done } = await reader.read();
                                     if (done) {
                                         // ストリームが終了したらループを抜ける
-                                        tokenCount.cost = tokenCount.calcCost();
-
-                                        // console.dir(TokenCount.COST_TABLE[args.model]);
-
-                                        if ((usageMetadata as any).cache_creation_input_tokens && TokenCount.COST_TABLE[args.model] && (TokenCount.COST_TABLE[args.model] as any).metadata?.cache_creation_input_tokens > 0) {
-                                            console.log(logObject.output('fine', '', `Cache creation input tokens: ${(usageMetadata as any).cache_creation_input_tokens}`));
-                                            tokenCount.cost += (usageMetadata as any).cache_creation_input_tokens * (TokenCount.COST_TABLE[args.model] as any).metadata?.cache_creation_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
-                                        }
-                                        if ((usageMetadata as any).cache_read_input_tokens && TokenCount.COST_TABLE[args.model] && (TokenCount.COST_TABLE[args.model] as any).metadata?.cache_read_input_tokens > 0) {
-                                            console.log(logObject.output('fine', '', `Cache read input tokens: ${(usageMetadata as any).cache_read_input_tokens}`));
-                                            tokenCount.cost += (usageMetadata as any).cache_read_input_tokens * (TokenCount.COST_TABLE[args.model] as any).metadata?.cache_read_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
-                                        }
+                                        const costTable = TokenCount.COST_TABLE[commonArgs.model];
+                                        tokenCount.prompt_tokens = usageMetadata.input_tokens || 0;
+                                        tokenCount.completion_tokens = usageMetadata.output_tokens || 0;
+                                        tokenCount.cost = 0;
+                                        tokenCount.cost += usageMetadata.input_tokens * costTable.prompt / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                                        tokenCount.cost += usageMetadata.output_tokens * costTable.completion / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                                        // args.modelはthinkingが外れてるのでcommonArgsのmodelを使う
+                                        if (usageMetadata.cache_creation_input_tokens && costTable && (costTable as any).metadata?.cache_creation_input_tokens > 0) {
+                                            // console.log(`Cache creation input tokens: ${usageMetadata.cache_creation_input_tokens}`);
+                                            tokenCount.cost += usageMetadata.cache_creation_input_tokens * (costTable as any).metadata?.cache_creation_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                                        } else { }
+                                        if (usageMetadata.cache_read_input_tokens && costTable && (costTable as any).metadata?.cache_read_input_tokens > 0) {
+                                            // console.log(`Cache read input tokens: ${usageMetadata.cache_read_input_tokens}`);
+                                            tokenCount.cost += usageMetadata.cache_read_input_tokens * (costTable as any).metadata?.cache_read_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                                        } else { }
 
                                         console.log(logObject.output('fine', '', JSON.stringify(usageMetadata)));
                                         observer.complete();
@@ -670,13 +679,20 @@ class RunBit {
                                     const obj: MessageStreamEvent = JSON.parse(content);
 
                                     function remapAnthropic(obj: MessageStreamEvent): ChatCompletionChunk[] {
+                                        const data = obj as any
+                                        let _usage = data.usage ? data.usage as Usage : (data.message && data.message.usage ? data.message.usage : null);
+                                        if (_usage) {
+                                            usageMetadata.input_tokens += _usage.input_tokens || 0;
+                                            usageMetadata.output_tokens += _usage.output_tokens || 0;
+                                            usageMetadata.cache_creation_input_tokens += _usage.cache_creation_input_tokens || 0;
+                                            usageMetadata.cache_read_input_tokens += _usage.cache_read_input_tokens || 0;
+                                            tokenCount.prompt_tokens += _usage.input_tokens || 0;
+                                            tokenCount.completion_tokens += _usage.output_tokens || 0;
+                                        } else { }
+
                                         if (obj.type === 'message_start') {
                                             baseMessage.id = obj.message.id;
                                             baseMessage.role = obj.message.role;
-
-                                            tokenCount.prompt_tokens = obj.message.usage.input_tokens;
-                                            tokenCount.completion_tokens = obj.message.usage.output_tokens;
-                                            Object.assign(usageMetadata, obj.message.usage);
                                         } else if (obj.type === 'content_block_start') {
                                             index = obj.index;
                                             const choice: ChatCompletionChunk.Choice = {
@@ -770,9 +786,6 @@ class RunBit {
                                             // };
                                             // return [chunk];
                                         } else if (obj.type === 'message_delta') {
-                                            Object.assign(usageMetadata, obj.usage);
-                                            tokenCount.completion_tokens = obj.usage.output_tokens;
-
                                             const choice: ChatCompletionChunk.Choice = {
                                                 index: index,
                                                 delta: { content: null, refusal: null },
