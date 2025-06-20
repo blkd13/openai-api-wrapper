@@ -712,7 +712,11 @@ export async function gitlabFunctionDefinitions(providerName: string,
                     // const codeInfoBlock = `\`\`\`json\n${JSON.stringify(contentInfo, null, 2)}\n\`\`\`\n`; // ファイル情報
 
                     const systemPrompt = 'アシスタントAI';
+                    // aiProviderClientをつけてしまったばかりにプレーンなJSONじゃなくなってしまったので一旦外さないといけなくて面倒
+                    const aiProviderClient = obj.inDto.aiProviderClient;
+                    delete (obj.inDto as any).aiProviderClient;
                     const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
+                    obj.inDto.aiProviderClient = aiProviderClient;
                     // inDto.args.model = 'gemini-1.5-pro';
                     inDto.args.messages = [
                         { role: 'system', content: [{ type: 'text', text: systemPrompt }] },

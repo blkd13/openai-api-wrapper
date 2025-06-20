@@ -130,7 +130,11 @@ export async function boxFunctionDefinitions(
                 const systemPrompt = 'アシスタントAI';
                 const model = 'gemini-1.5-pro';
 
+                // aiProviderClientをつけてしまったばかりにプレーンなJSONじゃなくなってしまったので一旦外さないといけなくて面倒
+                const aiProviderClient = obj.inDto.aiProviderClient;
+                delete (obj.inDto as any).aiProviderClient;
                 const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
+                obj.inDto.aiProviderClient = aiProviderClient;
                 inDto.args.model = model || inDto.args.model; // modelが指定されていない場合は元のモデルを使う
                 inDto.args.messages = [
                     { role: 'system', content: [{ type: 'text', text: systemPrompt }] },

@@ -183,12 +183,15 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
                 // console.dir(newUserMessage);
                 const newUserMessageToolResult = newUserMessage.content[0] as any;
                 if (newUserMessageToolResult.type === 'tool_result') {
-                    // 編集済みのものはそのまま
+                    // 編集済みのものはそのまま - キャッシュ制御を追加
+                    newUserMessageToolResult.cache_control = { type: 'ephemeral' };
                 } else if (newUserMessageToolResult.type === 'text') {
                     newUserMessageToolResult.type = 'tool_result' as any;
                     newUserMessageToolResult.tool_use_id = m.tool_call_id;
                     newUserMessageToolResult.content = newUserMessageToolResult.text;
                     delete newUserMessageToolResult.text;
+                    // ツール結果にキャッシュ制御を追加
+                    newUserMessageToolResult.cache_control = { type: 'ephemeral' };
                 }
             } else { /** error */ }
             // newToolMessage.tool_calls = m.tool_calls;
@@ -212,6 +215,16 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
 
         if (m.role === 'system') {
             res.system = m.content;  // これはstringでいいのか？
+            // システムプロンプトにキャッシュ制御を追加
+            if (typeof res.system === 'string') {
+                res.system = [{ type: 'text', text: res.system, cache_control: { type: 'ephemeral' } }];
+            } else if (Array.isArray(res.system)) {
+                // 最後のテキストブロックにキャッシュ制御を追加
+                const lastBlock = res.system[res.system.length - 1];
+                if (lastBlock && lastBlock.type === 'text') {
+                    lastBlock.cache_control = { type: 'ephemeral' };
+                }
+            }
             return null;
         } else {
             return newMessage;

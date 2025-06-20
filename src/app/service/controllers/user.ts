@@ -762,7 +762,7 @@ export const deleteApiProviderTemplate = [
  * [GET] テナント一覧の取得
  */
 export const getOrganizations = [
-    query('isActive').optional().isBoolean(),
+    query('isActive').optional().isBoolean().toBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;

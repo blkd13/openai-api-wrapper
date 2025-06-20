@@ -18,7 +18,7 @@ import { ScopeUtils } from '../common/scope-utils.js';
  */
 export const getAIProviderTemplates = [
     query('provider').optional().isString(),
-    query('includeOverridden').optional().isBoolean(),
+    query('includeOverridden').optional().isBoolean().toBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -270,7 +270,7 @@ export const getBaseModels = [
     query('provider').optional().isString(),
     query('status').optional().isString(),
     query('modelId').optional().isUUID(),
-    query('includeOverridden').optional().isBoolean(),
+    query('includeOverridden').optional().isBoolean().toBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -620,7 +620,7 @@ export const deleteModelPricing = [
  * [user認証] 全タグ一覧取得
  */
 export const getAllTags = [
-    query('includeOverridden').optional().isBoolean(),
+    query('includeOverridden').optional().isBoolean().toBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;

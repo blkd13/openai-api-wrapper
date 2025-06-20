@@ -62,12 +62,22 @@ export class MyVertexAiClient {
 
     constructor(public params: VertexAIConfig[]) {
         // this.client = new VertexAI({ project: this.params.projectId, location: this.params.region, apiEndpoint: this.params.baseURL, httpAgent: this.params.httpAgent });
-        this.params.forEach(param => {
-            param.locationList.forEach(location => {
-                this.clients.push(new VertexAI({ ...param, location }));
-                this.clientsParams.push({ ...param, location });
+        if (!this.params || this.params.length === 0) {
+            this.clientsParams.push({
+                project: GCP_PROJECT_ID || 'your-default-project-id',
+                location: GCP_REGION || 'us-central1',
+                apiEndpoint: GCP_API_BASE_PATH || 'aiplatform.googleapis.com',
+                httpAgent: undefined,
             });
-        });
+            this.clients.push(new VertexAI(this.clientsParams[0]));
+        } else {
+            this.params.forEach(param => {
+                param.locationList.forEach(location => {
+                    this.clients.push(new VertexAI({ ...param, location }));
+                    this.clientsParams.push({ ...param, location });
+                });
+            });
+        }
     }
 
     get client(): VertexAI {
@@ -362,18 +372,21 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, aiProvi
         args.model = args.model.replace('-thinking', '');
         (req.generationConfig as any).thinking_config = { thinking_budget: -1 };
     }
-
     // コンテンツキャッシュ
     const cachedContent = (args as any).cachedContent as CachedContent;
     delete (args as any).cachedContent;
-
     // console.dir(cachedContent);
     const vertexAiClientParam = (aiProvider.client as MyVertexAiClient).clientParam;
-    req.region = vertexAiClientParam.location;
-    req.resourcePath = `projects/${vertexAiClientParam.project}/locations/${req.region}/publishers/google/models/${args.model}`;
-    req.apiEndpoint = req.region === 'global' // globalの場合はエンドポイントに地域を付けない
-        ? `https://${vertexAiClientParam.apiEndpoint || GCP_API_BASE_PATH || `aiplatform.googleapis.com`}`
-        : `https://${req.region}-${vertexAiClientParam.apiEndpoint || GCP_API_BASE_PATH || `aiplatform.googleapis.com`}`;
+    if (vertexAiClientParam) {
+        const apiEndpoint = vertexAiClientParam.apiEndpoint || GCP_API_BASE_PATH || `aiplatform.googleapis.com`;
+        req.region = vertexAiClientParam.location;
+        req.resourcePath = `projects/${vertexAiClientParam.project}/locations/${req.region}/publishers/google/models/${args.model}`;
+        req.apiEndpoint = req.region === 'global' // globalの場合はエンドポイントに地域を付けない
+            ? `${apiEndpoint}`
+            : `${req.region}-${apiEndpoint}`;
+    } else {
+        // gemini APIの場合はclientParamはない
+    }
 
     if (cachedContent) {
         (aiProvider.client.client as VertexAI)
