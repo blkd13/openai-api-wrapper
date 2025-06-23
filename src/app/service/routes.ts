@@ -46,7 +46,7 @@ import { getUserSetting, upsertUserSetting, deleteUserSetting, getApiProviders, 
 import * as gitlab from './api/api-gitlab.js';
 import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
-import { registApiKey, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId } from './controllers/tool-call.js';
+import { registApiKey, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId, callFunction } from './controllers/tool-call.js';
 import { upsertMCPServer, getMCPServers, deleteMCPServer } from './controllers/mcp-manager.js';
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
 import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
@@ -129,6 +129,8 @@ authNoneRouter.post('/count-tokens', geminiCountTokens);
 authUserRouter.get('/function-definitions', getFunctionDefinitions);
 authUserRouter.get('/tool-call-group/:id', getToolCallGroup);
 authUserRouter.get('/tool-call-group-by-tool-call-id/:id', getToolCallGroupByToolCallId);
+authUserRouter.get('/mcp/tools/list', getFunctionDefinitions);
+authUserRouter.post('/mcp/tools/call', callFunction);
 
 // チーム関連
 authUserRouter.post('/team', createTeam);

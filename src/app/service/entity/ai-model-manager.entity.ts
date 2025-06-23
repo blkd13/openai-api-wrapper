@@ -374,6 +374,9 @@ export class AIModelEntity extends MyBaseEntity {
     @Column({ nullable: true })
     licenseType?: string;
 
+    @Column({ nullable: true })
+    developer?: string;
+
     @Column({ type: 'date', nullable: true })
     knowledgeCutoff?: Date;
 

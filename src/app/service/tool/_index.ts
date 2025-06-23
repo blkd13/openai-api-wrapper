@@ -1,7 +1,8 @@
+import { IsNull, MoreThan } from 'typeorm/index.js';
 import { MyToolType, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
 import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
-import { ApiProviderEntity } from '../entity/auth.entity.js';
+import { ApiProviderEntity, OAuthAccountEntity, OAuthAccountStatus } from '../entity/auth.entity.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../entity/project-models.entity.js';
 import { UserRequest } from '../models/info.js';
 import { boxFunctionDefinitions } from './box.js';
@@ -17,6 +18,7 @@ import { mcpFunctionDefinitions } from './mcp.js';
 export async function functionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+    connectedOnly: boolean = false,
 ): Promise<MyToolType[]> {
 
     // APIプロバイダーを基に関数定義を取得
@@ -28,7 +30,40 @@ export async function functionDefinitions(
             isDeleted: false,
         },
         order: { sortSeq: 'ASC' },
-    });    // プロバイダーtypeごとの関数定義をマッピング
+    });
+
+    const apiProviders = [];
+    if (connectedOnly) {
+        const connectedAccounts = await ds.getRepository(OAuthAccountEntity).find({
+            select: { provider: true, },
+            where: [
+                {
+                    orgKey: req.info.user.orgKey,
+                    userId: req.info.user.id,
+                    tokenExpiresAt: IsNull(),
+                    status: OAuthAccountStatus.ACTIVE,
+                },
+                {
+                    orgKey: req.info.user.orgKey,
+                    userId: req.info.user.id,
+                    tokenExpiresAt: MoreThan(new Date()),
+                    status: OAuthAccountStatus.ACTIVE,
+                }
+            ],
+        });
+        console.log('Connected accounts:', connectedAccounts.map(account => account.provider));
+        // 接続されているプロバイダーのみをフィルタリング
+        for (const provider of activeApiProviders) {
+            if (connectedAccounts.some(account => account.provider === provider.type)) {
+                apiProviders.push(provider);
+            }
+        }
+    } else {
+        // 接続されていないプロバイダーも含めて全てのプロバイダーを使用
+        apiProviders.push(...activeApiProviders);
+    }
+
+    // プロバイダーtypeごとの関数定義をマッピング
     const map = {
         mattermost: mattermostFunctionDefinitions,
         box: boxFunctionDefinitions,
@@ -40,7 +75,7 @@ export async function functionDefinitions(
     } as Record<string, (name: string, obj: any, req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string) => Promise<MyToolType[]>>;
 
     // 各プロバイダーの関数定義を取得
-    const functionDefinitions = (await Promise.all(activeApiProviders.map(async provider =>
+    const functionDefinitions = (await Promise.all(apiProviders.map(async provider =>
         map[provider.type] ? await map[provider.type](provider.name, obj, req, aiApi, connectionId, streamId, message, label) : null
     ))).filter(Boolean).flat() as MyToolType[];
 

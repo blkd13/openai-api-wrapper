@@ -381,11 +381,7 @@ export function commonFunctionDefinitions(
 
                         const sanitizedBody = sanitizeHTML(html.body);
 
-                        // aiProviderClientをつけてしまったばかりにプレーンなJSONじゃなくなってしまったので一旦外さないといけなくて面倒
-                        const aiProviderClient = obj.inDto.aiProviderClient;
-                        delete (obj.inDto as any).aiProviderClient;
-                        const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
-                        obj.inDto.aiProviderClient = aiProviderClient;
+                        const inDto = Utils.deepCopyOmitting(obj.inDto, 'aiProviderClient');
 
                         inDto.args.model = model || inDto.args.model; // modelが指定されていない場合は元のモデルを使う
                         // console.log(`call_ai: model=${inDto.args.model}, type=${html.type} ${item.title} ${item.link}`);
@@ -705,10 +701,7 @@ export function commonFunctionDefinitions(
                     throw new Error('User prompt is required.');
                 } else { }
 
-                const aiProviderClient = obj.inDto.aiProviderClient;
-                delete (obj.inDto as any).aiProviderClient;
-                const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
-                obj.inDto.aiProviderClient = aiProviderClient;
+                const inDto = Utils.deepCopyOmitting(obj.inDto, 'aiProviderClient');
                 inDto.args.model = model || inDto.args.model; // modelが指定されていない場合は元のモデルを使う
                 inDto.args.messages = [
                     { role: 'system', content: [{ type: 'text', text: systemPrompt }] },

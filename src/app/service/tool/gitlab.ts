@@ -6,6 +6,7 @@ import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWra
 import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
 import { ds } from "../db.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
+import { Utils } from "../../common/utils.js";
 
 // 1. 関数マッピングの作成
 export async function gitlabFunctionDefinitions(providerName: string,
@@ -712,11 +713,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                     // const codeInfoBlock = `\`\`\`json\n${JSON.stringify(contentInfo, null, 2)}\n\`\`\`\n`; // ファイル情報
 
                     const systemPrompt = 'アシスタントAI';
-                    // aiProviderClientをつけてしまったばかりにプレーンなJSONじゃなくなってしまったので一旦外さないといけなくて面倒
-                    const aiProviderClient = obj.inDto.aiProviderClient;
-                    delete (obj.inDto as any).aiProviderClient;
-                    const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
-                    obj.inDto.aiProviderClient = aiProviderClient;
+                    const inDto = Utils.deepCopyOmitting(obj.inDto, 'aiProviderClient');
                     // inDto.args.model = 'gemini-1.5-pro';
                     inDto.args.messages = [
                         { role: 'system', content: [{ type: 'text', text: systemPrompt }] },

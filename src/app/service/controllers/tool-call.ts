@@ -15,16 +15,19 @@ import { OAuthAccountEntity, OAuthAccountStatus, OrganizationEntity } from "../e
 import { ExtApiClient, getExtApiClient } from "./auth.js";
 import { Utils } from "../../common/utils.js";
 import { getAxios } from "../../common/http-client.js";
+import { ChatCompletionCreateParamsStreaming } from "openai/resources.js";
 
 
-const { API_KEY_HAND_REGISTRATION_PROVIDERS, ENCRYPTION_KEY } = process.env as { API_KEY_HAND_REGISTRATION_PROVIDERS: string, ENCRYPTION_KEY: string };
+const { ENCRYPTION_KEY } = process.env as { ENCRYPTION_KEY: string };
 
 export const getFunctionDefinitions = [
+    query('connectedOnly').optional().isBoolean().toBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
+        const { connectedOnly } = _req.query as { connectedOnly?: boolean };
         // 汚い。。。
-        const funcDefs = await functionDefinitions({ inDto: { args: {} as any }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy');
+        const funcDefs = await functionDefinitions({ inDto: { args: {} as any }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy', connectedOnly);
         res.json(funcDefs.map(f => {
             f.info.name = f.definition.function.name;
             return ({ info: f.info, definition: f.definition });
@@ -32,7 +35,47 @@ export const getFunctionDefinitions = [
     }
 ];
 
+export const callFunction = [
+    body('function_name').trim().notEmpty(),
+    body('parameters').optional().isObject(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        console.log('callFunction called');
+        try {
+            console.dir(_req.body);
+            // 汚い。。。
+            const args = { model: 'gemini-1.5-flash', messages: [], stream: true, } as ChatCompletionCreateParamsStreaming;
+            const funcDefs = await functionDefinitions({ inDto: { args }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy');
+            const funcDef = funcDefs.find(f => f.info.name === _req.body.function_name);
+            if (!funcDef) {
+                console.error(`Function not found: ${_req.body.function_name}`);
+                res.status(400).json({ message: '指定された関数が見つかりません' });
+                return;
+            }
 
+            const result = await funcDef.handler(req.body.parameters).then(res => {
+                console.log('LOG:--------------------');
+                console.dir(res);
+                return res;
+            }).catch(error => {
+                // handler実行時の非同期エラーをキャッチする
+                console.error(`error-----------------------`);
+                console.error(error);
+                return { isError: true, error: Utils.errorFormattedObject(error, false) };
+            });
+
+            res.status(201).json(result);
+        } catch (error) {
+            console.error('Error in callFunction:', error);
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: 'ツールコールが見つかりません' });
+            } else {
+                res.status(500).json({ message: 'ツールコールの実行中にエラーが発生しました', detail: Utils.errorFormat(error, true) });
+            }
+        }
+    }
+];
 
 export interface ToolCallSet {
     toolCallGroupId: string;
@@ -216,7 +259,7 @@ export const getApiKeys = [
 ];
 
 export const registApiKey = [
-    param('provider').trim().notEmpty().isIn(Object.values((API_KEY_HAND_REGISTRATION_PROVIDERS || 'blank').split(','))),
+    param('provider').trim().notEmpty(),
     body('accessToken').trim().notEmpty().isString(),
     body('refreshToken'),
     validationErrorHandler,

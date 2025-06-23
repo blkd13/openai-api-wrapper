@@ -370,6 +370,7 @@ export const upsertBaseModel = [
     body('endpointTemplate').optional({ nullable: true }).isString(),
     body('documentationUrl').optional({ nullable: true }).isURL(),
     body('licenseType').optional({ nullable: true }).isString(),
+    body('developer').optional({ nullable: true }).isString(),
     body('knowledgeCutoff').optional({ nullable: true }).isISO8601(),
     body('releaseDate').optional({ nullable: true }).isISO8601(),
     body('deprecationDate').optional({ nullable: true }).isISO8601(),
@@ -398,73 +399,89 @@ export const upsertBaseModel = [
                 ? [...new Set(aliases)] // 重複除去
                 : [bodyData.providerModelId]; // デフォルトエイリアス
 
-            // ScopedEntityServiceを使用してupsert処理
-            const result = await ScopedEntityService.upsertWithScope(
-                ds.getRepository(AIModelEntity),
-                req.info.user,
-                modelId,
-                bodyData,
-                req.info.ip,
-                {
-                    uniqueFields: ['name', 'providerModelId'],
-                    beforeSave: async (entity: AIModelEntity, isNew: boolean) => {
-                        // オプショナルフィールドの設定
-                        if ('description' in bodyData) entity.description = bodyData.description;
-                        if ('details' in bodyData) entity.details = bodyData.details;
-                        if ('inputFormats' in bodyData) entity.inputFormats = bodyData.inputFormats;
-                        if ('outputFormats' in bodyData) entity.outputFormats = bodyData.outputFormats;
-                        if ('defaultParameters' in bodyData) entity.defaultParameters = bodyData.defaultParameters;
-                        if ('capabilities' in bodyData) entity.capabilities = bodyData.capabilities;
-                        if ('metadata' in bodyData) entity.metadata = bodyData.metadata;
-                        if ('endpointTemplate' in bodyData) entity.endpointTemplate = bodyData.endpointTemplate;
-                        if ('documentationUrl' in bodyData) entity.documentationUrl = bodyData.documentationUrl;
-                        if ('licenseType' in bodyData) entity.licenseType = bodyData.licenseType;
-                        if ('knowledgeCutoff' in bodyData) entity.knowledgeCutoff = bodyData.knowledgeCutoff ? new Date(bodyData.knowledgeCutoff) : undefined;
-                        if ('releaseDate' in bodyData) entity.releaseDate = bodyData.releaseDate ? new Date(bodyData.releaseDate) : undefined;
-                        if ('deprecationDate' in bodyData) entity.deprecationDate = bodyData.deprecationDate ? new Date(bodyData.deprecationDate) : undefined;
-                        if ('tags' in bodyData) entity.tags = bodyData.tags || [];
-                        if ('uiOrder' in bodyData) entity.uiOrder = bodyData.uiOrder;
-                        if ('isStream' in bodyData) entity.isStream = bodyData.isStream;
+            await ds.transaction(async (manager: EntityManager) => {
+                // ScopedEntityServiceを使用してupsert処理
+                const result = await ScopedEntityService.upsertWithScope(
+                    manager.getRepository(AIModelEntity),
+                    req.info.user,
+                    modelId,
+                    bodyData,
+                    req.info.ip,
+                    {
+                        uniqueFields: ['name', 'providerModelId'],
+                        beforeSave: async (entity: AIModelEntity, isNew: boolean) => {
+                            // オプショナルフィールドの設定
+                            if ('description' in bodyData) entity.description = bodyData.description;
+                            if ('details' in bodyData) entity.details = bodyData.details;
+                            if ('inputFormats' in bodyData) entity.inputFormats = bodyData.inputFormats;
+                            if ('outputFormats' in bodyData) entity.outputFormats = bodyData.outputFormats;
+                            if ('defaultParameters' in bodyData) entity.defaultParameters = bodyData.defaultParameters;
+                            if ('capabilities' in bodyData) entity.capabilities = bodyData.capabilities;
+                            if ('metadata' in bodyData) entity.metadata = bodyData.metadata;
+                            if ('endpointTemplate' in bodyData) entity.endpointTemplate = bodyData.endpointTemplate;
+                            if ('documentationUrl' in bodyData) entity.documentationUrl = bodyData.documentationUrl;
+                            if ('licenseType' in bodyData) entity.licenseType = bodyData.licenseType;
+                            if ('developer' in bodyData) entity.developer = bodyData.developer;
+                            if ('knowledgeCutoff' in bodyData) entity.knowledgeCutoff = bodyData.knowledgeCutoff ? new Date(bodyData.knowledgeCutoff) : undefined;
+                            if ('releaseDate' in bodyData) entity.releaseDate = bodyData.releaseDate ? new Date(bodyData.releaseDate) : undefined;
+                            if ('deprecationDate' in bodyData) entity.deprecationDate = bodyData.deprecationDate ? new Date(bodyData.deprecationDate) : undefined;
+                            if ('tags' in bodyData) {
+                                entity.tags = bodyData.tags || [];
+                                // タグエンティティの作成・更新処理
+                                if (bodyData.tags && bodyData.tags.length > 0) {
+                                    await processModelTags(
+                                        bodyData.tags,
+                                        req.info.user.orgKey,
+                                        req.info.user.id,
+                                        req.info.ip,
+                                        entity.scopeInfo,
+                                        manager,
+                                    );
+                                }
+                            }
+                            if ('uiOrder' in bodyData) entity.uiOrder = bodyData.uiOrder;
+                            if ('isStream' in bodyData) entity.isStream = bodyData.isStream;
+                        }
                     }
-                }
-            );
+                );
 
-            // エイリアスの処理
-            const repoAlias = ds.getRepository(AIModelAlias);
-            const existingAliases = await repoAlias.find({
-                where: { modelId: result.entity.id, orgKey: req.info.user.orgKey }
-            });
-
-            // 削除されたエイリアスを削除
-            const deletedAliases = existingAliases.filter(alias => !processedAliases.includes(alias.alias));
-            if (deletedAliases.length > 0) {
-                await repoAlias.remove(deletedAliases);
-            }
-
-            // 新しいエイリアスを追加
-            const newAliases = processedAliases.filter(alias =>
-                !existingAliases.some(existingAlias => existingAlias.alias === alias)
-            );
-            if (newAliases.length > 0) {
-                const newAliasEntities = newAliases.map(alias => {
-                    const aliasEntity = new AIModelAlias();
-                    aliasEntity.orgKey = req.info.user.orgKey;
-                    aliasEntity.scopeInfo = result.entity.scopeInfo; // 親モデルのscopeInfoを継承
-                    aliasEntity.alias = alias;
-                    aliasEntity.modelId = result.entity.id;
-                    aliasEntity.createdBy = req.info.user.id;
-                    aliasEntity.createdIp = req.info.ip;
-                    aliasEntity.updatedBy = req.info.user.id;
-                    aliasEntity.updatedIp = req.info.ip;
-                    return aliasEntity;
+                // エイリアスの処理
+                const repoAlias = manager.getRepository(AIModelAlias);
+                const existingAliases = await repoAlias.find({
+                    where: { modelId: result.entity.id, orgKey: req.info.user.orgKey }
                 });
-                await repoAlias.save(newAliasEntities);
-            }
 
-            // レスポンスにエイリアスを含める
-            (result.entity as any).aliases = processedAliases;
+                // 削除されたエイリアスを削除
+                const deletedAliases = existingAliases.filter(alias => !processedAliases.includes(alias.alias));
+                if (deletedAliases.length > 0) {
+                    await repoAlias.remove(deletedAliases);
+                }
 
-            res.status(result.isNew ? 201 : 200).json(result.entity);
+                // 新しいエイリアスを追加
+                const newAliases = processedAliases.filter(alias =>
+                    !existingAliases.some(existingAlias => existingAlias.alias === alias)
+                );
+                if (newAliases.length > 0) {
+                    const newAliasEntities = newAliases.map(alias => {
+                        const aliasEntity = new AIModelAlias();
+                        aliasEntity.orgKey = req.info.user.orgKey;
+                        aliasEntity.scopeInfo = result.entity.scopeInfo; // 親モデルのscopeInfoを継承
+                        aliasEntity.alias = alias;
+                        aliasEntity.modelId = result.entity.id;
+                        aliasEntity.createdBy = req.info.user.id;
+                        aliasEntity.createdIp = req.info.ip;
+                        aliasEntity.updatedBy = req.info.user.id;
+                        aliasEntity.updatedIp = req.info.ip;
+                        return aliasEntity;
+                    });
+                    await repoAlias.save(newAliasEntities);
+                }
+
+                // レスポンスにエイリアスを含める
+                (result.entity as any).aliases = processedAliases;
+
+                res.status(result.isNew ? 201 : 200).json(result.entity);
+            });
         } catch (error) {
             console.error('Error upserting BaseModel:', error);
             if (error instanceof Error && error.message.includes('Conflict')) {
@@ -771,6 +788,7 @@ export const getOrCreateTag = async (
     orgKey: string,
     userId: string,
     ip: string,
+    scopeInfo: { scopeType: ScopeType; scopeId: string },
     manager?: EntityManager
 ): Promise<TagEntity> => {
     const em = (manager || ds).getRepository(TagEntity);
@@ -790,6 +808,7 @@ export const getOrCreateTag = async (
         // 新規タグを作成
         tag = new TagEntity();
         tag.orgKey = orgKey;
+        tag.scopeInfo = scopeInfo;
         tag.name = tagName;
         tag.usageCount = 1;
         tag.isActive = true;
@@ -811,13 +830,14 @@ export const processModelTags = async (
     orgKey: string,
     userId: string,
     ip: string,
+    scopeInfo: { scopeType: ScopeType; scopeId: string },
     manager?: EntityManager
 ): Promise<TagEntity[]> => {
     const processedTags: TagEntity[] = [];
 
     for (const tagName of tagNames) {
         if (tagName && tagName.trim()) {
-            const tag = await getOrCreateTag(tagName.trim(), orgKey, userId, ip, manager);
+            const tag = await getOrCreateTag(tagName.trim(), orgKey, userId, ip, scopeInfo, manager);
             processedTags.push(tag);
         }
     }

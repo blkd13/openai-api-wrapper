@@ -59,7 +59,8 @@ export async function boxFunctionDefinitions(
             },
             handler: async (args: { file_id: string, userPrompt?: string, }): Promise<any> => {
                 const { e } = await getOAuthAccountForTool(req, provider);
-                const boxFile = await boxDownloadCore(e, args.file_id, req.info.user.id, req.info.ip);
+                const { file_id, userPrompt = 'ファイルの内容を教えてください。' } = args;
+                const boxFile = await boxDownloadCore(e, file_id, req.info.user.id, req.info.ip);
                 const boxFileBody = await ds.getRepository(BoxFileBodyEntity).findOneOrFail({
                     where: { sha256: boxFile.sha256Digest },
                 });
@@ -117,24 +118,13 @@ export async function boxFunctionDefinitions(
                     }
                 } else { }
 
-
-                try {
-                } catch (error) {
-                    console.error('ファイルの読み込みまたは変換中にエラーが発生しました:', error);
-                }
-
                 const base64String = buffer.toString('base64');
                 const dataURL = `data:${boxFileBody.fileType};base64,${base64String}`;
 
-                let { userPrompt } = args;
                 const systemPrompt = 'アシスタントAI';
                 const model = 'gemini-1.5-pro';
 
-                // aiProviderClientをつけてしまったばかりにプレーンなJSONじゃなくなってしまったので一旦外さないといけなくて面倒
-                const aiProviderClient = obj.inDto.aiProviderClient;
-                delete (obj.inDto as any).aiProviderClient;
-                const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
-                obj.inDto.aiProviderClient = aiProviderClient;
+                const inDto = Utils.deepCopyOmitting(obj.inDto, 'aiProviderClient');
                 inDto.args.model = model || inDto.args.model; // modelが指定されていない場合は元のモデルを使う
                 inDto.args.messages = [
                     { role: 'system', content: [{ type: 'text', text: systemPrompt }] },

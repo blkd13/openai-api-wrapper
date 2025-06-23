@@ -214,6 +214,8 @@ export const vertexAIByAnthropicAPI = [
             if (vertexResponse.data?.usage) {
                 const usage = vertexResponse.data.usage as Usage;
                 const costTable = TokenCount.COST_TABLE[aiModel.name];
+                tokenCount.prompt_tokens = usage.input_tokens || 0;
+                tokenCount.completion_tokens = usage.output_tokens || 0;
                 tokenCount.cost = 0;
                 tokenCount.cost += usage.input_tokens * costTable.prompt / 1_000_000; // 1Mトークンあたりのコストを掛ける
                 tokenCount.cost += usage.output_tokens * costTable.completion / 1_000_000; // 1Mトークンあたりのコストを掛ける

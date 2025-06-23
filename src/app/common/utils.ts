@@ -1004,6 +1004,13 @@ export class Utils {
             throw new Error('環境変数が不足しています');
         } else { }
     }
+
+    static deepCopyOmitting<T, K extends keyof T>(obj: T, ...keys: K[]): Omit<T, K> {
+        const copied = { ...obj };
+        keys.forEach(key => delete copied[key]);
+        return JSON.parse(JSON.stringify(copied));
+    }
+
 }
 
 /**
