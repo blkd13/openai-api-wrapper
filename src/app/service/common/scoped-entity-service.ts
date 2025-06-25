@@ -1,6 +1,6 @@
 import { Repository, Not, FindOptionsWhere } from 'typeorm';
 import { ScopedEntity, ScopeQueryOptions, ScopeUtils } from './scope-utils.js';
-import { UserTokenPayload } from '../middleware/authenticate.js';
+import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 import { safeWhere } from '../entity/base.js';
 
 export interface ScopeServiceOptions extends ScopeQueryOptions {
@@ -17,7 +17,7 @@ export class ScopedEntityService {
     static async findByNameWithScope<T extends ScopedEntity>(
         repository: Repository<T>,
         name: string,
-        user: UserTokenPayload,
+        user: UserTokenPayloadWithRole,
         options: ScopeQueryOptions = {}
     ): Promise<T | null> {
         const baseCriteria = {
@@ -46,7 +46,7 @@ export class ScopedEntityService {
      */
     static async findAllWithScope<T extends ScopedEntity>(
         repository: Repository<T>,
-        user: UserTokenPayload,
+        user: UserTokenPayloadWithRole,
         options: ScopeQueryOptions = {}
     ): Promise<T[]> {
         const baseCriteria = {
@@ -72,7 +72,7 @@ export class ScopedEntityService {
     static async checkDuplicateInScope<T extends ScopedEntity>(
         repository: Repository<T>,
         entity: Partial<T>,
-        user: UserTokenPayload,
+        user: UserTokenPayloadWithRole,
         excludeId?: string,
         scopeId?: string
     ): Promise<{ entity: T | null; isActive: boolean }> {
@@ -110,7 +110,7 @@ export class ScopedEntityService {
      */
     static async prepareScopedEntity<T extends ScopedEntity>(
         entity: Partial<T>,
-        user: UserTokenPayload,
+        user: UserTokenPayloadWithRole,
         scopeId?: string
     ): Promise<Partial<T>> {
         if (!entity.scopeInfo) {
@@ -135,7 +135,7 @@ export class ScopedEntityService {
      */
     static async upsertWithScope<T extends ScopedEntity>(
         repository: Repository<T>,
-        user: UserTokenPayload,
+        user: UserTokenPayloadWithRole,
         existingId: string | undefined,
         entityData: Partial<T>,
         userIp: string,
@@ -248,7 +248,7 @@ export class ScopedEntityService {
      */
     static async deleteWithScope<T extends ScopedEntity>(
         repository: Repository<T>,
-        user: UserTokenPayload,
+        user: UserTokenPayloadWithRole,
         entityId: string,
         options: {
             userIp?: string;

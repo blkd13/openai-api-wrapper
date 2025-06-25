@@ -22,12 +22,12 @@ import { getTiktokenEncoder } from '../../common/openai-api-wrapper.js';
 import { MyVertexAiClient } from '../../common/my-vertexai.js';
 import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL } from '../../service/controllers/chat-by-project-model.js';
 import { UserEntity, UserStatus } from '../../service/entity/auth.entity.js';
-import { UserTokenPayload } from '../../service/middleware/authenticate.js';
+import { UserTokenPayloadWithRole } from '../../service/middleware/authenticate.js';
 
 /**
  * Get user configuration for agent scripts
  */
-async function getAgentUser(): Promise<UserTokenPayload> {
+async function getAgentUser(): Promise<UserTokenPayloadWithRole> {
     const { AGENT_USER_ID, AGENT_ORG_KEY = 'public' } = process.env;
     
     if (!AGENT_USER_ID) {
@@ -42,7 +42,7 @@ async function getAgentUser(): Promise<UserTokenPayload> {
         throw new Error(`User not found: orgKey=${AGENT_ORG_KEY}, id=${AGENT_USER_ID}`);
     }
 
-    // Convert UserEntity to UserTokenPayload format
+    // Convert UserEntity to UserTokenPayloadWithRole format
     return {
         type: 'user',
         orgKey: user.orgKey,

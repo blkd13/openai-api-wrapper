@@ -1,4 +1,4 @@
-import { body, cookie, param, query } from 'express-validator';
+import { body, cookie, header, param, query } from 'express-validator';
 import jwt from 'jsonwebtoken';
 import ms from 'ms';
 import bcrypt from 'bcrypt';
@@ -8,7 +8,7 @@ import { Request, Response } from 'express';
 
 import { InviteRequest, UserRequest } from '../models/info.js';
 import { UserEntity, InviteEntity, LoginHistoryEntity, UserRoleType, DepartmentMemberEntity, DepartmentRoleType, DepartmentEntity, UserStatus, SessionEntity, OAuthAccountEntity, OAuthAccountStatus, OrganizationEntity, ApiProviderEntity, ApiProviderTemplateEntity, ApiProviderAuthType, UserRoleEntity, UserRole, ScopeType, DivisionEntity } from '../entity/auth.entity.js';
-import { InviteTokenPayload, ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_EXPIRES_IN, REFRESH_TOKEN_JWT_SECRET, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN, RefreshTokenPayload, UserTokenPayload, API_TOKEN_EXPIRES_IN, API_TOKEN_JWT_SECRET } from '../middleware/authenticate.js';
+import { InviteTokenPayload, ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_EXPIRES_IN, REFRESH_TOKEN_JWT_SECRET, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN, RefreshTokenPayload, UserTokenPayload, API_TOKEN_EXPIRES_IN, API_TOKEN_JWT_SECRET, UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { EntityManager, In, MoreThan, Not } from 'typeorm';
 import { ds } from '../db.js';
@@ -28,6 +28,7 @@ Utils.requiredEnvVarsCheck({
 import { getAccessToken } from '../api/api-proxy.js';
 import { decrypt, encrypt } from './tool-call.js';
 import { getAxios } from '../../common/http-client.js';
+import { safeWhere } from '../entity/base.js';
 
 export type OAuth2TokenDto = { access_token: string, token_type: string, expires_in: number, scope: string, refresh_token: string, id_token: string, };
 
@@ -104,7 +105,7 @@ async function authAfter(user: UserEntity, roleList: UserRole[], manager: Entity
     const savedSession = await manager.getRepository(SessionEntity).save(session);
 
     // JWTの生成
-    const userToken: UserTokenPayload = { type: 'user', id: user.id, roleList, name: user.name, authGeneration: user.authGeneration || 0, email: user.email, orgKey: user.orgKey };
+    const userToken: UserTokenPayload = { type: 'user', id: user.id, name: user.name, authGeneration: user.authGeneration || 0, email: user.email, orgKey: user.orgKey };
     const accessToken = jwt.sign(userToken, ACCESS_TOKEN_JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN as ms.StringValue });
     // クッキーをセット
     res.cookie('access_token', accessToken, {
@@ -113,7 +114,7 @@ async function authAfter(user: UserEntity, roleList: UserRole[], manager: Entity
         secure: true, // HTTPSでのみ送信されるようにする
         sameSite: true, // CSRF保護のためのオプション
     });
-    const refreshTokenBody: RefreshTokenPayload = { type: 'refresh', sessionId: savedSession.id, userId: user.id, roleList, name: user.name, lastActiveAt: session.lastActiveAt, authGeneration: user.authGeneration || 0, email: user.email, orgKey: user.orgKey };
+    const refreshTokenBody: RefreshTokenPayload = { type: 'refresh', sessionId: savedSession.id, userId: user.id, name: user.name, lastActiveAt: session.lastActiveAt, authGeneration: user.authGeneration || 0, email: user.email, orgKey: user.orgKey };
     const refreshToken = jwt.sign(refreshTokenBody, REFRESH_TOKEN_JWT_SECRET, { expiresIn: REFRESH_TOKEN_EXPIRES_IN as ms.StringValue });
     res.cookie('refresh_token', refreshToken, {
         maxAge: expirationTime, // 14日間。クッキーの有効期限をミリ秒で指定
@@ -123,6 +124,78 @@ async function authAfter(user: UserEntity, roleList: UserRole[], manager: Entity
     });
     // res.redirect(e.pathTop);
     return { accessToken, refreshToken: savedSession.id }
+}
+
+
+const genApiTokenCore = async (user: UserTokenPayloadWithRole, label: string, deviceInfo: any, xRealIp: string, manager: EntityManager): Promise<OAuthAccountEntity | null> => {
+    const loginHistory = new LoginHistoryEntity();
+    loginHistory.userId = user.id; // ユーザー認証後に設定
+    loginHistory.ipAddress = xRealIp;
+    loginHistory.deviceInfo = JSON.stringify(deviceInfo);
+    loginHistory.authGeneration = user.authGeneration;
+    loginHistory.orgKey = user.orgKey;
+    loginHistory.createdBy = user.id;
+    loginHistory.updatedBy = user.id;
+    loginHistory.createdIp = xRealIp;
+    loginHistory.updatedIp = xRealIp;
+    manager.getRepository(LoginHistoryEntity).save(loginHistory); // ログイン履歴登録の成否は見ずにレスポンスを返す
+
+    const session = new SessionEntity();
+    session.userId = user.id; // ユーザー認証後に設定
+    session.ipAddress = xRealIp;
+    session.deviceInfo = JSON.stringify(deviceInfo);
+    session.provider = 'session';
+    session.authInfo = JSON.stringify({});
+
+    // セッション有効期限を設定
+    const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
+    session.expiresAt = new Date(Date.now() + expirationTime);
+    session.lastActiveAt = new Date();
+    session.orgKey = user.orgKey;
+    session.createdBy = user.id;
+    session.updatedBy = user.id;
+    session.createdIp = xRealIp;
+    session.updatedIp = xRealIp;
+    const savedSession = await manager.getRepository(SessionEntity).save(session);
+
+    // TODO でもよく考えたらAPIはAuthGenerationは無視したい。revoke管理は別途作り込む。
+    // DBのユーザーEntityを持ってきてauthGeneartionを持ってくる
+    // const userFromDb = await manager.getRepository(UserEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, id: req.info.user.id } });
+    const userFromDb = await getUserAndRoleList({ orgKey: user.orgKey, id: user.id });
+    if (!userFromDb || !userFromDb.user) {
+        throw new Error('ユーザー情報が取得できません。');
+    } else { }
+
+    // JWTの生成
+    const apiTokenBody: RefreshTokenPayload = {
+        type: 'api', sessionId: savedSession.id, userId: user.id, name: user.name, lastActiveAt: session.lastActiveAt, authGeneration: userFromDb.user.authGeneration || 0, email: user.email, orgKey: user.orgKey
+    };
+    // console.log(`genApiToken: ${JSON.stringify(apiTokenBody)}`);
+    const apiToken = jwt.sign(apiTokenBody, API_TOKEN_JWT_SECRET, { expiresIn: API_TOKEN_EXPIRES_IN as ms.StringValue });
+
+    const exists = await manager.getRepository(OAuthAccountEntity).findOneBy({ orgKey: user.orgKey, userId: user.id, provider: `local-${label}` });
+    if (exists && exists.status === OAuthAccountStatus.ACTIVE) {
+        return null;
+    } else { }
+
+    const apiTokenEntity = exists || new OAuthAccountEntity();
+    apiTokenEntity.userId = user.id;
+    apiTokenEntity.provider = `local-${label}`;
+    apiTokenEntity.providerUserId = user.id;
+    apiTokenEntity.providerEmail = user.email;
+    apiTokenEntity.label = label;
+    apiTokenEntity.accessToken = apiToken;
+    apiTokenEntity.refreshToken = '';
+    apiTokenEntity.tokenExpiresAt = session.expiresAt;
+    apiTokenEntity.tokenBody = '{}';
+    apiTokenEntity.userInfo = '{}';
+    apiTokenEntity.status = OAuthAccountStatus.ACTIVE;
+    apiTokenEntity.orgKey = user.orgKey;
+    apiTokenEntity.createdBy = user.id;
+    apiTokenEntity.updatedBy = user.id;
+    apiTokenEntity.createdIp = xRealIp;
+    apiTokenEntity.updatedIp = xRealIp;
+    return await manager.getRepository(OAuthAccountEntity).save(apiTokenEntity);
 }
 
 /**
@@ -142,77 +215,13 @@ export const genApiToken = [
 
         const xRealIp = req.headers['x-real-ip'] as string || req.ip || '';
 
-        ds.transaction(async (manager) => {
-            const loginHistory = new LoginHistoryEntity();
-            loginHistory.userId = user.id; // ユーザー認証後に設定
-            loginHistory.ipAddress = xRealIp;
-            loginHistory.deviceInfo = JSON.stringify(deviceInfo);
-            loginHistory.authGeneration = user.authGeneration;
-            loginHistory.orgKey = req.info.user.orgKey;
-            loginHistory.createdBy = user.id;
-            loginHistory.updatedBy = user.id;
-            loginHistory.createdIp = xRealIp;
-            loginHistory.updatedIp = xRealIp;
-            manager.getRepository(LoginHistoryEntity).save(loginHistory); // ログイン履歴登録の成否は見ずにレスポンスを返す
-
-            const session = new SessionEntity();
-            session.userId = user.id; // ユーザー認証後に設定
-            session.ipAddress = xRealIp;
-            session.deviceInfo = JSON.stringify(deviceInfo);
-            session.provider = 'session';
-            session.authInfo = JSON.stringify({});
-
-            // セッション有効期限を設定
-            const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
-            session.expiresAt = new Date(Date.now() + expirationTime);
-            session.lastActiveAt = new Date();
-            session.orgKey = req.info.user.orgKey;
-            session.createdBy = user.id;
-            session.updatedBy = user.id;
-            session.createdIp = xRealIp;
-            session.updatedIp = xRealIp;
-            const savedSession = await manager.getRepository(SessionEntity).save(session);
-
-            // TODO でもよく考えたらAPIはAuthGenerationは無視したい。revoke管理は別途作り込む。
-            // DBのユーザーEntityを持ってきてauthGeneartionを持ってくる
-            // const userFromDb = await manager.getRepository(UserEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, id: req.info.user.id } });
-            const userFromDb = await getUserAndRoleList({ orgKey: req.info.user.orgKey, id: req.info.user.id });
-            if (!userFromDb || !userFromDb.user) {
-                throw new Error('ユーザー情報が取得できません。');
-            } else { }
-
-            // JWTの生成
-            const apiTokenBody: RefreshTokenPayload = {
-                type: 'api', sessionId: savedSession.id, userId: user.id, roleList: userFromDb.roleList, name: user.name, lastActiveAt: session.lastActiveAt, authGeneration: userFromDb.user.authGeneration || 0, email: user.email, orgKey: user.orgKey
-            };
-            const apiToken = jwt.sign(apiTokenBody, API_TOKEN_JWT_SECRET, { expiresIn: API_TOKEN_EXPIRES_IN as ms.StringValue });
-
-            const exists = await manager.getRepository(OAuthAccountEntity).findOneBy({ orgKey: user.orgKey, userId: user.id, provider: `local-${label}` });
-            if (exists && exists.status === OAuthAccountStatus.ACTIVE) {
-                res.status(400).json({ error: `同名のAPIトークンは作成できません。${label}` });
+        await ds.transaction(async (manager) => {
+            const apiTokenEntity = await genApiTokenCore(user, label, deviceInfo, xRealIp, manager);
+            if (!apiTokenEntity) {
+                res.status(400).json({ error: 'APIトークンは既に存在します。' });
                 return;
             } else { }
-
-            const apiTokenEntity = exists || new OAuthAccountEntity();
-            apiTokenEntity.userId = user.id;
-            apiTokenEntity.provider = `local-${label}`;
-            apiTokenEntity.providerUserId = user.id;
-            apiTokenEntity.providerEmail = user.email;
-            apiTokenEntity.label = label;
-            apiTokenEntity.accessToken = apiToken;
-            apiTokenEntity.refreshToken = '';
-            apiTokenEntity.tokenExpiresAt = session.expiresAt;
-            apiTokenEntity.tokenBody = '{}';
-            apiTokenEntity.userInfo = '{}';
-            apiTokenEntity.status = OAuthAccountStatus.ACTIVE;
-            apiTokenEntity.orgKey = user.orgKey;
-            apiTokenEntity.createdBy = user.id;
-            apiTokenEntity.updatedBy = user.id;
-            apiTokenEntity.createdIp = xRealIp;
-            apiTokenEntity.updatedIp = xRealIp;
-            await manager.getRepository(OAuthAccountEntity).save(apiTokenEntity);
-
-            res.json({ apiToken });
+            res.json({ apiToken: apiTokenEntity.accessToken });
         });
     }
 ];
@@ -494,7 +503,7 @@ async function handleOAuthCallback(oAuth2State: OAuth2State, tm: EntityManager, 
  * @param refreshToken 
  * @returns 
  */
-export async function tryRefreshCore(tm: EntityManager, xRealIp: string, tokenType: 'refresh' | 'api', refreshToken: string, roleType: UserRoleType = UserRoleType.User): Promise<{ userTokenPayload: UserTokenPayload, accessToken: String }> {
+export async function tryRefreshCore(tm: EntityManager, xRealIp: string, tokenType: 'refresh' | 'api', refreshToken: string, roleType: UserRoleType = UserRoleType.User): Promise<{ userTokenPayload: UserTokenPayloadWithRole, accessToken: String }> {
     // リフレッシュトークン検証
     const decodedPayload = await verifyJwt<RefreshTokenPayload>(refreshToken, tokenType === 'refresh' ? REFRESH_TOKEN_JWT_SECRET : API_TOKEN_JWT_SECRET);
     if (decodedPayload.type !== tokenType) {
@@ -556,9 +565,11 @@ export async function tryRefreshCore(tm: EntityManager, xRealIp: string, tokenTy
     const savedSession = await tm.save(SessionEntity, session);
 
     // JWTの生成
-    const userTokenPayload: UserTokenPayload = { type: 'user', id: user.id, roleList: userRoleList, name: user.name, authGeneration: user.authGeneration || 0, email: user.email, orgKey: user.orgKey };
+    const userTokenPayload: UserTokenPayload = { type: 'user', id: user.id, name: user.name, authGeneration: user.authGeneration || 0, email: user.email, orgKey: user.orgKey };
     const accessToken = jwt.sign(userTokenPayload, ACCESS_TOKEN_JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN as ms.StringValue });
-    return { userTokenPayload, accessToken };
+    // アクセストークンのペイロードは最小限にするためにroleListはjwtに含めない。jwt作った後で追加する。
+    const userTokenPayloadWithRole = { ...userTokenPayload, roleList: userRoleList };
+    return { userTokenPayload: userTokenPayloadWithRole, accessToken };
 }
 
 /**
@@ -1582,6 +1593,88 @@ export const getOAuthAccount = [
         } catch (error) {
             // console.error('Error fetching OAuth accounts:', error);
             res.status(401).json({ message: 'OAuth認証済みアカウントが取得できませんでした。' });
+        }
+    }
+];
+
+/**
+ * [user認証] プロジェクト権限チェック（nginx auth用）
+ */
+export const checkProjectPermission = [
+    // header('X-Original-URI').notEmpty(),
+    param('projectId').isUUID().notEmpty(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const originalUri = req.headers['x-original-uri'] as string;
+        const { projectId } = req.params as { projectId: string };
+
+        try {
+            // // URIからプロジェクトIDを抽出 (例: /api/project/xxx/files -> xxx)
+            // const projectIdMatch = originalUri.match(/\/project\/([a-f0-9-]{36})/);
+            // if (!projectIdMatch) {
+            //     return res.status(403).json({ message: 'プロジェクトIDが見つかりません' });
+            // }
+            // const projectId = projectIdMatch[1];
+
+            // プロジェクトの存在確認
+            const project = await ds.getRepository(ProjectEntity).findOne({
+                where: safeWhere({ orgKey: req.info.user.orgKey, id: projectId })
+            });
+
+            if (!project) {
+                return res.status(404).json({ message: 'プロジェクトが見つかりません' });
+            }
+
+            // チームメンバーかどうかをチェック
+            const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
+                where: safeWhere({
+                    orgKey: req.info.user.orgKey,
+                    teamId: project.teamId,
+                    userId: req.info.user.id,
+                    role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member])
+                })
+            });
+
+            if (teamMember) {
+                const user = req.info.user;
+                const label = projectId;
+                let deviceInfo = {};
+                if (req.useragent) {
+                    deviceInfo = Utils.jsonOrder(req.useragent, ['browser', 'version', 'os', 'platform', 'isDesktop', 'isMobile', 'isTablet']);
+                } else { }
+                await ds.transaction(async (manager) => {
+                    let apiTokenEntity: OAuthAccountEntity | null = null;
+                    const exists = await manager.getRepository(OAuthAccountEntity).findOneBy({ orgKey: user.orgKey, userId: user.id, provider: `local-${label}` });
+                    if (exists && exists.status === OAuthAccountStatus.ACTIVE) {
+                        apiTokenEntity = exists;
+                    } else {
+                        apiTokenEntity = await genApiTokenCore(user, label, deviceInfo, req.ip || '', manager);
+                    }
+                    if (!apiTokenEntity) {
+                        res.status(400).json({ error: 'APIトークンは既に存在します。' });
+                        return;
+                    } else { }
+                    function splitString(str: string, chunkSize = 200) {
+                        const chunks = [];
+                        for (let i = 0; i < str.length; i += chunkSize) {
+                            chunks.push(str.slice(i, i + chunkSize));
+                        }
+                        return chunks;
+                    }
+                    splitString(encodeURIComponent(apiTokenEntity.accessToken)).forEach((chunk, index) => {
+                        res.setHeader(`X-API-Key_${index + 1}`, chunk);
+                    });
+                    res.status(200).json({ message: 'アクセス許可' });
+                });
+                // 権限あり
+            } else {
+                // 権限なし
+                res.status(403).json({ message: 'プロジェクトへのアクセス権限がありません' });
+            }
+        } catch (error) {
+            console.error('Error checking project permission:', error);
+            res.status(500).json({ message: 'プロジェクト権限チェック中にエラーが発生しました' });
         }
     }
 ];

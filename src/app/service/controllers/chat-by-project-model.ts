@@ -39,7 +39,7 @@ import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../co
 import { functionDefinitions } from '../tool/_index.js';
 import { ToolCallPart, ToolCallPartBody, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallGroupEntity, ToolCallPartInfo, ToolCallPartInfoBody, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
 import { appendToolCallPart } from './tool-call.js';
-import { UserTokenPayload } from '../middleware/authenticate.js';
+import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 import { CohereClientV2 } from 'cohere-ai/ClientV2.js';
 import Anthropic from '@anthropic-ai/sdk/index.js';
 import { safeWhere } from '../entity/base.js';
@@ -146,7 +146,7 @@ export type ArgsBuildType = 'threadGroup' | 'thread' | 'messageGroup' | 'message
 export type MessageSet = { threadGroup: ThreadGroupEntity, thread: ThreadEntity, messageGroup: MessageGroupEntity, message: MessageEntity, contentPartList: ContentPartEntity[] };
 export type MessageArgsSet = MessageSet & { args: MyChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, } & { totalTokens?: number, totalBillableCharacters?: number } & { aiProviderClient: AIProviderClient };
 async function buildArgs(
-    user: UserTokenPayload,
+    user: UserTokenPayloadWithRole,
     type: ArgsBuildType,
     idList: string[],
     mode: 'countOnly' | 'createCache' | undefined = undefined,
@@ -641,7 +641,7 @@ async function buildArgs(
 }
 
 
-export async function getAIProviderAndModel(user: UserTokenPayload, modelName: string): Promise<{ aiProvider: AIProviderEntity, aiModel: AIModelEntity }> {
+export async function getAIProviderAndModel(user: UserTokenPayloadWithRole, modelName: string): Promise<{ aiProvider: AIProviderEntity, aiModel: AIModelEntity }> {
     const model = await ScopedEntityService.findByNameWithScope(
         ds.getRepository(AIModelEntity),
         modelName,
@@ -710,7 +710,7 @@ export async function getAIProviderAndModel(user: UserTokenPayload, modelName: s
     };
 }
 
-export async function getAIProvider(user: UserTokenPayload, modelName: string): Promise<AIProviderClient> {
+export async function getAIProvider(user: UserTokenPayloadWithRole, modelName: string): Promise<AIProviderClient> {
     const { aiProvider, aiModel } = await getAIProviderAndModel(user, modelName);
 
     if (providerInstances[aiProvider.id] && providerInstances[aiProvider.id].updatedAt.getTime() === aiProvider.updatedAt.getTime()) {
@@ -1889,7 +1889,7 @@ export const geminiCountTokensByThread = [
     }
 ];
 
-export async function geminiCountTokensByContentPart(transactionalEntityManager: EntityManager, contents: ContentPartEntity[], user: UserTokenPayload, model: string = COUNT_TOKEN_MODEL): Promise<ContentPartEntity[]> {
+export async function geminiCountTokensByContentPart(transactionalEntityManager: EntityManager, contents: ContentPartEntity[], user: UserTokenPayloadWithRole, model: string = COUNT_TOKEN_MODEL): Promise<ContentPartEntity[]> {
     const client = ((await getAIProvider(user, model)).client as MyVertexAiClient).client;
     // console.dir(contents, { depth: null });
     const generativeModel = client.preview.getGenerativeModel({
@@ -1970,7 +1970,7 @@ export async function geminiCountTokensByContentPart(transactionalEntityManager:
     }
 }
 
-export async function geminiCountTokensByFile(transactionalEntityManager: EntityManager, fileList: { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }[], user: UserTokenPayload, model: string = COUNT_TOKEN_MODEL): Promise<FileBodyEntity[]> {
+export async function geminiCountTokensByFile(transactionalEntityManager: EntityManager, fileList: { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }[], user: UserTokenPayloadWithRole, model: string = COUNT_TOKEN_MODEL): Promise<FileBodyEntity[]> {
     const my_vertexai = ((await getAIProvider(user, model)).client as MyVertexAiClient);
     const client = my_vertexai.client;
     const generativeModel = client.preview.getGenerativeModel({

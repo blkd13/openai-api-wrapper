@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { changePassword, deleteUser, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, genApiToken, getOAuthAccount, getScopeLabels, } from './controllers/auth.js';
+import { changePassword, deleteUser, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, genApiToken, getOAuthAccount, getScopeLabels, checkProjectPermission, } from './controllers/auth.js';
 import { authenticateInviteToken, authenticateOAuthUser, authenticateUserTokenMiddleGenerator } from './middleware/authenticate.js';
 import { chatCompletion, chatCompletionStream, codegenCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
 import {
@@ -209,6 +209,10 @@ authUserRouter.get('/:id/download', downloadFile); // ファイルダウンロ�
 // authUserRouter.delete('/:id', deleteFile); // ファイル削除
 authUserRouter.get('/list', getFileList); // ファイル一覧取得
 authUserRouter.put('/:id/access', updateFileAccess); // ファイルアクセス権の更新
+
+// nginx auth用
+authUserRouter.get('/auth/project-permission/:projectId', checkProjectPermission);
+authUserRouter.get('/auth/project-permission/:projectId/:type', checkProjectPermission);
 
 // // 認証なしでのメッセージグループ詳細取得
 // authNoneRouter.get('/message-group/:messageGroupId', getMessageGroupDetails);

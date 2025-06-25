@@ -32,8 +32,10 @@ export interface UserTokenPayload extends TokenPayload {
     // seq: number;
     email: string;
     name?: string;
-    roleList: UserRole[]
     authGeneration: number;
+}
+export interface UserTokenPayloadWithRole extends UserTokenPayload {
+    roleList: UserRole[];
 }
 
 /**
@@ -57,10 +59,9 @@ export interface RefreshTokenPayload extends TokenPayload {
     authGeneration: number;
     email: string;
     name?: string;
-    roleList: UserRole[]
     orgKey: string;
 }
-type IsAuthDto = { isAuth: true, obj: UserTokenPayload } | { isAuth: false, obj: Error };
+type IsAuthDto = { isAuth: true, obj: UserTokenPayloadWithRole } | { isAuth: false, obj: Error };
 
 /**
  * ユーザー認証の検証
@@ -87,8 +88,19 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                         const userTokenPayload = await verifyJwt<UserTokenPayload>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user');
                         // console.log(`acc:userToken=${JSON.stringify(userTokenPayload, Utils.genJsonSafer())}`);
 
-                        (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies, };
-                        return { isAuth: true, obj: userTokenPayload };
+                        // ロールを毎回DBから取得
+                        const roleList = await ds.getRepository(UserRoleEntity).find({
+                            select: ['role', 'scopeInfo'],
+                            where: {
+                                orgKey: userTokenPayload.orgKey,
+                                userId: userTokenPayload.id,
+                                status: UserStatus.Active
+                            }
+                        });
+
+                        const enrichedPayload = { ...userTokenPayload, roleList };
+                        (req as UserRequest).info = { user: enrichedPayload, ip: xRealIp, cookie: req.cookies, };
+                        return { isAuth: true, obj: enrichedPayload };
                     } catch (err) {
                         // // アクセストークン無し
                         // console.log(`アクセストークンの検証に失敗しました。`);
@@ -349,7 +361,7 @@ export const authenticateUserTokenWsMiddleGenerator = (roleType?: UserRoleType) 
                                         name: user.name,
                                         roleList: roleList,
                                         authGeneration: user.authGeneration,
-                                    } as UserTokenPayload;
+                                    } as UserTokenPayloadWithRole;
                                     (req as UserRequest).info = { user: userTokenPayload, ip: req.headers['x-real-ip'] as string || '0.0.0.0', cookie: req.cookies };
                                     resolve(userTokenPayload);
                                     return;

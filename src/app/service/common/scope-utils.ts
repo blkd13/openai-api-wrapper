@@ -1,5 +1,5 @@
 import { ScopeType, OrganizationEntity, DivisionEntity, UserRoleType } from '../entity/auth.entity.js';
-import { UserTokenPayload } from '../middleware/authenticate.js';
+import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 import { safeWhere } from '../entity/base.js';
 import { ds } from '../db.js';
 
@@ -43,7 +43,7 @@ export class ScopeUtils {
      */
     static async resolveScopeId(
         scopeType: ScopeType,
-        user: UserTokenPayload,
+        user: UserTokenPayloadWithRole,
         scopeId?: string
     ): Promise<string> {
         switch (scopeType) {
@@ -97,7 +97,7 @@ export class ScopeUtils {
     /**
      * ユーザーのロールリストからスコープ条件を生成
      */
-    static generateScopeConditions(user: UserTokenPayload, baseCriteria: any = {}): any[] {
+    static generateScopeConditions(user: UserTokenPayloadWithRole, baseCriteria: any = {}): any[] {
         return user.roleList.map(role => {
             const condition = {
                 ...baseCriteria,
@@ -145,7 +145,7 @@ export class ScopeUtils {
     /**
      * ユーザーが指定されたスコープに対する権限を持つかチェック
      */
-    static validateScopePermission(user: UserTokenPayload, scopeType: ScopeType, scopeId?: string): boolean {
+    static validateScopePermission(user: UserTokenPayloadWithRole, scopeType: ScopeType, scopeId?: string): boolean {
         return user.roleList.some(role => {
             if (role.scopeInfo.scopeType !== scopeType) return false;
             if (scopeId && role.scopeInfo.scopeId !== scopeId) return false;
@@ -157,7 +157,7 @@ export class ScopeUtils {
     /**
      * ユーザーが指定されたスコープにアクセス権を持つかチェック
      */
-    static async hasAccessToScope(user: UserTokenPayload, scopeType: ScopeType, scopeId: string): Promise<boolean> {
+    static async hasAccessToScope(user: UserTokenPayloadWithRole, scopeType: ScopeType, scopeId: string): Promise<boolean> {
         return user.roleList.some(role =>
             role.scopeInfo.scopeType === scopeType &&
             role.scopeInfo.scopeId === scopeId
