@@ -88,7 +88,8 @@ export const fetchCommit = [
 
             if (gitProjectCommit) {
                 // 既に同じコミットをダウンロード済みの場合
-                fileGroup = await copyFromFirst(gitProjectCommit.fileGroupId, project, req.info.user.orgKey, req.info.user.id, req.info.ip);            } else {
+                fileGroup = await copyFromFirst(gitProjectCommit.fileGroupId, project, req.info.user.orgKey, req.info.user.id, req.info.ip);
+            } else {
                 const object = await gitFetchCommitId(req.info.user.orgKey, req.info.user.id, req.info.ip, projectId, FileGroupType.GITLAB, gitlabProject.name, provider, { provider, projectId: gitlabProjectId, refType, refId, commitId }, Number(gitlabProjectId), e.uriBase, gitlabProject.http_url_to_repo, gitlabProject.path_with_namespace, username, accessToken, commitId, req.info.user);
                 gitProjectCommit = object.gitProjectCommit;
                 fileGroup = object.fileGroup;

@@ -1,6 +1,6 @@
 // 各形式のインターフェース定義
 // import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { MessageCreateParams, MessageStreamParams, ContentBlockParam, DocumentBlockParam, ImageBlockParam, MessageParam, TextBlockParam, Tool, ToolChoice, Usage, ThinkingBlockParam, ThinkingConfigParam, } from '@anthropic-ai/sdk/resources';
+import { MessageCreateParams, MessageStreamParams, ContentBlockParam, DocumentBlockParam, ImageBlockParam, MessageParam, TextBlockParam, Tool, ToolChoice, Usage, ThinkingBlockParam, ThinkingConfigParam, ToolResultBlockParam, } from '@anthropic-ai/sdk/resources';
 import { ChatCompletionAssistantMessageParam, ChatCompletionContentPart, ChatCompletionContentPartText, ChatCompletionMessageParam, ChatCompletionSystemMessageParam, ChatCompletionTool, ChatCompletionToolMessageParam, ChatCompletionUserMessageParam, CompletionUsage } from "openai/resources";
 import { ChatCompletionCreateParamsBase } from "openai/resources/chat/completions";
 
@@ -145,6 +145,11 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
             // 何もしない
             res.tool_choice = undefined;
         }
+
+        // ツールがある場合は、最後のツールにキャッシュ制御を追加
+        if (res.tool_choice && res.tool_choice.type !== 'none' && res.tools && res.tools.length > 0) {
+            res.tools[res.tools.length - 1].cache_control = { type: 'ephemeral' };
+        } else { }
     } else {
         // 何もしない
         res.tool_choice = undefined;
@@ -154,6 +159,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
     // console.dir(args.messages, { depth: null });
     // console.log('++++++++++++++++++++++++++++++++++++++++++++++++++++');
     // イメージタグの作り方が微妙に違う。
+    let toolResult!: ToolResultBlockParam;
     res.messages = args.messages.map(m => {
         const newMessage = { role: m.role, content: [] } as MessageParam;
         if (m.content) {
@@ -175,44 +181,65 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
         } else {
             // 何もしない
         }
+
         if (m.role === 'tool') {
             const newUserMessage = newMessage as ChatCompletionUserMessageParam;
             newUserMessage.role = 'user';
-            if (Array.isArray(newUserMessage.content) && m.tool_call_id) {
-                // TODO any多用しすぎ気持ち悪い。。。
-                // console.dir(newUserMessage);
-                const newUserMessageToolResult = newUserMessage.content[0] as any;
-                if (newUserMessageToolResult.type === 'tool_result') {
-                    // 編集済みのものはそのまま - キャッシュ制御を追加
-                    newUserMessageToolResult.cache_control = { type: 'ephemeral' };
-                } else if (newUserMessageToolResult.type === 'text') {
-                    newUserMessageToolResult.type = 'tool_result' as any;
-                    newUserMessageToolResult.tool_use_id = m.tool_call_id;
-                    newUserMessageToolResult.content = newUserMessageToolResult.text;
-                    delete newUserMessageToolResult.text;
-                    // ツール結果にキャッシュ制御を追加
-                    newUserMessageToolResult.cache_control = { type: 'ephemeral' };
-                }
-            } else { /** error */ }
-            // newToolMessage.tool_calls = m.tool_calls;
-        }
-        if (m.role === 'assistant') {
 
-            const newAssistantMessage = newMessage as ChatCompletionAssistantMessageParam;
-            // console.log(`m.tool_calls:${m.tool_calls}++++++++++++++++++++++++++++++++++++++++++++++++++++`);
-            // console.log(newAssistantMessage);
-            if (Array.isArray(newAssistantMessage.content) && m.tool_calls) {
-                // console.dir(m, { depth: null });
-                for (const toolCall of m.tool_calls) {
-                    // TODO any多用しすぎ気持ち悪い。。。
-                    (newAssistantMessage.content as any[]).push({ type: 'tool_use', id: toolCall.id, name: toolCall.function.name, input: JSON.parse(toolCall.function.arguments || '{}') });
+            if (m.tool_call_id) {
+                // contentがstringの場合、配列に変換
+                if (typeof newUserMessage.content === 'string') {
+                    toolResult = {
+                        type: 'tool_result',
+                        tool_use_id: m.tool_call_id,
+                        content: newUserMessage.content,
+                    };
+                    // ツール結果のコンテンツを配列に変換
+                    newUserMessage.content = [toolResult as any];
+                } else if (Array.isArray(newUserMessage.content)) {
+                    const contentItem = newUserMessage.content[0] as any;
+                    if (contentItem.type === 'tool_result') {
+                        // 編集済みのものはそのまま - キャッシュ制御を追加
+                        toolResult = contentItem as ToolResultBlockParam;
+                    } else if (contentItem.type === 'text') {
+                        // textタイプをtool_resultに変換
+                        toolResult = {
+                            type: 'tool_result',
+                            tool_use_id: m.tool_call_id,
+                            content: contentItem.text,
+                        };
+                        newUserMessage.content[0] = toolResult as any;
+                    }
                 }
             } else {
-                /** TODO textの場合も考慮すべきか？ */
+                console.error('tool_call_id が見つかりません');
             }
-            // newAssistantMessage.tool_calls = m.tool_calls;
-        } else { }
+        }
 
+        if (m.role === 'assistant') {
+            const newAssistantMessage = newMessage as ChatCompletionAssistantMessageParam;
+
+            if (m.tool_calls && m.tool_calls.length > 0) {
+                // contentがstringの場合、配列に変換
+                if (typeof newAssistantMessage.content === 'string') {
+                    newAssistantMessage.content = [{
+                        type: 'text',
+                        text: newAssistantMessage.content
+                    }];
+                } else { }
+                // contentが配列であることを確認してからtool_useを追加
+                if (Array.isArray(newAssistantMessage.content)) {
+                    for (const toolCall of m.tool_calls) {
+                        newAssistantMessage.content.push({
+                            type: 'tool_use',
+                            id: toolCall.id,
+                            name: toolCall.function.name,
+                            input: JSON.parse(toolCall.function.arguments || '{}')
+                        } as any);
+                    }
+                }
+            }
+        }
         if (m.role === 'system') {
             res.system = m.content;  // これはstringでいいのか？
             // システムプロンプトにキャッシュ制御を追加
@@ -230,6 +257,11 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
             return newMessage;
         }
     }).filter(m => !!m) as MessageParam[];
+
+    // ツール結果があれば、キャッシュ制御を追加
+    if (toolResult) {
+        toolResult.cache_control = { type: 'ephemeral' };
+    }
 
     // 同一のロールが連続する場合は1つのメッセージとして纏める（こうしないとエラーになるんだけど、何も考えずにnormalizeからもってきたから要らない処理も入ってるかもしれない。もっとコンパクト化したい。）
     res.messages = res.messages.reduce((prev, curr) => {
@@ -286,6 +318,13 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
         }
         return prev;
     }, [] as MessageParam[]);
+
+    // TODO 最大のメッセージのところにキャッシュポイントを置きたいけど出来てない。
+    // const largest = res.messages.reduce((prev, curr) => {
+    //     const prevString = JSON.stringify(prev);
+    //     const currString = JSON.stringify(curr);
+    //     return prevString.length < currString.length ? curr : prev;
+    // }, res.messages[0]);
 
     // thinkingフラグを立てる
     if (res.model.includes('-thinking')) {

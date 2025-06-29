@@ -169,7 +169,8 @@ export class ScopedEntityService {
                     isNew = false;
                 }
             }
-        }        // 重複チェック（同一スコープ内）
+        }
+        // 重複チェック（同一スコープ内）
         if (options.uniqueFields && entityData.scopeInfo) {
             for (const field of options.uniqueFields) {
                 if (entityData[field as keyof T]) {
@@ -177,7 +178,8 @@ export class ScopedEntityService {
                         repository,
                         { ...entityData, [field]: entityData[field as keyof T] },
                         user,
-                        existingId
+                        existingId,
+                        entityData.scopeInfo.scopeId,
                     );
 
                     if (conflictResult.entity) {
@@ -199,7 +201,7 @@ export class ScopedEntityService {
         }
 
         // スコープ情報を準備
-        const preparedEntity = await this.prepareScopedEntity(entityData, user);
+        const preparedEntity = await this.prepareScopedEntity(entityData, user, entityData.scopeInfo?.scopeId);
 
         if (isNew) {
             // console.log('Creating new entity with scope:', preparedEntity.scopeInfo);

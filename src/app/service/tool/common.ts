@@ -15,7 +15,7 @@ import { UserRequest } from '../models/info.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
 import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
-import { Utils } from '../../common/utils.js';
+import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
 import { OAuthAccountEntity } from '../entity/auth.entity.js';
 import { getAxios, getPuppeteer } from '../../common/http-client.js';
@@ -212,6 +212,26 @@ async function fetchRenderedText(browser: Browser, url: string, loadContentType:
     }
 }
 
+// EnhancedRequestLimiterを使用した改善版
+const puppeteerLimiter = new EnhancedRequestLimiter(
+    5, // 最大並列実行数を5に制限（必要に応じて調整）
+    3, // リトライ回数
+    2000, // リトライ間隔（ms）
+    (error: Error) => {
+        // エラータイプに応じたリトライ戦略
+        if (error.message.includes('Navigation timeout') ||
+            error.message.includes('net::ERR_') ||
+            error.message.includes('Protocol error')) {
+            return { shouldRetry: true, retryCount: 2, retryDelay: 3000 };
+        }
+        // メモリ不足やブラウザクラッシュ系のエラーはリトライしない
+        if (error.message.includes('Target closed') ||
+            error.message.includes('Session closed')) {
+            return { shouldRetry: false };
+        }
+        return { shouldRetry: true };
+    }
+);
 
 const aiModels = [
     { 'model': 'gemini-2.0-flash-001', 'description': 'gemini-1.5-flashの次世代モデル。前世代を上回る性能。' },
@@ -331,7 +351,7 @@ export function commonFunctionDefinitions(
                 const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID || '';
 
                 const systemPrompt = 'アシスタントAI';
-                const model = 'gemini-2.5-flash-preview-05-20';
+                const model = 'gemini-2.5-flash';
                 const aiProvider = (await getAIProvider(req.info.user, model));
 
                 // 10件ずつ分割してリクエストするための処理
@@ -375,76 +395,94 @@ export function commonFunctionDefinitions(
                 } else { }
 
                 const browser = await getPuppeteer();
-                const res = await Promise.all(allItems.map(async (item, index) => {
-                    try {
-                        const html = await fetchRenderedText(browser, item.link, 'HTML');
+                const tasks = allItems.map((item, index) =>
+                    puppeteerLimiter.executeWithRetry(async () => {
+                        try {
+                            const html = await fetchRenderedText(browser, item.link, 'HTML');
+                            const sanitizedBody = sanitizeHTML(html.body);
 
-                        const sanitizedBody = sanitizeHTML(html.body);
+                            const inDto = Utils.deepCopyOmitting(obj.inDto, 'aiProviderClient');
+                            inDto.args.model = model || inDto.args.model;
 
-                        const inDto = Utils.deepCopyOmitting(obj.inDto, 'aiProviderClient');
-
-                        inDto.args.model = model || inDto.args.model; // modelが指定されていない場合は元のモデルを使う
-                        // console.log(`call_ai: model=${inDto.args.model}, type=${html.type} ${item.title} ${item.link}`);
-                        inDto.args.messages = [
-                            { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
-                            {
-                                role: 'user', content: [
-                                    { type: 'text', text: userPrompt },
-                                    html.type === 'PDF'
-                                        ? { type: 'image_url', image_url: { url: html.body } }
-                                        : { type: 'text', text: `\`\`\`html ${item.link}\n${sanitizedBody}\n\`\`\`` },
-                                ],
-                            },
-                        ];
-                        // toolは使わないので空にしておく
-                        delete inDto.args.tool_choice;
-                        delete inDto.args.tools;
-
-                        // const newLabel = `call_ai-${model}-${index}`;
-                        const newLabel = `${label}-call_ai`;
-
-                        // レスポンス返した後にゆるりとヒストリーを更新しておく。
-                        const history = new PredictHistoryWrapperEntity();
-                        history.orgKey = req.info.user.orgKey;
-                        history.connectionId = connectionId;
-                        history.streamId = streamId;
-                        history.messageId = message.id;
-                        history.label = newLabel;
-                        history.model = inDto.args.model;
-                        history.provider = aiProvider.type;
-                        history.createdBy = req.info.user.id;
-                        history.updatedBy = req.info.user.id;
-                        history.createdIp = req.info.ip;
-                        history.updatedIp = req.info.ip;
-                        await ds.getRepository(PredictHistoryWrapperEntity).save(history);
-
-                        return new Promise((resolve, reject) => {
-                            let text = '';
-                            // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
-                            aiApi.chatCompletionObservableStream(
-                                inDto.args, { label: newLabel }, aiProvider,
-                            ).pipe(
-                                map(res => res.choices.map(choice => choice.delta.content).join('')),
-                                toArray(),
-                                map(res => res.join('')),
-                            ).subscribe({
-                                next: next => {
-                                    text += next;
+                            inDto.args.messages = [
+                                { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
+                                {
+                                    role: 'user', content: [
+                                        { type: 'text', text: userPrompt },
+                                        html.type === 'PDF'
+                                            ? { type: 'image_url', image_url: { url: html.body } }
+                                            : { type: 'text', text: `\`\`\`html ${item.link}\n${sanitizedBody}\n\`\`\`` },
+                                    ],
                                 },
-                                error: error => {
-                                    reject(error);
-                                },
-                                complete: () => {
-                                    resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: text });
-                                },
-                            });;
-                        });
-                    } catch (error) {
-                        console.log('fetchRenderedTextError');
-                        console.error(error);
-                        return { title: item.title, snippet: item.snippet, link: item.link, favicon: '', body: Utils.errorFormat(error) };
+                            ];
+
+                            delete inDto.args.tool_choice;
+                            delete inDto.args.tools;
+
+                            const newLabel = `${label}-call_ai`;
+
+                            // ヒストリー保存
+                            const history = new PredictHistoryWrapperEntity();
+                            history.orgKey = req.info.user.orgKey;
+                            history.connectionId = connectionId;
+                            history.streamId = streamId;
+                            history.messageId = message.id;
+                            history.label = newLabel;
+                            history.model = inDto.args.model;
+                            history.provider = aiProvider.type;
+                            history.createdBy = req.info.user.id;
+                            history.updatedBy = req.info.user.id;
+                            history.createdIp = req.info.ip;
+                            history.updatedIp = req.info.ip;
+                            await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+
+                            return new Promise((resolve, reject) => {
+                                let text = '';
+                                aiApi.chatCompletionObservableStream(
+                                    inDto.args, { label: newLabel }, aiProvider,
+                                ).pipe(
+                                    map(res => res.choices.map(choice => choice.delta.content).join('')),
+                                    toArray(),
+                                    map(res => res.join('')),
+                                ).subscribe({
+                                    next: next => {
+                                        text += next;
+                                    },
+                                    error: error => {
+                                        reject(error);
+                                    },
+                                    complete: () => {
+                                        resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: text });
+                                    },
+                                });
+                            });
+                        } catch (error) {
+                            console.log(`fetchRenderedTextError for ${item.link}`);
+                            console.error(error);
+                            return { title: item.title, snippet: item.snippet, link: item.link, favicon: '', body: Utils.errorFormat(error) };
+                        }
+                    })
+                );
+
+                // Promise.allSettledを使用して、一部が失敗しても他の処理を継続
+                const results_raw = await Promise.allSettled(tasks);
+
+                const res = results_raw.map((result, index) => {
+                    if (result.status === 'fulfilled') {
+                        return result.value;
+                    } else {
+                        console.error(`Task ${index} failed:`, result.reason);
+                        // エラー時のフォールバック
+                        return {
+                            title: allItems[index].title,
+                            snippet: allItems[index].snippet,
+                            link: allItems[index].link,
+                            favicon: '',
+                            body: Utils.errorFormat(result.reason)
+                        };
                     }
-                }));
+                });
+
                 await browser.close();
                 return res;
             },

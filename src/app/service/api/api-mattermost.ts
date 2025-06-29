@@ -723,7 +723,8 @@ export const mattermostToAi = [
                     } else {
                         return null;
                     }
-                }).filter(Boolean);                // { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }
+                }).filter(Boolean);
+                // { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }
                 const tokenCountedFileBodyList = await geminiCountTokensByFile(tm, tokenCountFileList as any, req.info.user);
                 // console.dir(tokenCountedFileBodyList.map(fileBodyEntity => fileBodyEntity.tokenCount));
                 console.log(tokenCountFileList.length + ' files to tokenize');
@@ -873,7 +874,8 @@ export const mattermostToAi = [
                                 break;
                         }
                         if (content.type === ContentPartType.FILE && fileGroupIdSet.has(contentPart.linkId)) {
-                            // 追加済みのファイルグループの人だったら追加しない。                        } else {
+                            // 追加済みのファイルグループの人だったら追加しない。                  
+                        } else {
                             contentPart = await tm.save(ContentPartEntity, contentPart);
                             updatedContentParts.push(contentPart);
                             // トークンカウントの更新

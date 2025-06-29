@@ -1,4 +1,3 @@
-import path from 'path';
 import { promises as fs } from 'fs';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";

@@ -272,10 +272,11 @@ export const registApiKey = [
                 const apiKeys = await manager.getRepository(OAuthAccountEntity).find({
                     where: { orgKey: req.info.user.orgKey, provider, userId: req.info.user.id }
                 });
-                const apiKey = new OAuthAccountEntity();
+                let apiKey;
                 if (apiKeys.length === 1) {
-                    apiKey.id = apiKeys[0].id;
+                    apiKey = apiKeys[0];
                 } else {
+                    apiKey = new OAuthAccountEntity();
                     apiKey.orgKey = req.info.user.orgKey;
                     apiKey.createdBy = req.info.user.id;
                     apiKey.createdIp = req.info.ip;

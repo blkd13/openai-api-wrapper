@@ -86,16 +86,17 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
 
                         // アクセストークン検証
                         const userTokenPayload = await verifyJwt<UserTokenPayload>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user');
-                        // console.log(`acc:userToken=${JSON.stringify(userTokenPayload, Utils.genJsonSafer())}`);
 
                         // ロールを毎回DBから取得
-                        const roleList = await ds.getRepository(UserRoleEntity).find({
-                            select: ['role', 'scopeInfo'],
+                        const roleList = (await ds.getRepository(UserRoleEntity).find({
+                            // select: ['role', 'scopeInfo'],
                             where: {
                                 orgKey: userTokenPayload.orgKey,
                                 userId: userTokenPayload.id,
                                 status: UserStatus.Active
                             }
+                        })).map(role => {
+                            return ({ role: role.role, scopeInfo: role.scopeInfo } as UserRole);
                         });
 
                         const enrichedPayload = { ...userTokenPayload, roleList };
