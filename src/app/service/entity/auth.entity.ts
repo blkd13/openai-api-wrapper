@@ -78,6 +78,7 @@ export interface UserRole {
     userId: string;
     scopeInfo: ScopeInfo;
     role: UserRoleType;
+    priority: number; // 複数divisionのroleを持つことがあるのでその優先度。数値が大きいほど優先される。
 }
 
 @Entity()

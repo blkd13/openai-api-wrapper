@@ -40,6 +40,50 @@ const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? 
 } : {};
 
 /**
+ * トークン数を管理するクラス
+ */
+class TokenCount {
+    public modelShort: string;
+
+    constructor(
+        public model?: AIModelEntity,
+        public modelPrice?: AIModelPricingEntity,
+        public prompt_tokens: number = 0,
+        public completion_tokens: number = 0,
+        public tokenBuilder: string = '',
+        public cost: number = 0
+    ) {
+        if (model) {
+            this.modelShort = model.shortName || model.name;
+        } else {
+            this.modelShort = 'unknown';
+        }
+        if (modelPrice) {
+            this.cost = (this.prompt_tokens / 1_000_000) * modelPrice.inputPricePerUnit + (this.completion_tokens / 1_000_000) * modelPrice.outputPricePerUnit;
+        }
+    }
+
+    add(obj: TokenCount): TokenCount {
+        this.prompt_tokens += obj.prompt_tokens;
+        this.completion_tokens += obj.completion_tokens;
+        this.cost += obj.cost;
+        return this;
+    }
+
+    calcCost(): number {
+        if (this.modelPrice) {
+            return (this.prompt_tokens / 1_000_000) * this.modelPrice.inputPricePerUnit +
+                (this.completion_tokens / 1_000_000) * this.modelPrice.outputPricePerUnit;
+        }
+        return 0;
+    }
+
+    toString(): string {
+        return `${this.modelShort.padEnd(8)} ${this.prompt_tokens.toLocaleString().padStart(6, ' ')} ${this.completion_tokens.toLocaleString().padStart(6, ' ')}`;
+    }
+}
+
+/**
  * ログ出力用クラス
  */
 class LogObject {
@@ -126,6 +170,19 @@ const commonValidation = [
     validationErrorHandler,
 ];
 
+/**
+ * count-tokens用のバリデーション
+ */
+const countTokensValidation = [
+    body('messages').isArray().withMessage('messages must be an array'),
+    body('messages.*.role').isIn(['user', 'assistant']).withMessage('messages must contain role "user" or "assistant"'),
+    body('model').isString().withMessage('model must be a string'),
+    body('anthropic_version').optional().isString().withMessage('anthropic_version must be a string'),
+    body('system').optional().isString().withMessage('system must be a string'),
+    body('tools').optional().isArray().withMessage('tools must be an array'),
+    validationErrorHandler,
+];
+
 const my_vertexai = new MyVertexAiClient([{
     project: GCP_PROJECT_ID || '',
     locationList: [GCP_REGION || 'asia-northeast1'],
@@ -155,6 +212,91 @@ async function commonPreProcess(req: UserRequest, suffix: string) {
 
     return { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject };
 }
+
+/**
+ * POST /v1/messages/count_tokens
+ */
+export const vertexAIByAnthropicAPICountTokens = [
+    ...countTokensValidation,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+
+        try {
+            const { model, messages, system, tools, anthropic_version } = req.body;
+            const modelName = model || 'claude-3-5-sonnet-20241022';
+
+            const { idempotencyKey, label, tokenCount, logObject } = await initializeRequest(req, modelName, 'count_tokens');
+
+            // Vertex AI doesn't have a direct count tokens endpoint, so we'll use the token counting logic
+            // from the existing token counting service
+            const content = [];
+            
+            // Add system message if present
+            if (system) {
+                content.push({ type: 'text', text: system });
+            }
+
+            // Add messages
+            for (const message of messages) {
+                if (message.content) {
+                    if (typeof message.content === 'string') {
+                        content.push({ type: 'text', text: message.content });
+                    } else if (Array.isArray(message.content)) {
+                        for (const contentPart of message.content) {
+                            if (contentPart.type === 'text') {
+                                content.push({ type: 'text', text: contentPart.text });
+                            } else if (contentPart.type === 'image') {
+                                // For images, we'll estimate token count
+                                content.push({ type: 'image', data: contentPart.source?.data || '' });
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Add tools if present
+            if (tools && Array.isArray(tools)) {
+                for (const tool of tools) {
+                    content.push({ type: 'text', text: JSON.stringify(tool) });
+                }
+            }
+
+            // Calculate token count using existing logic
+            let totalInputTokens = 0;
+            
+            for (const contentPart of content) {
+                if (contentPart.type === 'text') {
+                    // Use simple character-based estimation similar to existing code
+                    const textTokens = Math.ceil(contentPart.text.length / 4); // 4 chars per token estimate
+                    totalInputTokens += textTokens;
+                } else if (contentPart.type === 'image') {
+                    // Image token estimation (typical vision model token count)
+                    totalInputTokens += 1568; // Standard vision token count for images
+                }
+            }
+
+            tokenCount.prompt_tokens = totalInputTokens;
+            tokenCount.completion_tokens = 0; // Count tokens endpoint doesn't generate completion
+
+            console.log(logObject.output('count', '', JSON.stringify({
+                input_tokens: totalInputTokens
+            })));
+
+            // Return response in Anthropic format
+            const response = {
+                input_tokens: totalInputTokens
+            };
+
+            res.status(200).json(response);
+        } catch (err: any) {
+            const { idempotencyKey, logObject } = await initializeRequest(req, 'claude-3-5-sonnet-20241022', 'count_tokens').catch(() => ({
+                idempotencyKey: 'error',
+                logObject: new LogObject(Date.now(), new TokenCount(), 'error', 'error')
+            }));
+            handleError(err, logObject, idempotencyKey, res);
+        }
+    }
+];
 
 /**
  * POST /v1/projects/:project/locations/:location/publishers/anthropic/models/:model:predict

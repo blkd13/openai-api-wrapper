@@ -49,7 +49,7 @@ import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiColle
 import { registApiKey, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId, callFunction } from './controllers/tool-call.js';
 import { upsertMCPServer, getMCPServers, deleteMCPServer } from './controllers/mcp-manager.js';
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
-import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
+import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPIStream, vertexAIByAnthropicAPICountTokens } from './controllers/claude-proxy.js';
 import { getDivisionMembers, updateDivisionMember, removeDivisionMember, getDivisionList, getDivision, deleteDivision, getAllDivisions, upsertDivisionMember, upsertDivision } from './controllers/division.js';
 import { getDepartmentMemberLog, getDepartmentMemberLogForUser, getDepartmentMemberLogSummaryForUser, getDivisionMemberStatsList, getJournal } from './controllers/stats.js';
 
@@ -314,6 +314,7 @@ authUserRouter.get('/scope-labels', getScopeLabels);
 
 // Claude Code用プロキシ
 authUserRouter.post('/vertexai-claude-proxy/v1/messages', vertexAIByAnthropicAPIStream);
+authUserRouter.post('/vertexai-claude-proxy/v1/messages/count_tokens', vertexAIByAnthropicAPICountTokens);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:rawPredict', vertexAIByAnthropicAPI);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:streamRawPredict', vertexAIByAnthropicAPIStream);
 

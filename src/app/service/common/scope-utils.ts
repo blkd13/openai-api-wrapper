@@ -1,4 +1,4 @@
-import { ScopeType, OrganizationEntity, DivisionEntity, UserRoleType } from '../entity/auth.entity.js';
+import { ScopeType, OrganizationEntity, DivisionEntity, UserRoleType, UserRole } from '../entity/auth.entity.js';
 import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 import { safeWhere } from '../entity/base.js';
 import { ds } from '../db.js';
@@ -115,17 +115,25 @@ export class ScopeUtils {
     /**
      * エンティティ配列をスコープ優先順位でソート
      */
-    static sortByScopePriority<T extends ScopedEntity>(entities: T[]): T[] {
+    static sortByScopePriority<T extends ScopedEntity>(roles: UserRole[], entities: T[]): T[] {
+        const priorityMap: Record<string, number> = Object.fromEntries(
+            roles.map((role, index) => [`${role.scopeInfo.scopeType}:${role.scopeInfo.scopeId}`, role.priority])
+        );
         return entities.sort((a, b) => {
-            return this.SCOPE_PRIORITY.indexOf(a.scopeInfo.scopeType) -
-                this.SCOPE_PRIORITY.indexOf(b.scopeInfo.scopeType);
+            const scopePriorityA = this.SCOPE_PRIORITY.indexOf(a.scopeInfo.scopeType);
+            const scopePriorityB = this.SCOPE_PRIORITY.indexOf(b.scopeInfo.scopeType);
+            if (scopePriorityA !== scopePriorityB) {
+                return scopePriorityA - scopePriorityB;
+            }
+            // 同じスコープ優先順位の場合はpriorityで比較
+            return priorityMap[`${b.scopeInfo.scopeType}:${b.scopeInfo.scopeId}`] - priorityMap[`${a.scopeInfo.scopeType}:${a.scopeInfo.scopeId}`];
         });
     }
 
     /**
      * 同名エンティティの重複排除（スコープ優先順位考慮）
      */
-    static deduplicateByNameAndPriority<T extends ScopedEntity>(entities: T[], key: string = 'name'): T[] {
+    static deduplicateByNameAndPriority<T extends ScopedEntity>(roles: UserRole[], entities: T[], key: string = 'name'): T[] {
         const entityMap = entities.reduce((prev, _curr) => {
             const curr = _curr as T & { [key: string]: string };
             if (!prev[curr[key]]) {
@@ -137,7 +145,7 @@ export class ScopeUtils {
 
         // 各名前について優先順位でソートして最優先のものを選択
         return Object.keys(entityMap).map(name => {
-            const sorted = this.sortByScopePriority(entityMap[name]);
+            const sorted = this.sortByScopePriority(roles, entityMap[name]);
             return sorted[0];
         });
     }

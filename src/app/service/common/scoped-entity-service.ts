@@ -37,7 +37,7 @@ export class ScopedEntityService {
         }
 
         // スコープ優先順位でソートして最優先のものを返す
-        const sorted = ScopeUtils.sortByScopePriority(entities);
+        const sorted = ScopeUtils.sortByScopePriority(user.roleList, entities);
         return sorted[0];
     }
 
@@ -62,8 +62,8 @@ export class ScopedEntityService {
         });
 
         return options.includeOverridden
-            ? ScopeUtils.sortByScopePriority(allEntities) // 重複排除無し スコープ優先順位でソート
-            : ScopeUtils.deduplicateByNameAndPriority(allEntities); // 重複排除（同名エンティティでスコープ優先順位を考慮）
+            ? ScopeUtils.sortByScopePriority(user.roleList, allEntities) // 重複排除無し スコープ優先順位でソート
+            : ScopeUtils.deduplicateByNameAndPriority(user.roleList, allEntities); // 重複排除（同名エンティティでスコープ優先順位を考慮）
     }
     /**
      * 重複チェック（同一スコープ内）
