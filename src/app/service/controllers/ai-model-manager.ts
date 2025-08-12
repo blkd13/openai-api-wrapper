@@ -1,17 +1,16 @@
 import { Request, Response } from 'express';
-import { param, body, query } from 'express-validator';
-import { EntityManager, EntityNotFoundError, In, Not, Or } from 'typeorm';
+import { body, param, query } from 'express-validator';
+import { EntityManager, In } from 'typeorm';
 
-import { ScopeType, OrganizationEntity, DivisionEntity, UserEntity, UserStatus, UserRoleType } from '../entity/auth.entity.js';
-import { AIProviderType, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIModelAlias, AIProviderEntity, AIProviderTemplateEntity, TagEntity } from '../entity/ai-model-manager.entity.js';
+import { AIModelAlias, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIProviderEntity, AIProviderTemplateEntity, AIProviderType, TagEntity } from '../entity/ai-model-manager.entity.js';
+import { ScopeType } from '../entity/auth.entity.js';
 
-import { validationErrorHandler } from '../middleware/validation.js';
-import { ds } from '../db.js';
-import { UserRequest } from '../models/info.js';
-import { safeWhere } from '../entity/base.js';
 import { Utils } from '../../common/utils.js';
 import { ScopedEntityService } from '../common/scoped-entity-service.js';
-import { ScopeUtils } from '../common/scope-utils.js';
+import { ds } from '../db.js';
+import { safeWhere } from '../entity/base.js';
+import { validationErrorHandler } from '../middleware/validation.js';
+import { UserRequest } from '../models/info.js';
 
 /**
  * [GET] AIProvider 一覧取得
@@ -379,11 +378,20 @@ export const upsertBaseModel = [
     body('uiOrder').optional({ nullable: true }).isInt(),
     body('isStream').isBoolean(),
     body('isActive').isBoolean(),
+    // 価格情報のバリデーション
+    body('pricingInfo').optional({ nullable: true }).isObject(),
+    body('pricingInfo.name').optional({ nullable: true }).isString().notEmpty(),
+    body('pricingInfo.inputPricePerUnit').optional({ nullable: true }).isFloat({ min: 0 }),
+    body('pricingInfo.outputPricePerUnit').optional({ nullable: true }).isFloat({ min: 0 }),
+    body('pricingInfo.unit').optional({ nullable: true }).isString().notEmpty(),
+    body('pricingInfo.validFrom').optional({ nullable: true }).isISO8601(),
+    body('pricingInfo.metadata').optional({ nullable: true }),
     validationErrorHandler, async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         try {
             const bodyData = req.body as AIModelEntity;
             const aliases: string[] = req.body.aliases || [];
+            const pricingInfo = req.body.pricingInfo; // 価格情報を取得
             const { modelId } = req.params;
 
             // providerNameListの存在チェック
@@ -479,6 +487,77 @@ export const upsertBaseModel = [
 
                 // レスポンスにエイリアスを含める
                 (result.entity as any).aliases = processedAliases;
+
+                // 価格情報の処理
+                if (pricingInfo) {
+                    const repoPricing = manager.getRepository(AIModelPricingEntity);
+                    
+                    // 既存の価格情報を取得
+                    const existingPricing = await repoPricing.findOne({
+                        where: safeWhere({
+                            modelId: result.entity.id,
+                            orgKey: req.info.user.orgKey,
+                            isActive: true
+                        }),
+                        order: { validFrom: 'DESC' }
+                    });
+
+                    // 価格情報のデフォルト値を設定
+                    const pricingName = pricingInfo.name || `${result.entity.name} Pricing ${new Date().toISOString().split('T')[0]}`;
+                    const validFrom = pricingInfo.validFrom ? new Date(pricingInfo.validFrom) : new Date();
+                    const unit = pricingInfo.unit || 'USD/1M tokens';
+                    
+                    // 新しい価格情報エンティティを作成
+                    const pricingEntity = new AIModelPricingEntity();
+                    pricingEntity.orgKey = req.info.user.orgKey;
+                    pricingEntity.scopeInfo = result.entity.scopeInfo; // 親モデルのscopeInfoを継承
+                    pricingEntity.modelId = result.entity.id;
+                    pricingEntity.name = pricingName;
+                    pricingEntity.inputPricePerUnit = pricingInfo.inputPricePerUnit || 0;
+                    pricingEntity.outputPricePerUnit = pricingInfo.outputPricePerUnit || 0;
+                    pricingEntity.unit = unit;
+                    pricingEntity.validFrom = validFrom;
+                    pricingEntity.metadata = pricingInfo.metadata;
+                    pricingEntity.isActive = true;
+                    pricingEntity.createdBy = req.info.user.id;
+                    pricingEntity.createdIp = req.info.ip;
+                    pricingEntity.updatedBy = req.info.user.id;
+                    pricingEntity.updatedIp = req.info.ip;
+
+                    // 既存の価格情報がある場合は無効化
+                    if (existingPricing) {
+                        existingPricing.isActive = false;
+                        existingPricing.updatedBy = req.info.user.id;
+                        existingPricing.updatedIp = req.info.ip;
+                        await repoPricing.save(existingPricing);
+                    }
+
+                    // 新しい価格情報を保存
+                    await repoPricing.save(pricingEntity);
+                    
+                    // レスポンスに価格情報を含める
+                    (result.entity as any).pricingHistory = [pricingEntity];
+                } else if (result.isNew) {
+                    // 新規作成時で価格情報が提供されていない場合、デフォルトの価格情報を作成
+                    const repoPricing = manager.getRepository(AIModelPricingEntity);
+                    const defaultPricingEntity = new AIModelPricingEntity();
+                    defaultPricingEntity.orgKey = req.info.user.orgKey;
+                    defaultPricingEntity.scopeInfo = result.entity.scopeInfo;
+                    defaultPricingEntity.modelId = result.entity.id;
+                    defaultPricingEntity.name = `${result.entity.name} Default Pricing`;
+                    defaultPricingEntity.inputPricePerUnit = 0;
+                    defaultPricingEntity.outputPricePerUnit = 0;
+                    defaultPricingEntity.unit = 'USD/1M tokens';
+                    defaultPricingEntity.validFrom = new Date();
+                    defaultPricingEntity.isActive = true;
+                    defaultPricingEntity.createdBy = req.info.user.id;
+                    defaultPricingEntity.createdIp = req.info.ip;
+                    defaultPricingEntity.updatedBy = req.info.user.id;
+                    defaultPricingEntity.updatedIp = req.info.ip;
+                    
+                    await repoPricing.save(defaultPricingEntity);
+                    (result.entity as any).pricingHistory = [defaultPricingEntity];
+                }
 
                 res.status(result.isNew ? 201 : 200).json(result.entity);
             });

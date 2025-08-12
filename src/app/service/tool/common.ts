@@ -1,28 +1,27 @@
-import os from 'os';
-import fs from 'fs/promises';
-import path from 'path';
 import { exec } from 'child_process';
-import { promisify } from 'util';
 import { randomUUID } from 'crypto';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
+import { promisify } from 'util';
 
 import { map, toArray } from 'rxjs';
 import TurndownService from 'turndown';
 // import * as cheerio from 'cheerio';
 import { AxiosInstance } from 'axios';
 
-import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
-import { UserRequest } from '../models/info.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
-import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
-import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
-import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
-import { ds } from '../db.js';
-import { OAuthAccountEntity } from '../entity/auth.entity.js';
-import { getAxios, getPuppeteer } from '../../common/http-client.js';
-import { Browser } from 'puppeteer';
 import createDOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
-import { uploadFiles } from '../controllers/file-manager.js';
+import { Browser } from 'puppeteer';
+import { getAxios, getPuppeteer } from '../../common/http-client.js';
+import { MyToolType, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
+import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
+import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
+import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
+import { ds } from '../db.js';
+import { OAuthAccountEntity } from '../entity/auth.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
+import { UserRequest } from '../models/info.js';
 
 
 const turndownService = new TurndownService();

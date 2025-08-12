@@ -1,10 +1,10 @@
-import { Chat, ChatCompletion, ChatCompletionContentPartText, ChatCompletionMessageToolCall, ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolMessageParam, CompletionUsage } from 'openai/resources/index';
-import { HttpsProxyAgent } from 'https-proxy-agent';
-import { EMPTY, Observable, Subscriber, catchError, concat, concatMap, concatWith, endWith, filter, find, forkJoin, from, map, merge, of, startWith, switchMap, tap, toArray } from 'rxjs';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import sizeOf from 'image-size';
 import { detect } from 'jschardet';
+import { Chat, ChatCompletion, ChatCompletionContentPartText, ChatCompletionMessageToolCall, ChatCompletionTool } from 'openai/resources/index';
+import { catchError, concat, concatWith, EMPTY, forkJoin, from, map, Observable, of, Subscriber, switchMap, toArray } from 'rxjs';
 
 const { GCP_PROJECT_ID, GCP_REGION, GCP_REGION_ANTHROPIC, GCP_API_BASE_PATH } = process.env as { GCP_PROJECT_ID: string, GCP_REGION: string, GCP_REGION_ANTHROPIC: string, GCP_API_BASE_PATH: string };
 // if (!PROJECT_ID || !LOCATION) {
@@ -12,13 +12,14 @@ const { GCP_PROJECT_ID, GCP_REGION, GCP_REGION_ANTHROPIC, GCP_API_BASE_PATH } = 
 // }
 
 // configureGlobalFetchを読み込むとfetchのproxyが効くようになるので、VertexAI用にただ読み込むだけ。
-import * as configureGlobalFetch from './configureGlobalFetch.js'; configureGlobalFetch;
+import * as configureGlobalFetch from './configureGlobalFetch.js';
+configureGlobalFetch;
 
-import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { Content, FunctionCall, FunctionDeclarationsTool, GenerateContentRequest, GenerateContentResponse, GenerateContentResult, HarmBlockThreshold, HarmCategory, Part, SafetyRating, StreamGenerateContentResult, UsageMetadata, VertexAI } from '@google-cloud/vertexai';
+import { FunctionCall, GenerateContentRequest, GenerateContentResponse, SafetyRating } from '@google-cloud/vertexai';
 import { generateContentStream } from '@google-cloud/vertexai/build/src/functions/generate_content.js';
+import OpenAI from 'openai';
 
 // import { EnhancedGenerateContentResponse, GoogleGenerativeAI } from '@google/generative-ai';
 import * as googleGenerativeAI from '@google/generative-ai';
@@ -32,12 +33,12 @@ import { V2 } from 'cohere-ai/api/resources/v2/client/Client';
 import { APIPromise, RequestOptions } from 'openai/core';
 import { ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { Stream } from 'openai/streaming';
-import { Tiktoken, TiktokenEncoding, TiktokenModel, encoding_for_model } from 'tiktoken';
+import { encoding_for_model, Tiktoken, TiktokenEncoding, TiktokenModel } from 'tiktoken';
 
 import fss from './fss.js';
-import { Utils } from "./utils.js";
 import { getMetaDataFromDataURL } from './media-funcs.js';
-import { COST_TABLE, SHORT_NAME, Ratelimit, currentRatelimit, GPTModels, GPT4_MODELS, VISION_MODELS, JSON_MODELS } from './model-definition.js';
+import { COST_TABLE, currentRatelimit, GPT4_MODELS, GPTModels, JSON_MODELS, Ratelimit, SHORT_NAME, VISION_MODELS } from './model-definition.js';
+import { Utils } from "./utils.js";
 
 export type MyChatCompletionCreateParamsStreaming = ChatCompletionCreateParamsStreaming & { providerName: string, isGoogleSearch?: boolean, cachedContent?: CachedContent, safetySettings?: SafetyRating[] };
 
@@ -64,11 +65,11 @@ export const providerInstances: { [aiProviderId: string]: { client: AIProviderCl
 // export const providerInstances = {} as Record<AIProviderType, AIProviderClient>;
 
 // const apiVersion = '2024-08-01-preview';
-import { CachedContent, countChars, GenerateContentRequestExtended, mapForGemini, mapForGeminiExtend, MyVertexAiClient } from './my-vertexai.js';
-import { MessageStreamEvent, MessageStreamParams, Usage } from '@anthropic-ai/sdk/resources/index.js';
 import { ReadableStream } from '@anthropic-ai/sdk/_shims/index.js';
+import { MessageStreamEvent, MessageStreamParams, Usage } from '@anthropic-ai/sdk/resources/index.js';
+import { AIProviderType, AnthropicVertexAIConfig, AzureOpenAIConfig, CohereConfig, OpenAIConfig } from '../service/entity/ai-model-manager.entity.js';
 import { convertAnthropicToOpenAI, remapAnthropic } from './my-anthropic.js';
-import { AIProviderType, AnthropicVertexAIConfig, AzureOpenAIConfig, CohereConfig, OpenAICompatibleConfig, OpenAIConfig } from '../service/entity/ai-model-manager.entity.js';
+import { CachedContent, countChars, GenerateContentRequestExtended, mapForGemini, mapForGeminiExtend, MyVertexAiClient } from './my-vertexai.js';
 
 // TODO プロキシは環境変数から取得するように変更したい。
 // proxy設定判定用オブジェクト

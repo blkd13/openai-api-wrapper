@@ -19,10 +19,25 @@ import { Message, Usage } from "@anthropic-ai/sdk/resources.js";
 import { PredictHistoryEntity } from "../entity/project-models.entity.js";
 import { ds } from "../db.js";
 import { PredictHistoryStatus } from "../models/values.js";
-import { DepartmentEntity, DepartmentMemberEntity, DivisionEntity } from "../entity/auth.entity.js";
-import { getAIProvider, getAIProviderAndModel } from "./chat-by-project-model.js";
+import { getAIProviderAndModel } from "./chat-by-project-model.js";
 import { TokenCount } from "../../common/openai-api-wrapper.js";
 import { GPTModels } from "../../common/model-definition.js";
+
+import { Stream } from "stream";
+
+/**
+ * UnzipなどのStreamからbody文字列を読み出すユーティリティ関数
+ */
+export function readBodyFromUnzip(stream: Stream): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+        let data = '';
+        (stream as any).setEncoding('utf8');
+        stream.on('data', chunk => { data += chunk; });
+        stream.on('end', () => resolve(data));
+        stream.on('error', err => reject(err));
+    });
+}
+
 
 // 履歴ディレクトリ
 const HISTORY_DIRE = `./history`;
@@ -38,50 +53,6 @@ Object.keys(proxyObj).filter(key => noProxies.includes(host) || !proxyObj[key]).
 const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? {
     httpAgent: new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || ''),
 } : {};
-
-/**
- * トークン数を管理するクラス
- */
-class TokenCount {
-    public modelShort: string;
-
-    constructor(
-        public model?: AIModelEntity,
-        public modelPrice?: AIModelPricingEntity,
-        public prompt_tokens: number = 0,
-        public completion_tokens: number = 0,
-        public tokenBuilder: string = '',
-        public cost: number = 0
-    ) {
-        if (model) {
-            this.modelShort = model.shortName || model.name;
-        } else {
-            this.modelShort = 'unknown';
-        }
-        if (modelPrice) {
-            this.cost = (this.prompt_tokens / 1_000_000) * modelPrice.inputPricePerUnit + (this.completion_tokens / 1_000_000) * modelPrice.outputPricePerUnit;
-        }
-    }
-
-    add(obj: TokenCount): TokenCount {
-        this.prompt_tokens += obj.prompt_tokens;
-        this.completion_tokens += obj.completion_tokens;
-        this.cost += obj.cost;
-        return this;
-    }
-
-    calcCost(): number {
-        if (this.modelPrice) {
-            return (this.prompt_tokens / 1_000_000) * this.modelPrice.inputPricePerUnit +
-                (this.completion_tokens / 1_000_000) * this.modelPrice.outputPricePerUnit;
-        }
-        return 0;
-    }
-
-    toString(): string {
-        return `${this.modelShort.padEnd(8)} ${this.prompt_tokens.toLocaleString().padStart(6, ' ')} ${this.completion_tokens.toLocaleString().padStart(6, ' ')}`;
-    }
-}
 
 /**
  * ログ出力用クラス
@@ -138,19 +109,25 @@ async function initializeRequest(req: UserRequest, modelName: string, suffix: st
 /**
  * 共通のエラーハンドリング
  */
-function handleError(err: any, logObject: LogObject, idempotencyKey: string, res: Response) {
-    console.error(err.response?.data || err.message);
-    console.log(logObject.output('error', err.response?.data || err.message));
+async function handleError(error: any, logObject: LogObject, idempotencyKey: string, res: Response) {
+    console.log(logObject.output('error', error.response?.data || error.message));
 
     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.error.json`, JSON.stringify({
-        error: err.message,
+        error: error.message,
         // response: err.response?.data,
         // stack: err.stack,
     }, Utils.genJsonSafer()), {}, () => { });
 
-    const status = err.response?.status || 500;
-    const data = err.response?.data || { error: err.message };
-    res.status(status).json(err.message);
+    const status = error.response?.status || 500;
+    const data = error.response?.data || { error: error.message };
+    // console.error(status, data);
+
+    if (data && typeof data.on === "function") {
+        const body = await readBodyFromUnzip(data);
+        console.error("status:", status, "body:", body);
+    } else {
+        console.error("status:", status, "data:", data);
+    }
 }
 
 /**
@@ -230,7 +207,7 @@ export const vertexAIByAnthropicAPICountTokens = [
             // Vertex AI doesn't have a direct count tokens endpoint, so we'll use the token counting logic
             // from the existing token counting service
             const content = [];
-            
+
             // Add system message if present
             if (system) {
                 content.push({ type: 'text', text: system });
@@ -263,7 +240,7 @@ export const vertexAIByAnthropicAPICountTokens = [
 
             // Calculate token count using existing logic
             let totalInputTokens = 0;
-            
+
             for (const contentPart of content) {
                 if (contentPart.type === 'text') {
                     // Use simple character-based estimation similar to existing code
@@ -291,9 +268,9 @@ export const vertexAIByAnthropicAPICountTokens = [
         } catch (err: any) {
             const { idempotencyKey, logObject } = await initializeRequest(req, 'claude-3-5-sonnet-20241022', 'count_tokens').catch(() => ({
                 idempotencyKey: 'error',
-                logObject: new LogObject(Date.now(), new TokenCount(), 'error', 'error')
+                logObject: new LogObject(Date.now(), new TokenCount(req.params.model as GPTModels), 'error', 'error')
             }));
-            handleError(err, logObject, idempotencyKey, res);
+            await handleError(err, logObject, idempotencyKey, res);
         }
     }
 ];
@@ -336,7 +313,8 @@ export const vertexAIByAnthropicAPI = [
                     break; // 成功したらループを抜ける
                 } catch (error) {
                     lastError = error;
-                    console.log(`Attempt ${attempt} failed:`, error);
+                    // console.log(`Attempt ${attempt} failed:`, error);
+                    // console.log(`Attempt ${attempt} failed: ${(error as any).statusCode} ${(error as any).statusCode}`);
 
                     if (attempt === maxRetries) {
                         throw lastError; // 最後の試行で失敗したら元のエラーを投げる
@@ -412,7 +390,7 @@ export const vertexAIByAnthropicAPI = [
                 idempotencyKey: 'error',
                 logObject: new LogObject(Date.now(), new TokenCount(req.params.model as GPTModels), 'error', 'error')
             }));
-            handleError(err, logObject, idempotencyKey, res);
+            await handleError(err, logObject, idempotencyKey, res);
         }
     }
 ];
@@ -471,7 +449,7 @@ export const vertexAIByAnthropicAPIStream = [
                     break; // 成功したらループを抜ける
                 } catch (error) {
                     lastError = error;
-                    console.log(`Attempt ${attempt} failed:`, error);
+                    console.log(`Attempt ${attempt} failed: ${(error as any).statusCode} ${(error as any).statusCode}`);
 
                     // レスポンスヘッダーをログ
                     const headers: { [key: string]: string } = {};
@@ -637,7 +615,7 @@ export const vertexAIByAnthropicAPIStream = [
                 idempotencyKey: 'error',
                 logObject: new LogObject(Date.now(), new TokenCount(req.params.model as GPTModels, 0, 0), 'error', 'error')
             }));
-            handleError(err, logObject, idempotencyKey, res);
+            await handleError(err, logObject, idempotencyKey, res);
         }
     }
 ];
