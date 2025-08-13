@@ -1940,10 +1940,10 @@ class RunBit {
                     delete (args as any)['max_completion_tokens'];
                     delete args.max_tokens;
                     delete args.temperature;
-                    if (args.model.endsWith('-high')) {
-                        args.model = args.model.replace('-high', '');
-                        args.reasoning_effort = 'high';
-                    } else { }
+                } else { }
+                if (args.model.endsWith('-high')) {
+                    args.model = args.model.replace('-high', '');
+                    args.reasoning_effort = 'high';
                 } else { }
 
                 // TODO無理矢理すぎる。。proxy設定のやり方を再考する。
@@ -2776,7 +2776,7 @@ export class OpenAIApiWrapper {
         const inProgressQueue = this.inProgressQueue;
         for (const key of Object.keys(waitQueue)) {
             // 未知モデル名の場合はlimit=1のObjectを追加しておく
-            if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { maxTokens: 4096, limitRequests: 1, limitTokens: 1, remainingRequests: 1, remainingTokens: 1, resetRequests: '', resetTokens: '' };
+            if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { maxTokens: 40960000, limitRequests: 10, limitTokens: 10, remainingRequests: 10, remainingTokens: 10, resetRequests: '', resetTokens: '' };
             // console.log(`fire ${key} x waitQueue:${waitQueue[key].length} inProgressQueue:${inProgressQueue[key].length} reqlimit:${this.currentRatelimit[key].limitRequests} toklimit:${this.currentRatelimit[key].limitTokens} remainingRequests:${this.currentRatelimit[key].remainingRequests} remaingTokens:${this.currentRatelimit[key].remainingTokens}`);
             const ratelimitObj = this.currentRatelimit[key];
             // console.log(`fire ${key} x waitQueue:${waitQueue[key].length} inProgressQueue:${inProgressQueue[key].length} reqlimit:${ratelimitObj.limitRequests} toklimit:${ratelimitObj.limitTokens} remainingRequests:${ratelimitObj.remainingRequests} remaingTokens:${ratelimitObj.remainingTokens}`);
@@ -3138,7 +3138,7 @@ export class TokenCount {
         this.cost = (
             (TokenCount.COST_TABLE[this.modelShort]?.prompt || 0) * this.prompt_tokens +
             (TokenCount.COST_TABLE[this.modelShort]?.completion || 0) * this.completion_tokens
-        ) / 1000;
+        ) / 1000_000;
         return this.cost;
     }
 

@@ -250,7 +250,7 @@ export function commonFunctionDefinitions(
 ): MyToolType[] {
     return [
         {
-            info: { group: 'web', isActive: false, isInteractive: false, label: 'Web検索', },
+            info: { group: 'web', isActive: true, isInteractive: false, label: 'Web検索', },
             definition: {
                 type: 'function', function: {
                     name: 'web_search',
@@ -260,7 +260,7 @@ export function commonFunctionDefinitions(
                         properties: {
                             query: { type: 'string', description: '検索クエリ' },
                             num: { type: 'number', description: '検索結果の最大数', default: 30 },
-                            loadContentType: { type: 'string', description: `コンテンツの読込タイプ（'NONE'/'MARKDOWN'/'TEXT'）`, default: 'NONE' }, // HTML形式はバーストしがちなので消した。
+                            // loadContentType: { type: 'string', description: `コンテンツの読込タイプ（'NONE'/'MARKDOWN'/'TEXT'）`, default: 'NONE' }, // HTML形式はバーストしがちなので消した。
                         },
                         required: ['query']
                     }
@@ -327,7 +327,7 @@ export function commonFunctionDefinitions(
             },
         },
         {
-            info: { group: 'web', isActive: true, isInteractive: false, label: 'Web検索エージェント', },
+            info: { group: 'web', isActive: false, isInteractive: false, label: 'Web検索エージェント', },
             definition: {
                 type: 'function', function: {
                     name: 'web_search_and_get_summary',
@@ -487,7 +487,7 @@ export function commonFunctionDefinitions(
             },
         },
         {
-            info: { group: 'web', isActive: true, isInteractive: false, label: 'Webページを開く（複数可）', },
+            info: { group: 'web', isActive: false, isInteractive: false, label: 'Webページを開く（複数可）', },
             definition: {
                 type: 'function', function: {
                     name: 'get_web_page_contents',
@@ -790,7 +790,7 @@ export function commonFunctionDefinitions(
             },
         },
         {
-            info: { group: 'command', isActive: true, isInteractive: true, label: 'ユーザーへの確認', },
+            info: { group: 'command', isActive: false, isInteractive: true, label: 'ユーザーへの確認', },
             definition: {
                 type: 'function', function: {
                     name: 'command_confirm',
