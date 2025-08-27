@@ -378,11 +378,11 @@ export enum OAuthAccountStatus {
 }
 
 //   CREATE TABLE o_auth_account_entity_bk AS
-//   SELECT id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,provider,provider_user_id,provider_email,access_token,refresh_token,token_expires_at,token_body,user_info,status,label,org_key,id_token FROM o_auth_account_entity; 
-
+//   SELECT id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,provider,provider_user_id,provider_email,access_token,refresh_token,token_expires_at,token_body,user_info,status,label,org_key FROM o_auth_account_entity; 
 //   DROP TABLE o_auth_account_entity;
 //   INSERT INTO o_auth_account_entity(id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,provider,provider_user_id,provider_email,access_token,refresh_token,token_expires_at,token_body,user_info,status,label,org_key,id_token) 
-//   SELECT id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,provider,provider_user_id,provider_email,access_token,refresh_token,token_expires_at,token_body::jsonb,user_info::jsonb,status,label,org_key,id_token FROM o_auth_account_entity_bk; 
+//   SELECT id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,provider,provider_user_id,provider_email,access_token,refresh_token,token_expires_at,token_body::jsonb,user_info::jsonb,status,label,org_key,NULL FROM o_auth_account_entity_bk; 
+//   DROP TABLE o_auth_account_entity_bk;
 @Entity()
 @Index(['orgKey', 'userId', 'provider', 'providerUserId'], { unique: true })
 export class OAuthAccountEntity extends MyBaseEntity {
