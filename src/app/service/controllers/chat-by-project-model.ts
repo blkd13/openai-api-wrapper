@@ -1,15 +1,15 @@
-import { promises as fs } from 'fs';
+import axios from 'axios';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";
-import axios from 'axios';
-import { concat, concatMap, from, map, Observable, of, retry, tap, toArray } from 'rxjs';
-import { ChatCompletionAssistantMessageParam, ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionMessageParam, ChatCompletionMessageToolCall, ChatCompletionTool, ChatCompletionToolMessageParam, FileContent } from "openai/resources";
+import { promises as fs } from 'fs';
+import { ChatCompletionAssistantMessageParam, ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionMessageParam, ChatCompletionMessageToolCall, ChatCompletionToolMessageParam } from "openai/resources";
+import { concatMap, from } from 'rxjs';
 
-import { AIProviderClient, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, TokenCount, aiApi, calculateTokenCost, genClientByProvider, getTiktokenEncoder, invalidMimeList, normalizeMessage, providerInstances, providerPrediction } from '../../common/openai-api-wrapper.js';
+import { CountTokensResponse, GenerateContentRequest } from '@google-cloud/vertexai';
+import { aiApi, AIProviderClient, calculateTokenCost, getTiktokenEncoder, invalidMimeList, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, normalizeMessage, providerInstances, providerPrediction, TokenCount } from '../../common/openai-api-wrapper.js';
+import { ds } from '../db.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
-import { ds } from '../db.js';
-import { Content, CountTokensResponse, GenerateContentRequest, HarmBlockThreshold, HarmCategory, SafetyRating, VertexAI } from '@google-cloud/vertexai';
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
 const { GCP_PROJECT_ID, GCP_CONTEXT_CACHE_LOCATION, GCP_API_BASE_PATH } = process.env;
@@ -24,28 +24,26 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
     axios.defaults.proxy = false; // httpsAgentを使ってプロキシするので、axiosの元々のproxyはoffにしておかないと変なことになる。
 } else { }
 
-import { countChars, GenerateContentRequestForCache, mapForGemini, TokenCharCount, CachedContent, MyVertexAiClient } from '../../common/my-vertexai.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
-import { ContentPartType, MessageGroupType, MessageClusterType, PredictHistoryStatus, TeamMemberRoleType, ThreadStatus, ThreadGroupStatus, ContentPartStatus } from '../models/values.js';
-import { FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
 import { EntityManager, In, IsNull, Not } from 'typeorm';
-import { clients } from './chat.js';
-import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
-import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus, ScopeType, UserEntity, UserRoleEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
-import { AIModelEntity, AIModelPricingEntity, AIProviderEntity, AIProviderType, AzureOpenAIConfig, getAIProviderConfig, OpenAIConfig, } from '../entity/ai-model-manager.entity.js';
-import { Utils, EnhancedRequestLimiter } from '../../common/utils.js';
+import { CachedContent, countChars, GenerateContentRequestForCache, mapForGemini, MyVertexAiClient, TokenCharCount } from '../../common/my-vertexai.js';
 import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
-import { functionDefinitions } from '../tool/_index.js';
-import { ToolCallPart, ToolCallPartBody, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallGroupEntity, ToolCallPartInfo, ToolCallPartInfoBody, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
-import { appendToolCallPart } from './tool-call.js';
-import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
-import { CohereClientV2 } from 'cohere-ai/ClientV2.js';
-import Anthropic from '@anthropic-ai/sdk/index.js';
-import { safeWhere } from '../entity/base.js';
+import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
 import { ScopedEntityService } from '../common/scoped-entity-service.js';
+import { AIModelEntity, AIModelPricingEntity, AIProviderEntity, AIProviderType, getAIProviderConfig } from '../entity/ai-model-manager.entity.js';
+import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus, ScopeType, UserEntity, UserStatus } from '../entity/auth.entity.js';
+import { safeWhere } from '../entity/base.js';
+import { FileBodyEntity, FileEntity } from '../entity/file-models.entity.js';
+import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
+import { ToolCallGroupEntity, ToolCallPart, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartEntity, ToolCallPartInfo, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
+import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
+import { ContentPartStatus, ContentPartType, MessageGroupType, TeamMemberRoleType, ThreadGroupStatus, ThreadStatus } from '../models/values.js';
+import { functionDefinitions } from '../tool/_index.js';
+import { clients } from './chat.js';
+import { appendToolCallPart } from './tool-call.js';
 
-export const COUNT_TOKEN_MODEL = 'gemini-1.5-flash' as const;
-export const COUNT_TOKEN_OPENAI_MODEL = 'gpt-4o' as const;
+export const COUNT_TOKEN_MODEL = 'gemini-2.5-flash' as const;
+export const COUNT_TOKEN_OPENAI_MODEL = 'gpt-5' as const;
 
 export const tokenCountRequestLimitation = new EnhancedRequestLimiter(300);
 
@@ -2130,17 +2128,20 @@ export const geminiCreateContextCacheByProjectModel = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const userId = req.info.user.id as string;
+        const orgKey = req.info.user.orgKey;
         const { type, id, model } = req.query as { type: ArgsBuildType, id: string, model: string };
         const { ttl, expire_time } = req.body as GenerateContentRequestForCache;
         try {
             const { messageArgsSetList } = await buildArgs(req.info.user, type, [id], 'createCache');
             // const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
 
+            const user = await ds.getRepository(UserEntity).findOneOrFail({ where: { id: userId, orgKey, status: UserStatus.Active } });
+
             // 課金用にプロジェクト振り分ける。当たらなかったら当たらなかったでよい。
-            const departmentMember = await ds.getRepository(DepartmentMemberEntity).findOne({ where: { orgKey: req.info.user.orgKey, name: req.info.user.name || '', departmentRole: DepartmentRoleType.Member } });
+            const departmentMember = await ds.getRepository(DepartmentMemberEntity).findOne({ where: { orgKey, name: user.name || '', departmentRole: DepartmentRoleType.Member } });
             // console.log(departmentMember);
             if (departmentMember) {
-                const department = await ds.getRepository(DepartmentEntity).findOne({ where: { orgKey: req.info.user.orgKey, id: departmentMember.departmentId } });
+                const department = await ds.getRepository(DepartmentEntity).findOne({ where: { orgKey, id: departmentMember.departmentId } });
                 messageArgsSetList.forEach(messageSet => {
                     (messageSet.args as any).gcpProjectId = department?.gcpProjectId || GCP_PROJECT_ID;
                 });

@@ -1,34 +1,75 @@
-import { body, cookie, header, param, query } from 'express-validator';
-import jwt from 'jsonwebtoken';
-import ms from 'ms';
-import bcrypt from 'bcrypt';
-import { randomBytes, getRandomValues } from 'crypto';
-import nodemailer from 'nodemailer';
-import { Request, Response } from 'express';
-
-import { InviteRequest, UserRequest } from '../models/info.js';
-import { UserEntity, InviteEntity, LoginHistoryEntity, UserRoleType, DepartmentMemberEntity, DepartmentRoleType, DepartmentEntity, UserStatus, SessionEntity, OAuthAccountEntity, OAuthAccountStatus, OrganizationEntity, ApiProviderEntity, ApiProviderTemplateEntity, ApiProviderAuthType, UserRoleEntity, UserRole, ScopeType, DivisionEntity } from '../entity/auth.entity.js';
-import { InviteTokenPayload, ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_EXPIRES_IN, REFRESH_TOKEN_JWT_SECRET, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN, RefreshTokenPayload, UserTokenPayload, API_TOKEN_EXPIRES_IN, API_TOKEN_JWT_SECRET, UserTokenPayloadWithRole } from '../middleware/authenticate.js';
-import { validationErrorHandler } from '../middleware/validation.js';
-import { EntityManager, In, MoreThan, Not } from 'typeorm';
-import { ds } from '../db.js';
-
-import { ProjectEntity, TeamEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
-import { ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamStatus, TeamType } from '../models/values.js';
-import { Utils } from '../../common/utils.js';
 import { AxiosInstance } from 'axios';
+import bcrypt from 'bcrypt';
+import { createHmac, randomBytes, randomInt, randomUUID } from 'crypto';
+import { Request, Response } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { body, param, query } from 'express-validator';
+import jwt, { Algorithm } from 'jsonwebtoken';
+import ms from 'ms';
+import nodemailer from 'nodemailer';
+import { EntityManager, In, MoreThan } from 'typeorm';
 
-const { SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_FLOW_STATE_JWT_SECRET, OAUTH2_FLOW_STATE_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH, } = process.env as Record<string, string>;
+import { Utils } from '../../common/utils.js';
+import { ds } from '../db.js';
+import { ApiProviderAuthType, ApiProviderEntity, DivisionEntity, InviteEntity, LoginHistoryEntity, OAuthAccountEntity, OAuthAccountStatus, OAuthStateEntity, OnetimeStatus, OrganizationEntity, ScopeType, SessionEntity, SessionRefreshEntity, SessionStatus, UserEntity, UserRole, UserRoleEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
+import { ProjectEntity, TeamEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
+import { InviteTokenPayload, UserTokenPayload, UserTokenPayloadWithRole } from '../middleware/authenticate.js';
+import { validationErrorHandler } from '../middleware/validation.js';
+import { InviteRequest, UserRequest } from '../models/info.js';
+import { ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamStatus, TeamType } from '../models/values.js';
+
+const { API_KEY_PEPPER, SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH, JWT_ISS, JWT_AUD, } = process.env as Record<string, string>;
+export const { ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_EXPIRES_IN, API_TOKEN_EXPIRES_IN, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN, API_TOKEN_FOR_CONSOLE_EXPIRES_IN }
+    = process.env as {
+        ACCESS_TOKEN_JWT_SECRET: string, ACCESS_TOKEN_EXPIRES_IN: ms.StringValue,
+        REFRESH_TOKEN_EXPIRES_IN: ms.StringValue,
+        API_TOKEN_EXPIRES_IN: ms.StringValue,
+        ONETIME_TOKEN_JWT_SECRET: string, ONETIME_TOKEN_EXPIRES_IN: ms.StringValue,
+        API_TOKEN_FOR_CONSOLE_EXPIRES_IN: ms.StringValue,
+    };
 Utils.requiredEnvVarsCheck({
-    SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN, OAUTH2_FLOW_STATE_JWT_SECRET, OAUTH2_FLOW_STATE_EXPIRES_IN, OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH,
+    ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_EXPIRES_IN, API_TOKEN_EXPIRES_IN, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN,
+    API_TOKEN_FOR_CONSOLE_EXPIRES_IN,
+    API_KEY_PEPPER, SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN,
+    OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH,
+    JWT_ISS, JWT_AUD,
 });
+export const JWT_STAT_PARAM = { algorithm: 'HS256' as Algorithm, issuer: JWT_ISS, audience: JWT_AUD };
 
 // httpsの証明書検証スキップ用のエージェント。社内だから検証しなくていい。
 // import https from 'https';
-import { getAccessToken } from '../api/api-proxy.js';
-import { decrypt, encrypt } from './tool-call.js';
 import { getAxios } from '../../common/http-client.js';
+import { getAccessToken } from '../api/api-proxy.js';
 import { safeWhere } from '../entity/base.js';
+import { genTokenSet, verifyRefresh } from './auth/token.js';
+import { decrypt, encrypt } from './tool-call.js';
+
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15分
+    max: 5, // 最大5回の試行
+    message: '試行回数が上限に達しました。しばらくしてからお試しください。',
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+export const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,       // RateLimit-* ヘッダ付与
+    legacyHeaders: false,
+    message: { message: '試行回数が多すぎます。しばらくしてからお試しください。' },
+    statusCode: 429,
+    keyGenerator: (req, _res) => {
+        const { orgKey, email } = req.body;
+        const ip0 = ipKeyGenerator(req.ip || '');
+        // 同一ユーザー＋同一IPでまとめて制限
+        const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
+        console.log(req.headers['x-forwarded-for']);
+        console.log(req.ip);
+        console.log(ip0);
+        return `${orgKey}:${email}:${ip}`;
+    },
+    skipFailedRequests: false,   // 失敗/成功を区別せずカウント（パスワード変更は両方カウントが無難）
+});
 
 export type OAuth2TokenDto = { access_token: string, token_type: string, expires_in: number, scope: string, refresh_token: string, id_token: string, };
 
@@ -39,6 +80,7 @@ export type OAuth2TokenDto = { access_token: string, token_type: string, expires
  * @returns 
  */
 export const userLogin = [
+    authLimiter, // 追加
     param('orgKey').trim().notEmpty(),
     body('email').trim().notEmpty(),  // .withMessage('メールアドレスを入力してください。'),
     body('password').trim().notEmpty(),  // .withMessage('パスワードを入力してください。'),
@@ -52,7 +94,8 @@ export const userLogin = [
             const user = userAndRoleList.user;
             // console.log(`userLogin-222 ${orgKey} ${req.body.email} ${user?.id} ${user?.name} ${user?.email} ${user?.status} ${user?.authGeneration} ${bcrypt.compareSync(req.body.password, user?.passwordHash || '')} ${userAndRoleList.roleList.length}`);
             if (user == null || !bcrypt.compareSync(req.body.password, user.passwordHash || '') || userAndRoleList.roleList.length === 0) {
-                console.error(`認証に失敗しました。${req.body.email} ${user?.id} ${user?.name} ${user?.email} ${user?.status} ${user?.authGeneration} ${user?.passwordHash}`);
+                // console.error(`認証に失敗しました。${req.body.email} ${user?.id} ${user?.name} ${user?.email} ${user?.status} ${user?.authGeneration} ${user?.passwordHash}`);
+                console.error(`認証に失敗しました。ユーザー: ${req.body.email}`);
                 res.status(401).json({ message: '認証に失敗しました。' });
                 return;
             } else {
@@ -72,7 +115,7 @@ async function authAfter(user: UserEntity, roleList: UserRole[], manager: Entity
         deviceInfo = Utils.jsonOrder(req.useragent, ['browser', 'version', 'os', 'platform', 'isDesktop', 'isMobile', 'isTablet']);
     } else { }
 
-    const xRealIp = req.headers['x-real-ip'] as string || req.ip || '';
+    const xRealIp = req.ip || '';
 
     const loginHistory = new LoginHistoryEntity();
     loginHistory.userId = user.id; // ユーザー認証後に設定
@@ -82,20 +125,19 @@ async function authAfter(user: UserEntity, roleList: UserRole[], manager: Entity
     loginHistory.orgKey = user.orgKey;
     loginHistory.createdBy = user.id;
     loginHistory.updatedBy = user.id;
-    loginHistory.createdIp = xRealIp
-    loginHistory.updatedIp = xRealIp
+    loginHistory.createdIp = xRealIp;
+    loginHistory.updatedIp = xRealIp;
     manager.getRepository(LoginHistoryEntity).save(loginHistory); // ログイン履歴登録の成否は見ずにレスポンスを返す
 
     const session = new SessionEntity();
     session.userId = user.id; // ユーザー認証後に設定
-    session.ipAddress = xRealIp
-    session.deviceInfo = JSON.stringify(deviceInfo);
+    session.deviceInfo = deviceInfo;
     session.provider = provider;
-    session.authInfo = JSON.stringify(authInfoObj);
+    session.authInfo = authInfoObj;
 
     // セッション有効期限を設定
-    const expirationTime = Utils.parseTimeStringToMilliseconds(REFRESH_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
-    session.expiresAt = new Date(Date.now() + expirationTime);
+    const expirationMs = Utils.parseTimeStringToMilliseconds(REFRESH_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
+    session.expiresAt = new Date(Date.now() + expirationMs);
     session.lastActiveAt = new Date();
     session.orgKey = user.orgKey;
     session.createdBy = user.id;
@@ -104,30 +146,105 @@ async function authAfter(user: UserEntity, roleList: UserRole[], manager: Entity
     session.updatedIp = xRealIp;
     const savedSession = await manager.getRepository(SessionEntity).save(session);
 
-    // JWTの生成
-    const userToken: UserTokenPayload = { type: 'user', id: user.id, name: user.name, authGeneration: user.authGeneration || 0, email: user.email, orgKey: user.orgKey };
-    const accessToken = jwt.sign(userToken, ACCESS_TOKEN_JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN as ms.StringValue });
+
+
+    const { jti, verifier, salt, hash } = await genTokenSet();
+
+    const row = new SessionRefreshEntity();
+    row.sid = savedSession.id;
+    row.userId = user.id;
+    row.authGeneration = user.authGeneration;
+    row.jti = jti;
+    row.hash = hash;
+    row.salt = salt;
+    row.current = true;
+    row.revoked = false;
+    row.expiresAt = session.expiresAt;
+    row.deviceInfo = deviceInfo;
+
+    row.orgKey = user.orgKey;
+    row.createdBy = user.id;
+    row.updatedBy = user.id;
+    row.createdIp = xRealIp;
+    row.updatedIp = xRealIp;
+
+    const saved = await ds.getRepository(SessionRefreshEntity).save(row);
+
+    const userTokenPayload: UserTokenPayload = { type: 'user', id: user.id, orgKey: user.orgKey, authGeneration: user.authGeneration ?? 0, sid: row.sid, jti: jti };
+
+    // アクセストークン（短寿命）に orgKey と sid を入れる
+    const accessToken = jwt.sign(userTokenPayload,
+        ACCESS_TOKEN_JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN, ...JWT_STAT_PARAM }
+    );
+
+    // クライアントへ渡す不透明トークン（split形式）
+    const refreshToken = `${jti}.${verifier}`;
+
     // クッキーをセット
     res.cookie('access_token', accessToken, {
         maxAge: Utils.parseTimeStringToMilliseconds(ACCESS_TOKEN_EXPIRES_IN), // ミリ秒単位で指定
         httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
         secure: true, // HTTPSでのみ送信されるようにする
-        sameSite: true, // CSRF保護のためのオプション
+        sameSite: 'strict', // CSRF保護のためのオプション
     });
-    const refreshTokenBody: RefreshTokenPayload = { type: 'refresh', sessionId: savedSession.id, userId: user.id, name: user.name, lastActiveAt: session.lastActiveAt, authGeneration: user.authGeneration || 0, email: user.email, orgKey: user.orgKey };
-    const refreshToken = jwt.sign(refreshTokenBody, REFRESH_TOKEN_JWT_SECRET, { expiresIn: REFRESH_TOKEN_EXPIRES_IN as ms.StringValue });
+
+    // Cookieにセット（Pathをリフレッシュ専用にすると攻撃面が狭まる）
+    const baseHref = req.originalUrl.substring(0, req.originalUrl.length - req.url.length);
     res.cookie('refresh_token', refreshToken, {
-        maxAge: expirationTime, // 14日間。クッキーの有効期限をミリ秒で指定
-        httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
-        secure: true, // HTTPSでのみ送信されるようにする
-        sameSite: true, // CSRF保護のためのオプション
+        path: `${baseHref}/auth/refresh`, // トークンリフレッシュのタイミングのみ使う。
+        maxAge: expirationMs,
+        httpOnly: true,
+        secure: true,
+        sameSite: 'strict',
     });
-    // res.redirect(e.pathTop);
-    return { accessToken, refreshToken: savedSession.id }
+    return { accessToken, refreshToken };
 }
 
+// base64url
+// src/services/apiKey.service.ts
 
-const genApiTokenCore = async (user: UserTokenPayloadWithRole, label: string, deviceInfo: any, xRealIp: string, manager: EntityManager): Promise<OAuthAccountEntity | null> => {
+export function digestSecret(secret: string, pepper = API_KEY_PEPPER!) {
+    if (!pepper) throw new Error("API_KEY_PEPPER is not set");
+    return createHmac("sha256", pepper).update(secret, "utf8").digest();
+}
+
+export async function verifyApiKey(xRealIp: string, manager: EntityManager, raw: string): Promise<UserTokenPayload | null> {
+    // 形式: sk_(live|test)_{jti}_{secret}
+    const parts = raw.split("_");
+    if (!parts || parts.length < 3) return null;
+    const [prefix, orgKey, jti, ...rest] = [parts.slice(0, 3).join('_'), parts[3], parts[4], parts.slice(5).join('_')];
+    if (!/^sk_(live|test)_org$/.test(prefix)) return null;
+
+    const secret = rest as unknown as string; // join済
+    // console.log(`verifyApiKey ${prefix} ${orgKey} ${jti} ${secret}`);
+
+    // const key = await manager.getRepository(ApiKeyEntity).findOne({ where: { orgKey, keyId, } });
+    // if (!key || key.status !== SessionStatus.Active) return null;
+    // if (key.expiresAt && key.expiresAt < new Date()) return null;
+    const rec = await manager.getRepository(SessionRefreshEntity).findOneOrFail({ where: { orgKey, jti, } });
+    if (!(rec.current && !rec.revoked)) return null;
+    if (rec.expiresAt && rec.expiresAt < new Date()) return null;
+
+    const ok = await verifyRefresh(secret, rec.salt, rec.hash);
+    if (!ok) return null;
+
+    const user = await manager.getRepository(UserEntity).findOneOrFail({
+        select: { authGeneration: true },
+        where: { orgKey, id: rec.userId },
+    });
+
+    const userTokenPayload: UserTokenPayload = {
+        orgKey: orgKey,
+        type: 'user',
+        id: rec.userId,
+        authGeneration: user.authGeneration,
+        sid: rec.sid,
+        jti: Buffer.from(rec.jti).toString('base64url'),
+    };
+    return userTokenPayload;
+}
+
+const genApiTokenCore = async (user: UserTokenPayloadWithRole, label: string, deviceInfo: any, xRealIp: string, manager: EntityManager, expirationTime: number): Promise<{ entity: OAuthAccountEntity, apiKey: string } | null> => {
     const loginHistory = new LoginHistoryEntity();
     loginHistory.userId = user.id; // ユーザー認証後に設定
     loginHistory.ipAddress = xRealIp;
@@ -142,13 +259,10 @@ const genApiTokenCore = async (user: UserTokenPayloadWithRole, label: string, de
 
     const session = new SessionEntity();
     session.userId = user.id; // ユーザー認証後に設定
-    session.ipAddress = xRealIp;
-    session.deviceInfo = JSON.stringify(deviceInfo);
+    session.deviceInfo = deviceInfo;
     session.provider = 'session';
-    session.authInfo = JSON.stringify({});
+    session.authInfo = {};
 
-    // セッション有効期限を設定
-    const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
     session.expiresAt = new Date(Date.now() + expirationTime);
     session.lastActiveAt = new Date();
     session.orgKey = user.orgKey;
@@ -166,42 +280,66 @@ const genApiTokenCore = async (user: UserTokenPayloadWithRole, label: string, de
         throw new Error('ユーザー情報が取得できません。');
     } else { }
 
-    // JWTの生成
-    const apiTokenBody: RefreshTokenPayload = {
-        type: 'api', sessionId: savedSession.id, userId: user.id, name: user.name, lastActiveAt: session.lastActiveAt, authGeneration: userFromDb.user.authGeneration || 0, email: user.email, orgKey: user.orgKey
-    };
-    // console.log(`genApiToken: ${JSON.stringify(apiTokenBody)}`);
-    const apiToken = jwt.sign(apiTokenBody, API_TOKEN_JWT_SECRET, { expiresIn: API_TOKEN_EXPIRES_IN as ms.StringValue });
+    const prefix = 'sk_live';
+
+    const { jti, verifier, salt, hash } = await genTokenSet();
+    const apiKeyFull = `${prefix}_org_${user.orgKey}_${jti}_${verifier}`;
 
     const exists = await manager.getRepository(OAuthAccountEntity).findOneBy({ orgKey: user.orgKey, userId: user.id, provider: `local-${label}` });
     if (exists && exists.status === OAuthAccountStatus.ACTIVE) {
         return null;
     } else { }
 
+    const row = new SessionRefreshEntity();
+    row.sid = savedSession.id;
+    row.userId = user.id;
+    row.authGeneration = user.authGeneration;
+    row.jti = jti;
+    row.hash = hash;
+    row.salt = salt;
+    row.current = true;
+    row.revoked = false;
+    row.expiresAt = session.expiresAt;
+    row.deviceInfo = deviceInfo;
+
+    row.orgKey = user.orgKey;
+    row.createdBy = user.id;
+    row.updatedBy = user.id;
+    row.createdIp = xRealIp;
+    row.updatedIp = xRealIp;
+
+    const saved = await ds.getRepository(SessionRefreshEntity).save(row);
+
     const apiTokenEntity = exists || new OAuthAccountEntity();
-    apiTokenEntity.userId = user.id;
+    if (exists) {
+    } else {
+        apiTokenEntity.userId = user.id;
+        apiTokenEntity.providerUserId = user.id;
+        apiTokenEntity.providerEmail = userFromDb.user.email;
+        apiTokenEntity.userInfo = user;
+        apiTokenEntity.orgKey = user.orgKey;
+        apiTokenEntity.createdBy = user.id;
+        apiTokenEntity.createdIp = xRealIp;
+    }
     apiTokenEntity.provider = `local-${label}`;
-    apiTokenEntity.providerUserId = user.id;
-    apiTokenEntity.providerEmail = user.email;
     apiTokenEntity.label = label;
-    apiTokenEntity.accessToken = apiToken;
-    apiTokenEntity.refreshToken = '';
+    apiTokenEntity.accessToken = '-';
+    apiTokenEntity.refreshToken = undefined;
+    apiTokenEntity.idToken = undefined;
     apiTokenEntity.tokenExpiresAt = session.expiresAt;
-    apiTokenEntity.tokenBody = '{}';
-    apiTokenEntity.userInfo = '{}';
+    apiTokenEntity.tokenBody = { hash, };
     apiTokenEntity.status = OAuthAccountStatus.ACTIVE;
-    apiTokenEntity.orgKey = user.orgKey;
-    apiTokenEntity.createdBy = user.id;
     apiTokenEntity.updatedBy = user.id;
-    apiTokenEntity.createdIp = xRealIp;
     apiTokenEntity.updatedIp = xRealIp;
-    return await manager.getRepository(OAuthAccountEntity).save(apiTokenEntity);
+
+    await manager.getRepository(OAuthAccountEntity).save(apiTokenEntity);
+    return { entity: apiTokenEntity, apiKey: apiKeyFull };
 }
 
 /**
  * [user認証] APIトークン発行
  */
-export const genApiToken = [
+export const genApiKey = [
     body('label').trim().notEmpty(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
@@ -213,15 +351,17 @@ export const genApiToken = [
             deviceInfo = Utils.jsonOrder(req.useragent, ['browser', 'version', 'os', 'platform', 'isDesktop', 'isMobile', 'isTablet']);
         } else { }
 
-        const xRealIp = req.headers['x-real-ip'] as string || req.ip || '';
+        const xRealIp = req.ip || '';
 
+        const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
         await ds.transaction(async (manager) => {
-            const apiTokenEntity = await genApiTokenCore(user, label, deviceInfo, xRealIp, manager);
-            if (!apiTokenEntity) {
+            // セッション有効期限を設定
+            const apiKeyObj = await genApiTokenCore(user, label, deviceInfo, xRealIp, manager, expirationTime);
+            if (!apiKeyObj) {
                 res.status(400).json({ error: 'APIトークンは既に存在します。' });
                 return;
             } else { }
-            res.json({ apiToken: apiTokenEntity.accessToken });
+            res.json({ apiKey: apiKeyObj.apiKey });
         });
     }
 ];
@@ -305,7 +445,7 @@ export async function getOAuthClient(orgKey: string, provider: string, uriBase: 
                         }
 
                         // 新しいトークンでヘッダーを更新
-                        originalRequest.headers.Authorization = `Bearer ${newTokens.accessToken}`;
+                        originalRequest.headers.Authorization = `Bearer ${decrypt(newTokens.accessToken)}`;
 
                         // 元のリクエストを再試行
                         return axiosInstance(originalRequest);
@@ -324,6 +464,24 @@ export async function getOAuthClient(orgKey: string, provider: string, uriBase: 
     });
 }
 
+export const verifyAccessToken = async (token: string): Promise<UserTokenPayloadWithRole> => {
+    try {
+        const payload = await verifyJwt<UserTokenPayload>(token, ACCESS_TOKEN_JWT_SECRET, 'user');
+        const roleList = (await ds.getRepository(UserRoleEntity).find({
+            where: {
+                orgKey: payload.orgKey,
+                userId: payload.id,
+                status: UserStatus.Active,
+            }
+        })).map(role => {
+            return ({ role: role.role, scopeInfo: role.scopeInfo } as UserRole);
+        });
+        return { ...payload, roleList };
+    } catch (error) {
+        throw new Error('Invalid access token');
+    }
+};
+
 export const userLoginOAuth2 = [
     param('orgKey').trim().notEmpty(),
     param('provider').trim().notEmpty(),
@@ -331,6 +489,31 @@ export const userLoginOAuth2 = [
     async (req: Request, res: Response) => {
         // OAuth2認可エンドポイントにリダイレクト
         const { orgKey, provider } = req.params as { orgKey: string, provider: string };
+
+        let payload: UserTokenPayloadWithRole | null = null;
+        if (req.cookies.access_token) {
+            // クッキーが存在する場合の処理
+            try {
+                payload = await verifyAccessToken(req.cookies.access_token);
+            } catch (e) {
+                // アクセストークンの検証に失敗した場合の処理
+            }
+        } else {
+            // アクセストークンが存在しない場合の処理
+        }
+
+        let userId: string | null = null;
+        if (payload) {
+            if (payload.orgKey !== orgKey) {
+                throw new Error('OrgKey mismatch');
+            } else {
+                // アクセストークンが有効な場合の処理
+                userId = payload.id;
+            }
+        } else {
+            userId = null;
+        }
+
         // console.log(`OAuth2 login request: ${provider} ${JSON.stringify(req.query)}`);
         const e = {} as ExtApiClient;
         try {
@@ -345,155 +528,53 @@ export const userLoginOAuth2 = [
             return;
         }
         // パスによってリダイレクトURIを振り分ける
-        const redirectUri = `${e.redirectUri}`;
-
-        const stateSeed = Utils.generateUUID();
-        // stateにリダイレクト先URL等の任意情報を埋め込む用の JWT の生成
-        const statePack: OAuth2State = { orgKey, type: 'oauth-state', stateSeed, provider, redirectUri, query: req.query };
-        const state = jwt.sign(statePack, OAUTH2_FLOW_STATE_JWT_SECRET as string, { expiresIn: OAUTH2_FLOW_STATE_EXPIRES_IN as ms.StringValue });
-        // console.log(e);
-        const authURL = `${e.uriBaseAuth || e.uriBase}${e.oAuth2Config.pathAuthorize}?client_id=${e.oAuth2Config.clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${e.oAuth2Config.scope}&state=${state}`;
-
-        // ログイン済みの場合、ログイン済みの情報とOAuth2の認証を紐づけるためのJWTの生成
-        const pack: OAuth2FlowState = { orgKey, type: 'oauth-flow', state, provider, redirectUri, accessToken: req.cookies?.access_token, refreshToken: req.cookies?.refresh_token };
-        const oauth2FlowState = jwt.sign(pack, OAUTH2_FLOW_STATE_JWT_SECRET as string, { expiresIn: OAUTH2_FLOW_STATE_EXPIRES_IN as ms.StringValue });
-        // ID紐づけ用のCookieをセット
-        // res.cookie(`oauth_onetime_${provider}`, oauth2FlowState, {
-        res.cookie(`oauth_onetime`, oauth2FlowState, {
-            maxAge: Utils.parseTimeStringToMilliseconds(OAUTH2_FLOW_STATE_EXPIRES_IN as string), // クッキーの有効期限をミリ秒で指定
-            httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
-            secure: true, // HTTPSでのみ送信されるようにする
-            sameSite: 'lax', // CSRF保護のためのオプションだがOAuth2の場合はfalseにしないとリダイレクトのときにCookieが送信されないのでfalseにする。httpOnlyでsecure指定なので問題なしとする。
+        const redirectUri = e.redirectUri;
+        const xRealIp = req.ip;
+        let state = randomUUID();
+        const maxAge = 5 * 60 * 1000; // 5分
+        await ds.transaction(async tm => {
+            const repo = tm.getRepository(OAuthStateEntity);
+            const existing = await repo.findOneBy({ orgKey, state });
+            if (existing) {
+                // 一応1回はチェックするが、まず衝突しないのでループにはしない
+                state = randomUUID();
+                const existing = await repo.findOneBy({ orgKey, state });
+                if (existing) {
+                    throw new Error('OAuth state already exists');
+                } else { }
+            } else { }
+            const saved = await repo.save({
+                orgKey, state, userId, meta: {
+                    orgKey,
+                    userId,
+                    provider,
+                    redirectUri,
+                    query: req.query
+                },
+                provider,
+                expiresAt: new Date(Date.now() + maxAge),
+                status: OnetimeStatus.Unused,
+                createdBy: userId || xRealIp,
+                createdIp: xRealIp,
+                updatedBy: userId || xRealIp,
+                updatedIp: xRealIp,
+            });
         });
+
+        const pathAuthorize = `${e.oAuth2Config.pathAuthorize.startsWith('https://') ? '' : (e.uriBaseAuth || e.uriBase)}${e.oAuth2Config.pathAuthorize}`;
+        const authURL = `${pathAuthorize}?client_id=${e.oAuth2Config.clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${e.oAuth2Config.scope}&state=${state}&access_type=offline&prompt=consent`;
         res.redirect(authURL);
     }
 ];
 
-// stateとしてOAuth2のサーバーに渡るので秘密情報は入れない。
-type OAuth2State = {
-    orgKey: string,
-    type: 'oauth-state',
-    stateSeed: string,
-    provider: string,
-    redirectUri: string,
-    query: Record<string, any>, // 任意パラメータを埋め込めるが、実際はfromUrlくらいしか使わない
-};
-
-// Cookieとして保持するので秘密情報入ってもまぁ良しとする。
-type OAuth2FlowState = {
-    orgKey: string,
-    type: 'oauth-flow',
-    provider: string,
-    redirectUri: string,
-    accessToken?: string,
-    refreshToken?: string,
-    state: string,
-};
-
 // トークン検証用ヘルパー関数（Promise化でスッキリさせることも可能）
 export function verifyJwt<T>(token: string, secret: string, tokenType?: string): Promise<T> {
     return new Promise((resolve, reject) => {
-        jwt.verify(token, secret, (err: any, decoded: any) => {
+        jwt.verify(token, secret, JWT_STAT_PARAM, (err: any, decoded: any) => {
             if (err) return reject(err);
             resolve(decoded);
         });
     });
-}
-
-/**
- * oauth2FlowStateの検証をして結果が三通りに分岐するハンドラー
- *  - oauth2FlowStateの検証エラーであれば例外を投げる。
- *  - oauth2FlowStateの検証がOKで、かつログイン済みであればユーザーエンティティを返す。
- *  - oauth2FlowStateの検証がOKで、かつ未ログインであればnullを返す。
- * 
- * @param req 
- * @param res 
- * @returns 
- */
-async function handleOAuthCallback(oAuth2State: OAuth2State, tm: EntityManager, req: Request, res: Response, xRealIp: string): Promise<UserEntity | null> {
-    // oauth2FlowState の検証
-    // let oAuth2FlowStateToken: string = req.cookies[`oauth_onetime_${req.params.provider}`];
-    let oAuth2FlowStateToken: string = req.cookies[`oauth_onetime`];
-    let oAuth2FlowState: OAuth2FlowState;
-
-    // res.cookie(`oauth_onetime_${req.params.provider}`, '', { maxAge: 0 }); // 一度使ったら消す
-    res.cookie(`oauth_onetime`, '', { maxAge: 0 }); // 一度使ったら消す
-
-    try {
-        const decoded = await verifyJwt<OAuth2FlowState>(oAuth2FlowStateToken, OAUTH2_FLOW_STATE_JWT_SECRET);
-        oAuth2FlowState = decoded;
-    } catch (err) {
-        throw new Error(`OAuth2 flow state verification failed. ${err}`);
-    }
-    // console.log(`oAuth2FlowState: ${JSON.stringify(oAuth2FlowState)}`);
-    // console.log(`oAuth2State: ${JSON.stringify(oAuth2State)}`);
-    if (oAuth2State.provider === oAuth2FlowState.provider) {
-    } else {
-        throw new Error(`Invalid OAuth2 flow state. ${oAuth2FlowState.provider}!=${oAuth2State.provider}`);
-    }
-
-    // stateおよびtypeチェック
-    if (oAuth2FlowState.type !== 'oauth-flow' || oAuth2FlowState.state !== req.query.state) {
-        throw new Error(`Invalid OAuth2 flow state. ${oAuth2FlowState.type}!=oauth or ${oAuth2FlowState.state}!=${req.query.state}`);
-    }
-
-    // トークンが存在するかどうかで処理を分岐
-    const hasAccessToken = Boolean(oAuth2FlowState.accessToken);
-    const hasRefreshToken = Boolean(oAuth2FlowState.refreshToken);
-
-    // ユーザー状態オブジェクト（仮）
-    let userId: string | null = null;
-    let isAuthenticated = false;
-
-    if (hasAccessToken) {
-        // アクセストークンの検証
-        try {
-            const userTokenPayload = await verifyJwt<UserTokenPayload>(oAuth2FlowState.accessToken!, ACCESS_TOKEN_JWT_SECRET);
-            if (userTokenPayload.type === 'user' && userTokenPayload.id) {
-                // 有効なユーザーアクセストークン
-                userId = userTokenPayload.id;
-                isAuthenticated = true;
-            } else {
-                // アクセストークンが無効な場合、リフレッシュトークンがあれば再発行を試みる
-                if (hasRefreshToken) {
-                    userId = (await tryRefresh(tm, req, res, xRealIp, 'refresh', oAuth2FlowState.refreshToken!)).userTokenPayload.id;
-                    isAuthenticated = true;
-                } else {
-                    // リフレッシュトークンなし => 認証不可、サインアップ扱い
-                    // ここでサインアップロジックへ飛ぶ
-                }
-            }
-        } catch (err) {
-            // アクセストークンが検証失敗の場合、リフレッシュトークンで再発行を試みる
-            if (hasRefreshToken) {
-                try {
-                    userId = (await tryRefresh(tm, req, res, xRealIp, 'refresh', oAuth2FlowState.refreshToken!)).userTokenPayload.id;
-                    isAuthenticated = true;
-                } catch (err) {
-                    // リフレッシュ失敗 => サインアップフロー
-                }
-            } else {
-                // リフレッシュトークンなし => サインアップフロー
-            }
-        }
-
-    } else {
-        // アクセストークンなしの場合
-        if (hasRefreshToken) {
-            // リフレッシュトークンから再発行を試みる
-            try {
-                userId = (await tryRefresh(tm, req, res, xRealIp, 'refresh', oAuth2FlowState.refreshToken!)).userTokenPayload.id;
-                isAuthenticated = true;
-            } catch (err) {
-                // リフレッシュ失敗 => サインアップフロー
-            }
-        } else {
-            // アクセス、リフレッシュ両方なし => 新規サインアップリクエスト
-            // サインアップロジックへ
-        }
-    }
-    // userIdの有無で認証済みかどうかを判定
-    return userId ? await ds.getRepository(UserEntity).findOneOrFail({ where: { orgKey: oAuth2FlowState.orgKey, id: userId } }) : null;
 }
 
 /**
@@ -503,26 +584,76 @@ async function handleOAuthCallback(oAuth2State: OAuth2State, tm: EntityManager, 
  * @param refreshToken 
  * @returns 
  */
-export async function tryRefreshCore(tm: EntityManager, xRealIp: string, tokenType: 'refresh' | 'api', refreshToken: string, roleType: UserRoleType = UserRoleType.User): Promise<{ userTokenPayload: UserTokenPayloadWithRole, accessToken: String }> {
-    // リフレッシュトークン検証
-    const decodedPayload = await verifyJwt<RefreshTokenPayload>(refreshToken, tokenType === 'refresh' ? REFRESH_TOKEN_JWT_SECRET : API_TOKEN_JWT_SECRET);
-    if (decodedPayload.type !== tokenType) {
-        throw new Error(`Invalid token type: tokenType(${tokenType})!=decoded(${decodedPayload.type})`);
+export async function tryRefreshCore(tm: EntityManager, xRealIp: string, deviceInfo: Record<string, any>, token: string, roleType: UserRoleType = UserRoleType.User):
+    Promise<{ userTokenPayload: UserTokenPayloadWithRole, accessToken: String, refreshToken: String, sid: string }> {
+
+    const repo = tm.getRepository(SessionRefreshEntity);
+
+    if (!token) throw new Error("Refresh token is missing");
+
+    const [jti0, verifier0] = token.split('.'); // 形式チェックのために分割
+    const existing = await repo.findOneOrFail({ where: { jti: jti0 } });
+    if (!existing || existing.revoked || !existing.current || new Date() > existing.expiresAt) {
+        throw new Error("Invalid refresh token");
     } else { }
 
     // 有効なら新しいアクセストークンを発行するなどの処理
-    const session = await tm.findOneOrFail(SessionEntity, { where: { id: decodedPayload.sessionId, userId: decodedPayload.userId } });
+    const session = await tm.findOneOrFail(SessionEntity, { where: { orgKey: existing.orgKey, id: existing.sid, userId: existing.userId } });
+
+    const match = await verifyRefresh(verifier0, existing.salt, existing.hash);
+    existing.current = false;
+    existing.updatedBy = existing.userId;
+    existing.updatedIp = xRealIp; // IPアドレスを記録
+    session.updatedBy = existing.userId;
+    session.updatedIp = xRealIp; // IPアドレスを記録
+    if (!match) {
+        // 再利用検知：このセッションは乗っ取られた可能性
+        existing.revoked = true;
+        await repo.save(existing); // セッションを無効化
+        await repo.update({ orgKey: existing.orgKey, userId: existing.userId, sid: existing.sid, revoked: false }, { current: false, revoked: true, updatedBy: existing.userId, updatedIp: xRealIp });
+
+        session.status = SessionStatus.Revoked;
+        tm.getRepository(SessionEntity).save(session);
+        throw new Error("Token reuse detected");
+    } else { }
+
+    existing.rotatedAt = new Date();
+    await repo.save(existing); // セッションを無効化
+
+    const { jti, verifier, salt, hash } = await genTokenSet();
+
+    const newRow = new SessionRefreshEntity();
+    newRow.sid = existing.sid;
+    newRow.userId = existing.userId;
+    newRow.authGeneration = existing.authGeneration;
+    newRow.jti = jti;      // ★ Buffer(16)
+    newRow.hash = hash;    // ★ Buffer(32)
+    newRow.salt = salt;    // ★ Buffer(16)
+    newRow.current = true;
+    newRow.revoked = false;
+    newRow.expiresAt = existing.expiresAt;
+    newRow.deviceInfo = deviceInfo;
+
+    newRow.orgKey = existing.orgKey;
+    newRow.createdBy = existing.createdBy;
+    newRow.updatedBy = xRealIp;
+    newRow.createdIp = existing.createdIp;
+    newRow.updatedIp = xRealIp;
+
+    await repo.save(newRow);
+
+    // -------------------------------
 
     const where = {
-        orgKey: decodedPayload.orgKey,
-        id: decodedPayload.userId,                     // JWTのユーザーIDと一致すること
-        authGeneration: decodedPayload.authGeneration, // JWTの認証世代と一致すること
+        orgKey: existing.orgKey,
+        id: existing.userId,                     // JWTのユーザーIDと一致すること
+        // authGeneration: existing.authGeneration, // JWTの認証世代と一致すること
         status: UserStatus.Active, // activeユーザーじゃないと使えない
     } as Record<string, any>;
 
     const userRoleWhere = {
-        orgKey: decodedPayload.orgKey,
-        userId: decodedPayload.userId,
+        orgKey: existing.orgKey,
+        userId: existing.userId,
         status: UserStatus.Active, // activeユーザーじゃないと使えない
     };
     // userRoleListの取得
@@ -535,28 +666,22 @@ export async function tryRefreshCore(tm: EntityManager, xRealIp: string, tokenTy
         } as UserRole;
     });
     if (userRoleList.length === 0) {
-        throw new Error(`User role not found: ${decodedPayload.userId}`);
+        throw new Error(`User role not found: ${existing.userId}`);
     } else { }
 
-    // ユーザーの存在確認 ※こんなことやってるからjwtにした意味はなくなってしまうが即時停止をやりたいのでやむなく。
+    // ユーザーの存在確認
     const user = await tm.findOneOrFail(UserEntity, { where });
 
     // roleTypeのチェック
     if (userRoleList.find(userRole => userRole.role === roleType)) {
     } else {
-        throw new Error(`User role not found: ${decodedPayload.userId}`); // 管理者権限がない
+        throw new Error(`User role not found: ${existing.userId}`); // 管理者権限がない
     }
 
-    // 認証OK。リクエストにユーザーIDを付与して次の処理へ
-    // user.dataValuesはそのままだとゴミがたくさん付くので、項目ごとにUserModelにマッピングする。
-    // TODO ここはもっとスマートに書けるはず。マッパーを用意するべきか？
-    const userEntity = new UserEntity();
-    userEntity.orgKey = user.orgKey;
-    userEntity.id = user.id;
-    userEntity.name = user.name;
-    userEntity.email = user.email;
-    userEntity.role = user.role;
-    // (req as UserRequest).info = { user: userEntity, ip: xRealIp, cookie: req.cookies };
+    // authGenerationのチェック
+    if (user.authGeneration !== existing.authGeneration) {
+        throw new Error(`Auth generation mismatch: ${existing.userId}`);
+    } else { }
 
     // 最終更新日だけ更新して更新
     session.lastActiveAt = new Date();
@@ -565,30 +690,23 @@ export async function tryRefreshCore(tm: EntityManager, xRealIp: string, tokenTy
     const savedSession = await tm.save(SessionEntity, session);
 
     // JWTの生成
-    const userTokenPayload: UserTokenPayload = { type: 'user', id: user.id, name: user.name, authGeneration: user.authGeneration || 0, email: user.email, orgKey: user.orgKey };
-    const accessToken = jwt.sign(userTokenPayload, ACCESS_TOKEN_JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN as ms.StringValue });
+    const userTokenPayload: UserTokenPayload =
+    {
+        type: 'user', id: user.id, orgKey: user.orgKey, authGeneration: user.authGeneration ?? 0,
+        sid: existing.sid, jti: existing.jti,
+    };
+
+    // アクセストークン（短寿命）に orgKey と sid を入れる
+    const accessToken = jwt.sign(userTokenPayload,
+        ACCESS_TOKEN_JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN, ...JWT_STAT_PARAM }
+    );
+
+    // クライアントへ渡す不透明トークン（split形式）
+    const newRefreshToken = `${jti}.${verifier}`;
+
     // アクセストークンのペイロードは最小限にするためにroleListはjwtに含めない。jwt作った後で追加する。
     const userTokenPayloadWithRole = { ...userTokenPayload, roleList: userRoleList };
-    return { userTokenPayload: userTokenPayloadWithRole, accessToken };
-}
-
-/**
- *  リフレッシュトークンを使ってアクセストークンを再発行する
- * @param req 
- * @param res 
- * @param refreshToken 
- * @returns 
- */
-export async function tryRefresh(tm: EntityManager, req: Request, res: Response, xRealIp: string, tokenType: 'refresh' | 'api', refreshToken: string, roleType: UserRoleType = UserRoleType.User): Promise<{ userTokenPayload: UserTokenPayload, accessToken: String }> {
-    const coreRes = await tryRefreshCore(tm, xRealIp, tokenType, refreshToken, roleType);
-    // クッキーをセット
-    res.cookie('access_token', coreRes.accessToken, {
-        maxAge: Utils.parseTimeStringToMilliseconds(ACCESS_TOKEN_EXPIRES_IN), // クッキーの有効期限をミリ秒で指定
-        httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
-        secure: true, // HTTPSでのみ送信されるようにする
-        sameSite: false, // CSRF保護のためのオプション
-    });
-    return coreRes;
+    return { userTokenPayload: userTokenPayloadWithRole, accessToken, refreshToken: newRefreshToken, sid: existing.sid };
 }
 
 /**
@@ -606,40 +724,39 @@ export const userLoginOAuth2Callback = [
 
         const { code, state } = req.query as { code: string, state: string };
 
-        let decoded: OAuth2State;
-        try {
-            decoded = await verifyJwt<OAuth2State>(state, OAUTH2_FLOW_STATE_JWT_SECRET);
-        } catch (err) {
-            // throw new Error(`OAuth2 flow state verification failed. ${err}`);
-            res.status(401).json({ error: `OAuth2 flow state verification failed. ${err}` });
-            return;
-        }
-        const oAuth2FlowState = decoded as OAuth2State;
-
-        const e = {} as ExtApiClient;
-        try {
-            Object.assign(e, await getExtApiClient(oAuth2FlowState.orgKey, oAuth2FlowState.provider));
-        } catch (error) {
-            res.status(401).json({ error: `${oAuth2FlowState.provider}は認証されていません。` });
-            return;
-        }
-
-        const orgKey = oAuth2FlowState.orgKey;
-        const provider = oAuth2FlowState.provider;
-
-        const ipAddress = req.headers['x-real-ip'] as string || req.ip || '';
+        const ipAddress = req.ip || '';
         try {
             // awaitをつけておかないと、例外が発生してもcatchされない。
-            await ds.transaction(async (manager) => {
+            await ds.transaction(async manager => {
+
+                // OAuthステートを検証
+                // TODO 本当はorgKeyを入れて検証したいけどどこから取るのか？pathに入れるべきだった？
+                const existing = await manager.getRepository(OAuthStateEntity).findOneBy({ state });
+                if (existing && existing.status === OnetimeStatus.Unused && existing.expiresAt > new Date()) {
+                } else {
+                    res.status(401).json({ error: 'Invalid or expired OAuth state' });
+                    return;
+                }
+
+                // ステータスを「使用済み」に更新
+                existing.status = OnetimeStatus.Used;
+                await manager.save(existing);
+
+                // OAuthクライアントを取得
+                const e = {} as ExtApiClient;
+                try {
+                    Object.assign(e, await getExtApiClient(existing.orgKey, existing.provider));
+                } catch (error) {
+                    res.status(401).json({ error: `${existing.provider}は認証されていません。` });
+                    return;
+                }
+
                 if (!e || !e.oAuth2Config) {
                     res.status(400).json({ error: 'Provider not found' });
                     return;
                 } else { }
 
-                // oAuth2FlowState の検証
-                const authenticatedUser = await handleOAuthCallback(oAuth2FlowState, manager, req, res, ipAddress);
-
-                const postData = { client_id: e.oAuth2Config.clientId, client_secret: e.oAuth2Config.clientSecret, grant_type: 'authorization_code', code: code, redirect_uri: `${e.redirectUri}` };
+                const postData = { client_id: e.oAuth2Config.clientId, client_secret: e.oAuth2Config.clientSecret, grant_type: 'authorization_code', code, redirect_uri: `${e.redirectUri}` };
                 let params = null, body = null;
                 if (e.oAuth2Config.postType === 'params') {
                     params = postData;
@@ -647,83 +764,74 @@ export const userLoginOAuth2Callback = [
                     body = postData;
                 }
 
+                const pathAccessToken = e.oAuth2Config.pathAccessToken.startsWith('https://') ? e.oAuth2Config.pathAccessToken : `${e.uriBase}${e.oAuth2Config.pathAccessToken}`;
+                const pathUserInfo = e.pathUserInfo.startsWith('https://') ? e.pathUserInfo : `${e.uriBase}${e.pathUserInfo}`;
+
                 // アクセストークンを取得するためのリクエスト
                 // const token = await e.axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, body, { params });
                 const axios = await getAxios(e.uriBase);
                 let token = null;
                 if (params) {
-                    token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.oAuth2Config.pathAccessToken}`, {}, { params });
+                    token = await axios.post<OAuth2TokenDto>(pathAccessToken, {}, { params });
                 } else {
-                    // console.dir(body, { depth: null });
-                    // console.log(`--------------------852--`);
-                    // console.log(`curl -X POST -H 'Content-Type: application/json' -d '${JSON.stringify(body)}' ${e.uriBase}${e.pathAccessToken}`);
-                    token = await axios.post<OAuth2TokenDto>(`${e.uriBase}${e.oAuth2Config.pathAccessToken}`, body, { headers: { 'Content-Type': 'application/json' }, });
-                    // proxy: false, httpsAgent: agent 
-                    // console.log(`--------------------840--`);
-                    // console.log(`--------------------853--`);
-                    // // e.userProxy
-                    // const response = await fetch(`${e.uriBase}${e.pathAccessToken}`, {
-                    //     method: 'POST',
-                    //     headers: { 'Content-Type': 'application/json', },
-                    //     body: JSON.stringify(body),
-                    //     agent: agent,
-                    // });
-                    // console.log(`--------------------841--`);
-                    // // console.log(`token------------------`);
-                    // // console.log(response);
-                    // token = { data: await response.json() } as { data: OAuth2TokenDto };
-                    // // token = await e.axios.post<OAuth2TokenDto>(`${e.uriBase}${e.pathAccessToken}`, body, {});
+                    token = await axios.post<OAuth2TokenDto>(pathAccessToken, body, { headers: { 'Content-Type': 'application/json' }, });
                 }
                 const accessToken = token.data.access_token;
-                // console.log(`tokne=${JSON.stringify(token.data)}`)
-                // console.log('AccessToken:', accessToken);
-                // console.log(e.axios);
+                // console.log(`token=${JSON.stringify(token.data)}`);
+
                 // APIを呼び出してみる
-                const userInfo = await axios.get<{ id: string, username?: string, email: string, login?: string }>(`${e.uriBase}${e.pathUserInfo}`, {
+                const userInfo = await axios.get<{ id: string, username?: string, email: string, login?: string }>(pathUserInfo, {
                     headers: { Authorization: `Bearer ${accessToken}` }
                 });
                 const oAuthUserInfo = userInfo.data;
-                // console.log(JSON.stringify(userInfo.data));
+                // console.log(JSON.stringify(oAuthUserInfo));
 
                 // ここはちょっとキモイ。。けど複数を纏めているから仕方ない。。
                 if (e.type === 'box') {
                     // boxはcu認証なのでcuを外してemailに入れる。
-                    userInfo.data.email = userInfo.data.login?.replace('@cu.', '@') || '';
+                    oAuthUserInfo.email = oAuthUserInfo.login?.replace('@cu.', '@') || '';
                 } else if (e.oAuth2Config.requireMailAuth) {
                     // 独自のメール認証をしているプロバイダーはメアドも仮の可能性がある
-                    userInfo.data.email = userInfo.data.email.replaceAll(/@localhost$/g, `@${MAIL_DOMAIN_WHITELIST.split(',')[0]}`) || '';
+                    oAuthUserInfo.email = oAuthUserInfo.email.replaceAll(/@localhost$/g, `@${MAIL_DOMAIN_WHITELIST.split(',')[0]}`) || '';
                 } else { }
 
                 // emailを事実上の鍵として紐づけに行くので、メアドが変なやつじゃないかはちゃんとチェックする。
-                if (MAIL_DOMAIN_WHITELIST.split(',').find(domain => userInfo.data.email.endsWith(`@${domain}`))) {
+                if (MAIL_DOMAIN_WHITELIST.split(',').find(domain => oAuthUserInfo.email.endsWith(`@${domain}`))) {
                 } else {
                     // whiltelist登録されているドメインのアドレス以外は登録禁止。
                     throw new Error(JSON.stringify({
                         error: "Invalid email",
                         message: "whitelist登録されているドメインのアドレス以外は登録禁止です。",
                         details: {
-                            attemptedEmail: userInfo.data.email,
+                            attemptedEmail: oAuthUserInfo.email,
                         }
                     }));
                 }
-                if (authenticatedUser && authenticatedUser.email !== userInfo.data.email) {
-                    // emailが一致するユーザーじゃないと紐づけさせない。
-                    throw new Error(JSON.stringify({
-                        error: "Invalid email",
-                        message: `ログイン中のユーザーと異なるemailを持つアカウントとは紐づけできません。${e.provider}をログアウトしてから再度試してください。`,
-                        details: {
-                            provider: e.provider,
-                            authenticatedUserEmail: authenticatedUser.email,
-                            targetEmail: userInfo.data.email
-                        }
-                    }));
-                } else {
-                    // 未ログイン、もしくは既にログインしているユーザーと同じメールアドレスの場合は何もしない。
-                }
+
+                if (existing.userId) {
+                    const authenticatedUser = await manager.getRepository(UserEntity).findOne({
+                        select: { email: true },
+                        where: { orgKey: existing.orgKey, id: existing.userId }
+                    });
+                    if (authenticatedUser && authenticatedUser.email !== oAuthUserInfo.email) {
+                        // emailが一致するユーザーじゃないと紐づけさせない。
+                        throw new Error(JSON.stringify({
+                            error: "Invalid email",
+                            message: `ログイン中のユーザーと異なるemailを持つアカウントとは紐づけできません。${e.provider}をログアウトしてから再度試してください。`,
+                            details: {
+                                provider: e.provider,
+                                authenticatedUserEmail: authenticatedUser.email,
+                                targetEmail: oAuthUserInfo.email
+                            }
+                        }));
+                    } else {
+                        // 既にログインしているユーザーと同じメールアドレスの場合は何もしない。
+                    }
+                } else { /** 未ログインのばあいは何もしない */ }
+
                 // console.log(oAuthUserInfo.email);
                 // emailを事実上の鍵として紐づけに行く。
-                // let user = await manager.getRepository(UserEntity).findOne({ where: { orgKey, email: oAuthUserInfo.email } });
-                let { user, roleList } = await getUserAndRoleList({ orgKey, email: oAuthUserInfo.email });
+                let { user, roleList } = await getUserAndRoleList({ orgKey: existing.orgKey, email: oAuthUserInfo.email });
                 // console.log('LINK::');
                 // console.log(user);
                 if (user) {
@@ -734,7 +842,7 @@ export const userLoginOAuth2Callback = [
                     user.name = oAuthUserInfo.username || oAuthUserInfo.email.split('@')[0];
                     // jwtの検証で取得した情報をそのまま登録する
                     user.email = oAuthUserInfo.email;
-                    user.orgKey = orgKey;
+                    user.orgKey = existing.orgKey;
                     user.createdBy = ipAddress; // 作成者はIP
                     user.updatedBy = ipAddress; // 更新者はIP
                     user.createdIp = ipAddress;
@@ -745,11 +853,11 @@ export const userLoginOAuth2Callback = [
                     roleList = (await createUserInitial(ipAddress, user, manager)).roleList; // ユーザー初期作成に伴う色々作成
                 }
                 // oAuthの一意キー
-                const oAuthKey = { orgKey, provider, userId: user.id, providerUserId: oAuthUserInfo.id };
+                const oAuthKey = { orgKey: existing.orgKey, provider: existing.provider, userId: user.id, providerUserId: oAuthUserInfo.id };
                 let oAuthAccount = await manager.getRepository(OAuthAccountEntity).findOne({ where: oAuthKey });
                 if (oAuthAccount) {
                     // 既存の場合
-                    oAuthAccount.userInfo = JSON.stringify(userInfo.data);
+                    oAuthAccount.userInfo = oAuthUserInfo;
                     oAuthAccount.status = OAuthAccountStatus.ACTIVE; // 有効にする
                 } else {
                     // 新規の場合
@@ -758,18 +866,24 @@ export const userLoginOAuth2Callback = [
                     oAuthAccount.userId = oAuthKey.userId;
                     oAuthAccount.providerUserId = oAuthKey.providerUserId;
                     oAuthAccount.providerEmail = oAuthUserInfo.email;
-                    oAuthAccount.userInfo = JSON.stringify(userInfo.data);
-                    oAuthAccount.orgKey = orgKey;
+                    oAuthAccount.userInfo = oAuthUserInfo;
+                    oAuthAccount.orgKey = existing.orgKey;
                     oAuthAccount.createdBy = user.id;
                     oAuthAccount.createdIp = ipAddress;
                 }
 
+                // console.dir(token);
+
                 // トークンは暗号化して保存する。
-                token.data.access_token = encrypt(token.data.access_token);
-                token.data.refresh_token = encrypt(token.data.refresh_token);
-                oAuthAccount.accessToken = token.data.access_token;
-                oAuthAccount.refreshToken = token.data.refresh_token;
-                oAuthAccount.tokenBody = JSON.stringify(token.data);
+
+                // アクセストークン
+                oAuthAccount.accessToken = token.data.access_token ? encrypt(token.data.access_token) : token.data.access_token;
+                // リフレッシュトークン
+                oAuthAccount.refreshToken = token.data.refresh_token ? encrypt(token.data.refresh_token) : token.data.refresh_token;
+                // IDトークン
+                oAuthAccount.idToken = token.data.id_token ? encrypt(token.data.id_token) : token.data.id_token;
+
+                oAuthAccount.tokenBody = token.data;
                 // 現在の時刻にexpiresInSeconds（秒）を加算して、有効期限のDateオブジェクトを作成
                 if (token.data.expires_in) {
                     oAuthAccount.tokenExpiresAt = new Date(Date.now() + token.data.expires_in * 1000);
@@ -780,7 +894,7 @@ export const userLoginOAuth2Callback = [
                 if (e.oAuth2Config.requireMailAuth === false) {
                     // 追加メール認証不要
                     // 保存
-                    if (provider.startsWith('mattermost-')) {
+                    if (existing.provider.startsWith('mattermost-')) {
                         // // mattermost の認証トークンは保存しないようにする。
                         // token.data.access_token = `dummy`;
                         // token.data.refresh_token = `dummy`;
@@ -788,23 +902,25 @@ export const userLoginOAuth2Callback = [
                         // oAuthAccount.refreshToken = token.data.refresh_token;
                         // oAuthAccount.tokenBody = JSON.stringify(token.data);
                         // cookie に MMAUTHTOKEN としてセットしておけばトークン使わずに行ける。
+                        // const prefix = req.originalUrl.substring(0, req.originalUrl.length - req.url.length);
+                        // const proxyPath = `${prefix}/${e.provider.split('-')[0]}/${e.name}`;
+                        // console.log(proxyPath);
                         res.cookie('MMAUTHTOKEN', accessToken, {
                             maxAge: Utils.parseTimeStringToMilliseconds(`1y`), // ミリ秒単位で指定
                             httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
                             secure: true, // HTTPSでのみ送信されるようにする
-                            sameSite: true, // CSRF保護のためのオプション
+                            sameSite: 'strict', // CSRF保護のためのオプション
                         });
                     } else {
                     }
                     const savedOAuthAccount = await manager.getRepository(OAuthAccountEntity).save(oAuthAccount);
                     // トークン発行
-                    await authAfter(user, roleList, manager, provider, oAuthKey, req, res);
+                    await authAfter(user, roleList, manager, existing.provider, oAuthKey, req, res);
                     // レスポンス
-                    // res.redirect(`${e.pathTop}${redirectType}`);
                     try {
-                        const decoded = await verifyJwt<OAuth2State>(state, OAUTH2_FLOW_STATE_JWT_SECRET);
-                        console.log(`OAuth2 login success: ${provider} ${oAuthUserInfo.email} ${decoded.query.fromUrl || e.pathTop}`);
-                        res.redirect(`${decoded.query.fromUrl || e.pathTop}`);
+                        // console.log(`OAuth2 login success: ${existing.provider} ${oAuthUserInfo.email} ${existing.meta?.query.fromUrl || e.pathTop}`);
+                        console.log(`OAuth2 login success: provider=${existing.provider}, userId=${user.id}`);
+                        res.redirect(`${existing.meta?.query.fromUrl || e.pathTop}`);
                         // // HTMLをクライアントに送信
                         // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title><meta http-equiv="refresh" content="0; URL=${decoded.query.fromUrl || e.pathTop}"></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
                         return;
@@ -830,10 +946,10 @@ export const userLoginOAuth2Callback = [
                     inviteEntity.email = oAuthUserInfo.email;
                     inviteEntity.onetimeToken = onetimeToken;
                     inviteEntity.type = 'oauth2MailAuth';
-                    inviteEntity.status = 'unused';
-                    inviteEntity.data = JSON.stringify({ name: '', email: oAuthUserInfo.email, pincode, oAuthAccountId: savedOAuthAccount.id, orgKey: user.orgKey, userId: user.id });
-                    inviteEntity.limit = Date.now() + Utils.parseTimeStringToMilliseconds(MAIL_EXPIRES_IN);
-                    inviteEntity.orgKey = orgKey;
+                    inviteEntity.status = OnetimeStatus.Unused;
+                    inviteEntity.data = { name: '', email: oAuthUserInfo.email, pincode, oAuthAccountId: savedOAuthAccount.id, orgKey: existing.orgKey, userId: user.id };
+                    inviteEntity.expiresAt = new Date(Date.now() + Utils.parseTimeStringToMilliseconds(MAIL_EXPIRES_IN));
+                    inviteEntity.orgKey = existing.orgKey;
                     inviteEntity.createdBy = ipAddress;
                     inviteEntity.updatedBy = ipAddress;
                     inviteEntity.createdIp = ipAddress;
@@ -844,7 +960,7 @@ export const userLoginOAuth2Callback = [
                     sendMail(oAuthUserInfo.email, 'メール認証依頼', `認証要求がありました。\n${FRONT_BASE_URL}/#${OAUTH2_PATH_MAIL_AUTH}/${onetimeToken}\n\nお心当たりのない場合は無視してください。`)
                         .then(_ => {
                             // pincodeをcookieにつけておく。（同じブラウザであれば手入力しなくて済むように）
-                            res.cookie('pincode', pincode, { maxAge: Utils.parseTimeStringToMilliseconds(MAIL_EXPIRES_IN), httpOnly: true, secure: true, sameSite: true, });
+                            res.cookie('pincode', pincode, { maxAge: Utils.parseTimeStringToMilliseconds(MAIL_EXPIRES_IN), httpOnly: true, secure: true, sameSite: 'strict', });
                             // トークン発行はせずに追加のメール認証が必要である旨のページに飛ばす
                             res.redirect(`${FRONT_BASE_URL}/#${OAUTH2_PATH_MAIL_MESSAGE}/${pincode}`);
                             // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title><meta http-equiv="refresh" content="0; URL=${FRONT_BASE_URL}/#${OAUTH2_PATH_MAIL_MESSAGE}/${pincode}"></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
@@ -860,8 +976,12 @@ export const userLoginOAuth2Callback = [
             console.error(error);
             // console.error('Error fetching access token or user info:', error.response ? error.response.data : error.message);
             res.cookie('access_token', '', { maxAge: 0, path: '/' });
-            res.cookie('refresh_token', '', { maxAge: 0, path: '/' });
-            res.status(500).send('Error during authentication.\n' + (error as any).message);
+            const baseHref = req.originalUrl.substring(0, req.originalUrl.length - req.url.length);
+            res.cookie('refresh_token', '', {
+                maxAge: 0,
+                path: `${baseHref}/auth/refresh`, // トークンリフレッシュのタイミングのみ使う。
+            });
+            res.status(500).send('Error during authentication.');
         }
     }
 ];
@@ -961,14 +1081,14 @@ export const oAuthEmailAuth = [
                 await ds.transaction(async (manager) => {
                     // 追加メール認証不要
                     const invite = await manager.getRepository(InviteEntity).findOneOrFail({ where: { orgKey: req.info.invite.orgKey, id: req.info.invite.id } });
-                    const { email, pincode, oAuthAccountId, userId } = JSON.parse(invite.data);
+                    const { email, pincode, oAuthAccountId, userId } = invite.data as { email: string, pincode: string, oAuthAccountId: string, orgKey: string, userId: string };
                     if (postedPincode === pincode) {
                         // TODO inviteを閉じるのはこのタイミングが適切なのかは微妙。開いた瞬間閉じる方が良いかも？
                         await manager.getRepository(InviteEntity).findOne({ where: { orgKey: req.info.invite.orgKey, id: req.info.invite.id } }).then((invite: InviteEntity | null) => {
                             if (invite) {
                                 invite.updatedBy = req.info.invite.id;
                                 invite.updatedIp = req.info.ip;
-                                invite.status = 'used';
+                                invite.status = OnetimeStatus.Used;
                                 invite.save();
                             } else {
                                 // エラー。起こりえないケース
@@ -1011,11 +1131,9 @@ export const oAuthEmailAuth = [
     }
 ];
 
-function generateSecureRandomNumber(length: number) {
-    const array = new Uint32Array(1);
-    getRandomValues(array);
-    const randomNumber = array[0] % 1000000;  // 0から999999までの範囲に収める
-    return String(randomNumber).padStart(length, '0');  // 6桁になるようゼロパディング
+function generateSecureRandomNumber(len: number) {
+    const n = randomInt(0, 10 ** len);
+    return String(n).padStart(len, '0');
 }
 
 /**
@@ -1055,7 +1173,7 @@ export const guestLogin = [
 
         //     // JWTの生成
         //     const userToken: UserToken = { type: 'user', id: user.id, authGeneration: user.authGeneration || 0 };
-        //     const token = jwt.sign(userToken, JWT_SECRET, { expiresIn: '20m' as ms.StringValue  });
+        //     const token = jwt.sign(userToken, JWT_SECRET, { expiresIn: '20m' , ...JWT_STAT_PARAM });
         //     res.json({ token, user });
         //     // return { token };
         // });
@@ -1063,41 +1181,40 @@ export const guestLogin = [
 ];
 export const logout = [
     validationErrorHandler,
-    async (req: Request, res: Response) => {
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
         res.cookie('access_token', '', {
             maxAge: 0, // 有効期限を0にすることで即座に削除
             httpOnly: true,
             secure: true,
-            sameSite: true,
+            sameSite: 'strict',
         });
+        const baseHref = req.originalUrl.substring(0, req.originalUrl.length - req.url.length);
         res.cookie('refresh_token', '', {
+            path: `${baseHref}/auth/refresh`, // トークンリフレッシュのタイミングのみ使う。
             maxAge: 0, // 有効期限を0にすることで即座に削除
             httpOnly: true,
             secure: true,
-            sameSite: true,
+            sameSite: 'strict',
         });
-        if (!(req.cookies && req.cookies.refresh_token)) {
-            res.sendStatus(401);
-        } else {
-            // console.log(`token refresh ${req.cookies.refresh_token}`);
-            jwt.verify(req.cookies.refresh_token, REFRESH_TOKEN_JWT_SECRET, (err: any, _token: any) => {
-                const refreshToken = _token as RefreshTokenPayload;
-                if (err) {
-                    res.sendStatus(401);
-                    return;
+
+        await ds.transaction(async (manager) => {
+            const repo = manager.getRepository(SessionRefreshEntity);
+            const row = await repo.findOne({ where: { orgKey: req.info.user.orgKey, userId: req.info.user.id, sid: req.info.user.sid, jti: req.info.user.jti } });
+            if (row) {
+                // 該当セッション全体を失効
+                const sessRepo = manager.getRepository(SessionEntity);
+                const sess = await sessRepo.findOne({ where: { orgKey: row.orgKey, userId: req.info.user.id, id: row.sid } });
+                if (sess) {
+                    sess.expiresAt = new Date();
+                    sess.status = SessionStatus.Expired;
+                    await sessRepo.save(sess);
                 }
-                // console.dir(refreshToken, { depth: null });
-                ds.transaction(async manager => {
-                    const currSession = await manager.getRepository(SessionEntity).findOneOrFail({ where: { orgKey: refreshToken.orgKey, id: refreshToken.sessionId } });
-                    currSession.expiresAt = new Date(); // 即時expire
-                    currSession.updatedBy = refreshToken.userId;
-                    currSession.updatedIp = req.headers['x-real-ip'] as string || '0.0.0.0';
-                    const removed = await manager.getRepository(SessionEntity).save(currSession);
-                    res.sendStatus(204);
-                    return;
-                });
-            })
-        }
+                // 既存の current を全て revoke
+                await repo.update({ orgKey: row.orgKey, userId: req.info.user.id, sid: row.sid, current: true, revoked: false }, { current: false, revoked: true, updatedBy: req.info.user.id, updatedIp: req.ip || '0.0.0.0' });
+            }
+        });
+        return res.sendStatus(204);
     }
 ];
 
@@ -1118,9 +1235,9 @@ export const onetimeLogin = [
             where: {
                 orgKey,
                 onetimeToken: req.body.token as string,
-                status: 'unused',
+                status: OnetimeStatus.Unused,
                 type: req.body.type,
-                limit: MoreThan(Date.now()),
+                expiresAt: MoreThan(new Date()),
             },
         }).then((onetimeModel: InviteEntity | null) => {
             if (onetimeModel == null) {
@@ -1131,10 +1248,9 @@ export const onetimeLogin = [
                     orgKey,
                     type: 'invite',
                     id: onetimeModel.id,
-                    email: onetimeModel.email,
                 };
                 // JWTの生成
-                const jwtToken = jwt.sign(inviteToken, ONETIME_TOKEN_JWT_SECRET, { expiresIn: ONETIME_TOKEN_EXPIRES_IN as ms.StringValue });
+                const jwtToken = jwt.sign(inviteToken, ONETIME_TOKEN_JWT_SECRET, { expiresIn: ONETIME_TOKEN_EXPIRES_IN, ...JWT_STAT_PARAM });
                 res.json({ token: jwtToken });
             }
         });
@@ -1169,14 +1285,14 @@ export const requestForPasswordReset = [
         inviteEntity.email = req.body.email;
         inviteEntity.onetimeToken = onetimeToken;
         inviteEntity.type = 'passwordReset';
-        inviteEntity.status = 'unused';
-        inviteEntity.data = JSON.stringify({ name: req.body.name, email: req.body.email });
-        inviteEntity.limit = Date.now() + Utils.parseTimeStringToMilliseconds(MAIL_EXPIRES_IN);
+        inviteEntity.status = OnetimeStatus.Unused;
+        inviteEntity.data = { name: req.body.name, email: req.body.email };
+        inviteEntity.expiresAt = new Date(Date.now() + Utils.parseTimeStringToMilliseconds(MAIL_EXPIRES_IN));
         inviteEntity.orgKey = orgKey;
-        inviteEntity.createdBy = req.headers['x-real-ip'] as string || '0.0.0.0';
-        inviteEntity.updatedBy = req.headers['x-real-ip'] as string || '0.0.0.0';
-        inviteEntity.createdIp = req.headers['x-real-ip'] as string || '0.0.0.0';
-        inviteEntity.updatedIp = req.headers['x-real-ip'] as string || '0.0.0.0';
+        inviteEntity.createdBy = req.ip || '0.0.0.0';
+        inviteEntity.updatedBy = req.ip || '0.0.0.0';
+        inviteEntity.createdIp = req.ip || '0.0.0.0';
+        inviteEntity.updatedIp = req.ip || '0.0.0.0';
         await inviteEntity.save();
 
         // メール送信
@@ -1216,27 +1332,28 @@ export const passwordReset = [
         await ds.transaction(async manager => {
             // パスワード設定（emailが事実上の鍵）
             // return manager.getRepository(UserEntity).findOne({ where: { orgKey: req.info.invite.orgKey, email: req.info.invite.email } }).then((user: UserEntity | null) => {
+            const inviteEntity = await manager.getRepository(InviteEntity).findOneByOrFail({ id: req.info.invite.id, orgKey: req.info.invite.orgKey, status: OnetimeStatus.Unused });
 
-            const userAndRoleList = await getUserAndRoleList({ orgKey: req.info.invite.orgKey, email: req.info.invite.email }, manager);
+            const userAndRoleList = await getUserAndRoleList({ orgKey: req.info.invite.orgKey, email: inviteEntity.email }, manager);
             let user = userAndRoleList.user;
             if (user) {
                 // 既存ユーザーの場合はパスワードを更新する
                 // パスワードのハッシュ化
-                user.passwordHash = bcrypt.hashSync(req.body.password, 10);
-                user.authGeneration = user.authGeneration || 0 + 1;
+                user.passwordHash = await bcrypt.hash(req.body.password, 10);
+                user.authGeneration = (user.authGeneration || 0) + 1;
             } else {
                 isCreate = true;
                 // 初期名前をメールアドレスにする。エラーにならないように。。
-                req.body.name == req.body.name || req.info.invite.email;
+                req.body.name == req.body.name || inviteEntity.email;
                 // 新規ユーザーの場合は登録する
                 user = new UserEntity();
                 user.name = req.body.name;
                 user.name = user.name || 'dummy name';
-                user.name = req.info.invite.email.split('@')[0]; // メールアドレス前半
+                user.name = inviteEntity.email.split('@')[0]; // メールアドレス前半
                 // jwtの検証で取得した情報をそのまま登録する
-                user.email = req.info.invite.email;
+                user.email = inviteEntity.email;
                 // パスワードのハッシュ化
-                user.passwordHash = bcrypt.hashSync(req.body.password, 10);
+                user.passwordHash = await bcrypt.hash(req.body.password, 10);
                 user.authGeneration = 1;
                 user.orgKey = req.info.invite.orgKey; // orgKeyはinviteから取得する
                 user.createdBy = req.info.invite.id; // 作成者はinvite
@@ -1253,7 +1370,7 @@ export const passwordReset = [
             }
             const invite = await manager.getRepository(InviteEntity).findOne({ where: { orgKey: req.info.invite.orgKey, id: req.info.invite.id } });
             if (invite) {
-                invite.status = 'used';
+                invite.status = OnetimeStatus.Used;
                 invite.updatedIp = req.info.ip;
                 invite.save();
             } else {
@@ -1261,9 +1378,9 @@ export const passwordReset = [
             }
 
             await authAfter(userAndRoleList.user, userAndRoleList.roleList, manager, 'local', { authGeneration: userAndRoleList.user.authGeneration }, req, res);
-
-            const resDto = { id: userAndRoleList.user.id, name: userAndRoleList.user.name, email: userAndRoleList.user.email, roleList: userAndRoleList.roleList };
-            res.json({ message: 'パスワードを設定しました。', resDto });
+            const roleList = userAndRoleList.roleList.map(obj => ({ scopeInfo: obj.scopeInfo, role: obj.role, priority: obj.priority })); // レスポンス用に整形);
+            const resUser = { id: userAndRoleList.user.id, name: userAndRoleList.user.name, email: userAndRoleList.user.email, roleList: roleList };
+            res.json({ message: 'パスワードを設定しました。', user: resUser });
         }).catch((err) => {
             console.error(err);
             res.status(500).json({ message: 'パスワード設定に失敗しました。' });
@@ -1276,9 +1393,66 @@ export const passwordReset = [
  */
 export const getUser = [
     validationErrorHandler,
-    (_req: Request, res: Response) => {
+    async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        res.json({ user: req.info.user });
+        // console.log('req');
+        // console.dir(req.info);
+        // email と name を取得する。
+        try {
+            const user = await ds.getRepository(UserEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, id: req.info.user.id, status: UserStatus.Active } });
+            res.json({ user: { ...req.info.user, email: user.email, name: user.name } });
+        } catch (error) {
+            // console.error(error);
+            res.status(500).json({ message: 'ユーザー情報の取得に失敗しました。' });
+        }
+    }
+];
+
+export const refresh = [
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        try {
+            const req = _req as UserRequest;
+
+            const xRealIp = req.ip || '';
+            let deviceInfo = {};
+            if (req.useragent) {
+                deviceInfo = Utils.jsonOrder(req.useragent, ['browser', 'version', 'os', 'platform', 'isDesktop', 'isMobile', 'isTablet']);
+            } else { }
+
+            const { userTokenPayload, accessToken } = await ds.transaction(async manager => {
+                // リフレッシュトークン検証
+                const coreRes = await tryRefreshCore(manager, xRealIp, deviceInfo, req.cookies.refresh_token, UserRoleType.User);
+                // クッキーをセット
+                res.cookie('access_token', coreRes.accessToken, {
+                    maxAge: Utils.parseTimeStringToMilliseconds(ACCESS_TOKEN_EXPIRES_IN), // ミリ秒単位で指定
+                    httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
+                    secure: true, // HTTPSでのみ送信されるようにする
+                    sameSite: 'strict', // CSRF保護のためのオプション
+                });
+
+                // Cookieにセット（Pathをリフレッシュ専用にすると攻撃面が狭まる）
+                const baseHref = req.originalUrl.substring(0, req.originalUrl.length - req.url.length);
+                res.cookie('refresh_token', coreRes.refreshToken, {
+                    path: `${baseHref}/auth/refresh`, // トークンリフレッシュのタイミングのみ使う。
+                    maxAge: Utils.parseTimeStringToMilliseconds(REFRESH_TOKEN_EXPIRES_IN),
+                    httpOnly: true,
+                    secure: true,
+                    sameSite: 'strict',
+                });
+                return coreRes;
+            });
+
+            // // console.log(`ref:userToken=${JSON.stringify(userTokenPayload, Utils.genJsonSafer())}`);
+            // (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
+            // return { isAuth: true, obj: userTokenPayload };
+            res.json({ message: 'トークンをリフレッシュしました。', user: userTokenPayload, isAuth: true });
+        } catch (err) {
+            // // リフレッシュトークン無し
+            console.log(`リフレッシュトークンの検証に失敗しました。`);
+            console.log(err);
+            res.status(401).json({ message: 'トークンの検証に失敗しました。再度ログインしてください。' });
+        }
     }
 ];
 
@@ -1315,7 +1489,7 @@ export const changePassword = [
     body('password').trim().notEmpty(),
     body('passwordConfirm').trim().notEmpty(),
     validationErrorHandler,
-    (_req: Request, res: Response) => {
+    async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const passwordValidationMessage = passwordValidation(req.body.password, req.body.passwordConfirm);
         if (!passwordValidationMessage.isValid) {
@@ -1326,22 +1500,20 @@ export const changePassword = [
         }
 
         // パスワード設定（emailが鍵のような役割）
-        ds.getRepository(UserEntity).findOne({ where: { orgKey: req.info.user.orgKey, id: req.info.user.id } }).then((user: UserEntity | null) => {
-            if (user == null) {
-                res.status(400).json({ message: 'ユーザーが見つかりませんでした。' });
-                return;
-            } else {
-                // パスワードのハッシュ化
-                user.passwordHash = bcrypt.hashSync(req.body.password, 10);
-                user.authGeneration = user.authGeneration || 0 + 1;
-                user.updatedBy = req.info.user.id;
-                user.updatedIp = req.info.ip;
-                user.save().then(() => {
-                    const resDto = { id: user.id, name: user.name, email: user.email, role: user.role };
-                    res.json({ message: 'パスワードを変更しました。', resDto });
-                });
-            }
-        });
+        const user: UserEntity | null = await ds.getRepository(UserEntity).findOne({ where: { orgKey: req.info.user.orgKey, id: req.info.user.id } });
+        if (user == null) {
+            res.status(400).json({ message: 'ユーザーが見つかりませんでした。' });
+            return;
+        } else {
+            // パスワードのハッシュ化
+            user.passwordHash = await bcrypt.hash(req.body.password, 10);
+            user.authGeneration = (user.authGeneration || 0) + 1;
+            user.updatedBy = req.info.user.id;
+            user.updatedIp = req.info.ip;
+            await user.save();
+            const resDto = { id: user.id, name: user.name, email: user.email, role: user.role };
+            res.json({ message: 'パスワードを変更しました。', resDto });
+        }
     }
 ];
 
@@ -1455,15 +1627,17 @@ export const getUserList = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const organization = await ds.getRepository(OrganizationEntity).findOneByOrFail({ orgKey: req.info.user.orgKey });
-        const userList = await ds.query(`
-            SELECT u.id, name, u.email, u.status, m.label
-            FROM user_entity u
-            LEFT OUTER JOIN (SELECT DISTINCT name, label FROM department_member_entity) m
-            USING (name)
-            WHERE u.org_key = '${organization.orgKey}'
-          `);
-        res.json({ userList });
+        try {
+            const organization = await ds.getRepository(OrganizationEntity).findOneByOrFail({ orgKey: req.info.user.orgKey });
+            const userList = await ds.getRepository(UserEntity).find({
+                select: { id: true, name: true, email: true, status: true },
+                where: { orgKey: req.info.user.orgKey },
+            });
+            res.json({ userList });
+        } catch (e) {
+            console.error(e);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
     }
 ];
 
@@ -1559,7 +1733,7 @@ export const getOAuthAccountList = [
             const oauthAccounts = await ds.getRepository(OAuthAccountEntity).find({
                 where: { orgKey: req.info.user.orgKey, userId: req.info.user.id, status: OAuthAccountStatus.ACTIVE },
                 // accessTokenとかrefreshTokenは流出すると危険なので必ず絞る。
-                select: ['orgKey', 'id', 'userInfo', 'provider', 'label', 'providerUserId', 'providerEmail', 'createdAt', 'updatedAt']
+                select: ['tokenExpiresAt', 'orgKey', 'id', 'userInfo', 'provider', 'label', 'providerUserId', 'providerEmail', 'createdAt', 'updatedAt']
             });
             // console.log(oauthAccounts);
             res.json({ oauthAccounts });
@@ -1598,7 +1772,7 @@ export const getOAuthAccount = [
 ];
 
 /**
- * [user認証] プロジェクト権限チェック（nginx auth用）
+ * [user認証] ClaudeCode Console用プロジェクト権限チェック（nginx auth用）
  */
 export const checkProjectPermission = [
     // header('X-Original-URI').notEmpty(),
@@ -1638,7 +1812,7 @@ export const checkProjectPermission = [
 
             if (teamMember) {
                 const user = req.info.user;
-                const label = projectId;
+                const label = `${projectId}-${user.id}-${generateSecureRandomNumber(6)}`;
                 let deviceInfo = {};
                 if (req.useragent) {
                     deviceInfo = Utils.jsonOrder(req.useragent, ['browser', 'version', 'os', 'platform', 'isDesktop', 'isMobile', 'isTablet']);
@@ -1647,9 +1821,17 @@ export const checkProjectPermission = [
                     let apiTokenEntity: OAuthAccountEntity | null = null;
                     const exists = await manager.getRepository(OAuthAccountEntity).findOneBy({ orgKey: user.orgKey, userId: user.id, provider: `local-${label}` });
                     if (exists && exists.status === OAuthAccountStatus.ACTIVE) {
+                        // 既存のものを消す
                         apiTokenEntity = exists;
+                        exists.status = OAuthAccountStatus.DISCONNECTED;
+                        await manager.getRepository(OAuthAccountEntity).save(exists); // 非同期で更新
                     } else {
-                        apiTokenEntity = await genApiTokenCore(user, label, deviceInfo, req.ip || '', manager);
+                    }
+                    const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_FOR_CONSOLE_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
+                    const ent = await genApiTokenCore(user, label, deviceInfo, req.ip || '', manager, expirationTime);
+                    if (ent) {
+                        apiTokenEntity = ent.entity;
+                    } else {
                     }
                     if (!apiTokenEntity) {
                         res.status(400).json({ error: 'APIトークンは既に存在します。' });
@@ -1662,7 +1844,7 @@ export const checkProjectPermission = [
                         }
                         return chunks;
                     }
-                    splitString(encodeURIComponent(apiTokenEntity.accessToken)).forEach((chunk, index) => {
+                    splitString(encodeURIComponent(decrypt(apiTokenEntity.tokenBody?.apiKey || ''))).forEach((chunk, index) => {
                         res.setHeader(`X-API-Key_${index + 1}`, chunk);
                     });
                     res.status(200).json({ message: 'アクセス許可' });

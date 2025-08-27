@@ -3,18 +3,19 @@
 import 'dotenv/config'; // dotenv を読み込む
 import 'source-map-support/register.js';
 
-import express, { Request, Response, Router } from 'express';
-import cookieParser from 'cookie-parser';
-import useragent from 'express-useragent';
 import bodyParser from 'body-parser';
+import cookieParser from 'cookie-parser';
 import cors from 'cors';
+import express, { Request, Response, Router } from 'express';
+import useragent from 'express-useragent';
+import moment from "moment-timezone";
 import morgan from 'morgan';
-import moment, { Moment } from "moment-timezone";
 
-import { authAdminRouter, authAIIntegrationAdminRouter, authAuditorRouter, authInviteRouter, authMemberManagerRouter, authNoneRouter, authOAuthRouter, authSuperAdminRouter, authSystemIntegrationAdminRouter, authUserRouter } from './routes.js';
 import { createProxyMiddleware } from 'http-proxy-middleware';
-import { getAccessToken, getOAuthApiProxy } from './api/api-proxy.js';
-import { authenticateUserTokenMiddleGenerator, authenticateUserTokenWsMiddleGenerator } from './middleware/authenticate.js';
+import { v4Router } from '../../v4/index.js';
+import { getAccessToken } from './api/api-proxy.js';
+import { authenticateUserTokenWsMiddleGenerator } from './middleware/authenticate.js';
+import { authAdminRouter, authAIIntegrationAdminRouter, authAuditorRouter, authInviteRouter, authMemberManagerRouter, authNoneRouter, authSuperAdminRouter, authSystemIntegrationAdminRouter, authUserRouter } from './routes.js';
 
 const app = express();
 
@@ -24,8 +25,14 @@ app.use(cookieParser());
 // body-parser の設定を変更して、リクエストボディのサイズ制限を拡大する
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 app.use(bodyParser.json({ limit: '50mb' })); // JSONパーサー
-app.set('trust proxy', 1);
-
+app.set('trust proxy', true);
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    next();
+});
 
 // これはデバッグ用
 app.use(cors()); // CORS許可

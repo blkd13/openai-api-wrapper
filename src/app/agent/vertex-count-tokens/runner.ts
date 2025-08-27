@@ -1,27 +1,26 @@
-import { fileURLToPath } from 'url';
-import _ from 'lodash';
-import { promises as fs } from 'fs';
-import * as path from 'path';
-import * as crypto from 'crypto';
-import { detect } from 'jschardet/index.js';
-import { DataSource, In, IsNull, Not } from 'typeorm';
 import { VertexAI } from '@google-cloud/vertexai';
+import * as crypto from 'crypto';
+import { promises as fs } from 'fs';
+import { detect } from 'jschardet/index.js';
+import _ from 'lodash';
+import * as path from 'path';
+import { In, Not } from 'typeorm';
+import { fileURLToPath } from 'url';
 
-import { genClientByProvider, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../../service/entity/project-models.entity.js';
-import { ds } from '../../service/db.js';
-import { ContentPartType } from '../../service/models/values.js';
-import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../../service/controllers/chat-by-project-model.js';
-import { FileBodyEntity } from '../../service/entity/file-models.entity.js';
 import { convertPptxToPdf } from '../../common/media-funcs.js';
+import { genClientByProvider, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
 import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
+import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../../service/controllers/chat-by-project-model.js';
+import { ds } from '../../service/db.js';
+import { FileBodyEntity } from '../../service/entity/file-models.entity.js';
+import { ContentPartEntity } from '../../service/entity/project-models.entity.js';
+import { ContentPartType } from '../../service/models/values.js';
 
-import { ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartResultBody } from '../../service/entity/tool-call.entity.js';
-import { ToolCallPartType } from '../../service/entity/tool-call.entity.js';
-import { getTiktokenEncoder } from '../../common/openai-api-wrapper.js';
 import { MyVertexAiClient } from '../../common/my-vertexai.js';
+import { getTiktokenEncoder } from '../../common/openai-api-wrapper.js';
 import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL } from '../../service/controllers/chat-by-project-model.js';
 import { UserEntity, UserStatus } from '../../service/entity/auth.entity.js';
+import { ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartResultBody, ToolCallPartType } from '../../service/entity/tool-call.entity.js';
 import { UserTokenPayloadWithRole } from '../../service/middleware/authenticate.js';
 
 /**
@@ -29,7 +28,7 @@ import { UserTokenPayloadWithRole } from '../../service/middleware/authenticate.
  */
 async function getAgentUser(): Promise<UserTokenPayloadWithRole> {
     const { AGENT_USER_ID, AGENT_ORG_KEY = 'public' } = process.env;
-    
+
     if (!AGENT_USER_ID) {
         throw new Error('AGENT_USER_ID environment variable is required for agent scripts');
     }
@@ -47,10 +46,12 @@ async function getAgentUser(): Promise<UserTokenPayloadWithRole> {
         type: 'user',
         orgKey: user.orgKey,
         id: user.id,
-        email: user.email,
-        name: user.name || user.email,
+        // email: user.email,
+        // name: user.name || user.email,
         roleList: [], // Agent scripts typically don't need specific roles
-        authGeneration: user.authGeneration || 0
+        authGeneration: user.authGeneration || 0,
+        jti: '', // Not used in this context
+        sid: '', // Not used in this context
     };
 }
 

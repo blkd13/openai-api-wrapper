@@ -47,6 +47,7 @@ export type GPTModels = TiktokenModel
     | 'llama2-70b-4096' | 'meta/llama3-405b-instruct-maas'
     | 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' | 'gemini-1.5-flash-002' | 'gemini-1.5-pro-002' | 'gemini-1.0-pro-001' | 'gemini-1.0-pro-vision-001'
     | 'gemini-1.5-flash' | 'gemini-1.5-pro' | 'gemini-1.0-pro' | 'gemini-1.0-pro-vision'
+    | 'gemini-2.5-flash-lite' | 'gemini-2.5-flash' | 'gemini-2.5-pro' 
     | 'gemini-flash-experimental' | 'gemini-pro-experimental' | 'gemini-2.0-flash-exp' | 'gemini-exp-1206' | 'gemini-2.0-flash-thinking-exp-1219' | 'gemini-2.0-flash-thinking-exp-01-21' | 'gemini-2.0-flash-thinking-exp'
     | 'mixtral-8x7b-32768' | 'open-mistral-7b' | 'mistral-tiny-2312' | 'mistral-tiny' | 'open-mixtral-8x7b'
     | 'mistral-small-2312' | 'mistral-small' | 'mistral-small-2402' | 'mistral-small-latest' | 'mistral-medium-latest' | 'mistral-medium-2312' | 'mistral-medium' | 'mistral-large-latest' | 'mistral-large-2402' | 'mistral-embed'

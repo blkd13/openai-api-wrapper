@@ -1,15 +1,15 @@
 import { Request, Response } from 'express';
+import { param } from 'express-validator';
+import { createProxyMiddleware } from 'http-proxy-middleware';
+import { NextFunction } from 'http-proxy-middleware/dist/types.js';
 import https from 'https';
+import { getAxios, getProxyUrl } from '../../common/http-client.js';
+import { ExtApiClient, getExtApiClient, OAuth2TokenDto } from '../controllers/auth.js';
+import { decrypt, encrypt } from '../controllers/tool-call.js';
 import { ds } from "../db.js";
 import { OAuthAccountEntity, OAuthAccountStatus } from "../entity/auth.entity.js";
 import { validationErrorHandler } from "../middleware/validation.js";
-import { OAuthUserRequest, UserRequest } from "../models/info.js";
-import { ExtApiClient, getExtApiClient, OAuth2TokenDto } from '../controllers/auth.js';
-import { header, param, query } from 'express-validator';
-import { createProxyMiddleware } from 'http-proxy-middleware';
-import { NextFunction } from 'http-proxy-middleware/dist/types.js';
-import { decrypt, encrypt } from '../controllers/tool-call.js';
-import { getAxios, getProxyUrl } from '../../common/http-client.js';
+import { OAuthUserRequest } from "../models/info.js";
 
 export async function getAccessToken(orgKey: string, userId: string, provider: string): Promise<OAuthAccountEntity> {
     const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOneByOrFail({
@@ -39,10 +39,13 @@ export async function getAccessToken(orgKey: string, userId: string, provider: s
             }
 
             // console.log(token.data);
+            oAuthAccount.accessToken = token.data.access_token ? encrypt(token.data.access_token) : token.data.access_token;
+            // リフレッシュトークン
+            oAuthAccount.refreshToken = token.data.refresh_token ? encrypt(token.data.refresh_token) : token.data.refresh_token;
+            // IDトークン
+            oAuthAccount.idToken = token.data.id_token ? encrypt(token.data.id_token) : token.data.id_token;
 
-            oAuthAccount.accessToken = encrypt(token.data.access_token);
-            oAuthAccount.refreshToken = encrypt(token.data.refresh_token);
-            oAuthAccount.tokenBody = JSON.stringify(token.data);
+            oAuthAccount.tokenBody = token.data;
             // 現在の時刻にexpiresInSeconds（秒）を加算して、有効期限のDateオブジェクトを作成
             if (token.data.expires_in) {
                 oAuthAccount.tokenExpiresAt = new Date(Date.now() + token.data.expires_in * 1000);
@@ -164,6 +167,8 @@ export const getOAuthApiProxy = [
                             // proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
                             proxyReq.write(bodyData);
                         } else { }
+
+                        // console.log(`proxyReq: ${req.method} ${req.url} ${target}${proxyReq.path} ${accessToken ? 'with token' : 'without token'}`);
                     },
                     proxyRes: async (proxyRes, req, res) => {
                         // // 必要に応じてヘッダーを設定

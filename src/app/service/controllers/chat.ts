@@ -1,13 +1,13 @@
-import * as http from 'http';
+import axios from 'axios';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";
-import axios from 'axios';
+import * as http from 'http';
 
-import { OpenAIApiWrapper, aiApi, genClientByProvider, normalizeMessage, providerPrediction } from '../../common/openai-api-wrapper.js';
+import { GenerateContentRequest, VertexAI } from '@google-cloud/vertexai';
+import { ChatCompletion, ChatCompletionChunk, ChatCompletionCreateParamsStreaming } from "openai/resources/index.js";
+import { aiApi, normalizeMessage, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
-import { ChatCompletion, ChatCompletionChunk, ChatCompletionCreateParams, ChatCompletionCreateParamsStreaming, ChatCompletionMessage } from "openai/resources/index.js";
-import { GenerateContentRequest, HarmBlockThreshold, HarmCategory, VertexAI } from '@google-cloud/vertexai';
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
 const { GCP_PROJECT_ID, GCP_CONTEXT_CACHE_LOCATION, GCP_API_BASE_PATH } = process.env;
@@ -21,9 +21,9 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
     // axios.defaults.httpsAgent = httpsAgent;
 } else { }
 
+import { Observer } from 'rxjs/dist/types/index.js';
 import { countChars, GenerateContentRequestForCache, mapForGemini, MyVertexAiClient } from '../../common/my-vertexai.js';
 import { Utils } from '../../common/utils.js';
-import { Observer } from 'rxjs/dist/types/index.js';
 import { COUNT_TOKEN_MODEL, getAIProvider } from './chat-by-project-model.js';
 
 // Eventクライアントリスト
@@ -277,31 +277,36 @@ export const chatCompletion = [
         const inDto = req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
 
         const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.streamId}`;
-        // const aiApi = new OpenAIApiWrapper();
-        const provider = await getAIProvider(req.info.user, inDto.args.model);
+        try {
+            // const aiApi = new OpenAIApiWrapper();
+            const provider = await getAIProvider(req.info.user, inDto.args.model);
 
-        // console.log(aiApi.wrapperOptions.provider);
-        aiApi.chatCompletionObservableStream(
-            inDto.args, { label }, provider
-        ).subscribe({
-            next: next => {
-                const resObj = {
-                    data: { streamId: req.query.streamId, content: next },
-                    event: 'message',
-                };
-                clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
-            },
-            error: error => {
-                console.log(error);
-                clients[clientId]?.response.end(`error: ${req.query.streamId} ${error}\n\n`);
-            },
-            complete: () => {
-                // 通常モードは素直に終了
-                clients[clientId]?.response.write(`data: [DONE] ${req.query.streamId}\n\n`);
-                // console.log(text);
-            },
-        });
-        res.end(JSON.stringify({ status: 'ok' }));
+            // console.log(aiApi.wrapperOptions.provider);
+            aiApi.chatCompletionObservableStream(
+                inDto.args, { label }, provider
+            ).subscribe({
+                next: next => {
+                    const resObj = {
+                        data: { streamId: req.query.streamId, content: next },
+                        event: 'message',
+                    };
+                    clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
+                },
+                error: error => {
+                    console.log(error);
+                    clients[clientId]?.response.end(`error: ${req.query.streamId} ${error}\n\n`);
+                },
+                complete: () => {
+                    // 通常モードは素直に終了
+                    clients[clientId]?.response.write(`data: [DONE] ${req.query.streamId}\n\n`);
+                    // console.log(text);
+                },
+            });
+            res.end(JSON.stringify({ status: 'ok' }));
+        } catch (error: any) {
+            console.error(error);
+            res.status(500).json({ message: 'Internal Server Error' });
+        }
     }
 ];
 
@@ -315,33 +320,38 @@ export const geminiCountTokens = [
         const req = _req as UserRequest;
         const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
         const args = inDto.args;
-        const my_vertexai = (await getAIProvider(req.info.user, args.model)).client as MyVertexAiClient;
-        const client = my_vertexai.client as VertexAI;
-        const generativeModel = client.preview.getGenerativeModel({
-            model: 'gemini-1.5-flash',
-            safetySettings: [
-                // { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                // { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                // { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
-                // { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, }
-            ],
-        });
+        try {
+            const my_vertexai = (await getAIProvider(req.info.user, args.model)).client as MyVertexAiClient;
+            const client = my_vertexai.client as VertexAI;
+            const generativeModel = client.preview.getGenerativeModel({
+                model: 'gemini-2.5-flash',
+                safetySettings: [
+                    // { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                    // { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                    // { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },
+                    // { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, }
+                ],
+            });
 
-        normalizeMessage(args, false).subscribe({
-            next: next => {
-                const args = next.args;
-                const req: GenerateContentRequest = mapForGemini(args);
-                const countCharsObj = countChars(args);
-                // console.log(countCharsObj);
-                // console.dir(req, { depth: null });
-                generativeModel.countTokens(req).then(tokenObject => {
-                    res.end(JSON.stringify(Object.assign(tokenObject, countCharsObj)));
-                });
-            },
-            // complete: () => {
-            //     console.log('complete');
-            // },
-        });
+            normalizeMessage(args, false).subscribe({
+                next: next => {
+                    const args = next.args;
+                    const req: GenerateContentRequest = mapForGemini(args);
+                    const countCharsObj = countChars(args);
+                    // console.log(countCharsObj);
+                    // console.dir(req, { depth: null });
+                    generativeModel.countTokens(req).then(tokenObject => {
+                        res.end(JSON.stringify(Object.assign(tokenObject, countCharsObj)));
+                    });
+                },
+                // complete: () => {
+                //     console.log('complete');
+                // },
+            });
+        } catch (error: any) {
+            console.error(error);
+            res.status(500).json({ message: 'Internal Server Error' });
+        }
     }
 ];
 
@@ -375,49 +385,52 @@ export const geminiCreateContextCache = [
         const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
         const args = inDto.args;
         const projectId: string = GCP_PROJECT_ID || 'dummy';
-        const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
+        const modelId: 'gemini-2.5-flash-001' | 'gemini-2.5-pro-001' = 'gemini-2.5-flash-001';
         const url = `${CONTEXT_CACHE_API_ENDPOINT}/projects/${projectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`;
+        try {
+            const my_vertexai = (await getAIProvider(req.info.user, args.model)).client as MyVertexAiClient;
+            normalizeMessage(args, false).subscribe({
+                next: next => {
+                    const args = next.args;
+                    const req: GenerateContentRequest = mapForGemini(args);
 
-        const my_vertexai = (await getAIProvider(req.info.user, args.model)).client as MyVertexAiClient;
-        normalizeMessage(args, false).subscribe({
-            next: next => {
-                const args = next.args;
-                const req: GenerateContentRequest = mapForGemini(args);
+                    // モデルの説明文を書いておく？？
+                    // req.contents.push({ role: 'model', parts: [{ text: 'これはキャッシュ機能のサンプルです。' }] });
 
-                // モデルの説明文を書いておく？？
-                // req.contents.push({ role: 'model', parts: [{ text: 'これはキャッシュ機能のサンプルです。' }] });
+                    // // システムプロンプトを先頭に戻しておく
+                    // if (req.systemInstruction && typeof req.systemInstruction !== 'string') {
+                    //     req.contents.unshift(req.systemInstruction);
+                    // } else { }
 
-                // // システムプロンプトを先頭に戻しておく
-                // if (req.systemInstruction && typeof req.systemInstruction !== 'string') {
-                //     req.contents.unshift(req.systemInstruction);
-                // } else { }
+                    // リクエストボディ
+                    const requestBody = {
+                        model: `projects/${projectId}/locations/${location}/publishers/google/models/${modelId}`,
+                        contents: req.contents,
+                    };
+                    const reqCache: GenerateContentRequestForCache = req as GenerateContentRequestForCache;
+                    if (reqCache.expire_time || reqCache.ttl) {
+                        // 期限設定されていれば何もしない。
+                    } else {
+                        // 期限設定されていなければデフォルト15分を設定する。
+                        reqCache.expire_time = new Date(new Date().getTime() + 15 * 60 * 1000).toISOString();
+                    }
+                    // fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
 
-                // リクエストボディ
-                const requestBody = {
-                    model: `projects/${projectId}/locations/${location}/publishers/google/models/${modelId}`,
-                    contents: req.contents,
-                };
-                const reqCache: GenerateContentRequestForCache = req as GenerateContentRequestForCache;
-                if (reqCache.expire_time || reqCache.ttl) {
-                    // 期限設定されていれば何もしない。
-                } else {
-                    // 期限設定されていなければデフォルト15分を設定する。
-                    reqCache.expire_time = new Date(new Date().getTime() + 15 * 60 * 1000).toISOString();
-                }
-                // fs.writeFileSync('requestBody.json', JSON.stringify(requestBody, null, 2));
-
-                // アクセストークンを取得してリクエスト
-                my_vertexai.getAuthorizedHeaders().then(headers =>
-                    axios.post(url, requestBody, headers)
-                ).then(response => {
-                    res.end(JSON.stringify(response.data));
-                    // console.log(response.headers);
-                    // console.log(response.data);
-                }).catch(error => {
-                    res.status(503).end(Utils.errorFormat(error));
-                });
-            },
-        });
+                    // アクセストークンを取得してリクエスト
+                    my_vertexai.getAuthorizedHeaders().then(headers =>
+                        axios.post(url, requestBody, headers)
+                    ).then(response => {
+                        res.end(JSON.stringify(response.data));
+                        // console.log(response.headers);
+                        // console.log(response.data);
+                    }).catch(error => {
+                        res.status(503).end(Utils.errorFormat(error));
+                    });
+                },
+            });
+        } catch (error) {
+            res.status(500).json({ message: 'Internal Server Error' });
+        }
     }
 ];
 

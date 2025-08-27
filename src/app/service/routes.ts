@@ -1,57 +1,57 @@
 import { Router } from 'express';
-import { changePassword, deleteUser, getUser, guestLogin, onetimeLogin, passwordReset, requestForPasswordReset, updateUser, userLogin, getUserList, userLoginOAuth2, userLoginOAuth2Callback, logout, getOAuthAccountList, oAuthEmailAuth, genApiToken, getOAuthAccount, getScopeLabels, checkProjectPermission, } from './controllers/auth.js';
-import { authenticateInviteToken, authenticateOAuthUser, authenticateUserTokenMiddleGenerator } from './middleware/authenticate.js';
-import { chatCompletion, chatCompletionStream, codegenCompletion, geminiCountTokens, geminiCreateContextCache, geminiDeleteContextCache, geminiUpdateContextCache, initEvent } from './controllers/chat.js';
+import { changePassword, checkProjectPermission, deleteUser, genApiKey, getOAuthAccount, getOAuthAccountList, getScopeLabels, getUser, getUserList, logout, oAuthEmailAuth, onetimeLogin, passwordReset, refresh, requestForPasswordReset, updateUser, userLogin, userLoginOAuth2, userLoginOAuth2Callback } from './controllers/auth.js';
+import { chatCompletion, chatCompletionStream, codegenCompletion, geminiCountTokens, geminiCreateContextCache, initEvent } from './controllers/chat.js';
 import {
-    createTeam,
-    getTeamList,
-    getTeam,
-    updateTeam,
-    deleteTeam,
     addTeamMember,
-    getTeamMembers,
-    updateTeamMember,
-    removeTeamMember,
     createProject,
-    getProjectList,
-    getProject,
-    updateProject,
-    deleteProject,
-    getThreadGroupList,
-    deleteThreadGroup,
-    getMessageGroupList,
-    deleteMessageGroup,
-    deleteMessage,
-    upsertMessageWithContents,
-    getMessageGroupDetails,
-    getMessageContentParts,
+    createTeam,
     deleteContentPart,
+    deleteMessage,
+    deleteMessageGroup,
+    deleteProject,
+    deleteTeam,
+    deleteThreadGroup,
+    editMessageWithContents,
+    getMessageContentParts,
+    getMessageGroupDetails,
+    getMessageGroupList,
+    getProject,
+    getProjectList,
+    getTeam,
+    getTeamList,
+    getTeamMembers,
+    getThreadGroupList,
     moveThreadGroup,
-    upsertThreadGroup,
-    updateMessageOrMessageGroupTimestamp,
-    upsertMessageWithContents3,
+    removeTeamMember,
     threadClone,
     threadGroupClone,
-    editMessageWithContents,
+    updateMessageOrMessageGroupTimestamp,
+    updateProject,
+    updateTeam,
+    updateTeamMember,
     updateThreadGroupTitleAndDescription,
+    upsertMessageWithContents,
+    upsertMessageWithContents3,
+    upsertThreadGroup,
 } from './controllers/project-models.js';
+import { authenticateInviteToken, authenticateOAuthUser, authenticateUserTokenMiddleGenerator } from './middleware/authenticate.js';
 
 // import { addDevelopmentStages, addDiscussions, addDocuments, addStatements, addTasks, createProject, deleteDevelopmentStage, deleteDiscussion, deleteDocument, deleteProject, deleteStatement, deleteTask, getDevelopmentStage, getDevelopmentStageList, getDiscussion, getDiscussionList, getDocument, getDocumentList, getProject, getProjectDeep, getProjectList, getStatement, getStatementList, getTask, getTaskList, updateDevelopmentStage, updateDiscussion, updateDocument, updateProject, updateStatement, updateTask } from './controllers/project-models.js';
-import { deleteFile, downloadFile, getFileGroup, getFileList, updateFileAccess, fileActivate, updateFileMetadata, uploadFiles } from './controllers/file-manager.js';
-import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCountTokensByThread, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
-import { UserRoleType } from './entity/auth.entity.js';
-import { getOAuthApiProxy } from './api/api-proxy.js';
-import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
-import { getUserSetting, upsertUserSetting, deleteUserSetting, getApiProviders, upsertApiProvider, deleteApiProvider, getApiProviderTemplates, upsertApiProviderTemplate, deleteApiProviderTemplate, getOrganizations, upsertOrganization, deactivateOrganization, getOrganizationUsers } from './controllers/user.js';
-import * as gitlab from './api/api-gitlab.js';
-import * as gitea from './api/api-gitea.js';
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
-import { registApiKey, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId, callFunction } from './controllers/tool-call.js';
-import { upsertMCPServer, getMCPServers, deleteMCPServer } from './controllers/mcp-manager.js';
+import * as gitea from './api/api-gitea.js';
+import * as gitlab from './api/api-gitlab.js';
+import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
+import { getOAuthApiProxy } from './api/api-proxy.js';
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
-import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPIStream, vertexAIByAnthropicAPICountTokens } from './controllers/claude-proxy.js';
-import { getDivisionMembers, updateDivisionMember, removeDivisionMember, getDivisionList, getDivision, deleteDivision, getAllDivisions, upsertDivisionMember, upsertDivision } from './controllers/division.js';
+import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
+import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPICountTokens, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
+import { deleteDivision, getDivisionList, getDivisionMembers, removeDivisionMember, upsertDivision, upsertDivisionMember } from './controllers/division.js';
+import { downloadFile, fileActivate, getFileGroup, getFileList, updateFileAccess, uploadFiles } from './controllers/file-manager.js';
+import { deleteMCPServer, getMCPServers, upsertMCPServer } from './controllers/mcp-manager.js';
 import { getDepartmentMemberLog, getDepartmentMemberLogForUser, getDepartmentMemberLogSummaryForUser, getDivisionMemberStatsList, getJournal } from './controllers/stats.js';
+import { callFunction, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId, registApiKey } from './controllers/tool-call.js';
+import { deactivateOrganization, deleteApiProvider, deleteApiProviderTemplate, deleteUserSetting, getApiProviders, getApiProviderTemplates, getOrganizations, getOrganizationUsers, getUserSetting, upsertApiProvider, upsertApiProviderTemplate, upsertOrganization, upsertUserSetting } from './controllers/user.js';
+import { UserRoleType } from './entity/auth.entity.js';
 
 // routers/index.ts
 
@@ -76,16 +76,18 @@ authMemberManagerRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.Us
 authAIIntegrationAdminRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.AIIntegrationAdmin, true));
 authSystemIntegrationAdminRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.SystemIntegrationAdmin, true));
 authAuditorRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.Auditor, true));
-// authSuperAdminRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.SuperAdmin, true));
+authSuperAdminRouter.use(authenticateUserTokenMiddleGenerator(UserRoleType.SuperAdmin, true));
 
 authInviteRouter.use(authenticateInviteToken);
 
 // 個別コントローラーの設定
 // authNoneRouter.post('/login', userLogin);
 authNoneRouter.post('/:orgKey/login', userLogin);
-authNoneRouter.get('/logout', logout);
 authNoneRouter.post('/:orgKey/onetime', onetimeLogin);
 authNoneRouter.post('/:orgKey/request-for-password-reset', requestForPasswordReset);
+authNoneRouter.post('/auth/refresh', refresh);
+authUserRouter.get('/logout', logout);
+
 // authNoneRouter.post('/onetime', onetimeLogin);
 // authNoneRouter.post('/rwequest-for-password-reset', requestForPasswordReset);
 // authNoneRouter.post('/guest', guestLogin);
@@ -97,13 +99,14 @@ authNoneRouter.get('/oauth/:orgKey/:provider/login', userLoginOAuth2);
 authNoneRouter.get('/oauth/callback', userLoginOAuth2Callback); // 認証があっても無くても動くようにしておく
 
 // ユーザー認証系
+authUserRouter.get('/is-authorized', getUser);
 authUserRouter.get('/user', getUser);
 authUserRouter.patch('/user', updateUser);
 authUserRouter.patch('/change-password', changePassword);
 authUserRouter.delete('/user', deleteUser);
 
 // authUserRouter.get('/access-token', genAccessToken);
-authUserRouter.post('/api-token', genApiToken);
+authUserRouter.post('/api-key', genApiKey);
 
 authUserRouter.get(`/user-list`, getUserList); // メンバー追加時のサジェスト
 
@@ -243,12 +246,14 @@ authUserRouter.post('/oauth/api-keys/:provider', registApiKey);
 authUserRouter.delete('/oauth/api-keys/:provider/:id', deleteApiKey);
 
 authOAuthRouter.use(authenticateOAuthUser);
+// authサーバーにプロキシするだけ
 // authUserRouter.get(`/proxy/mattermost/websocket`, getOAuthApiWebSocketProxy);
 authOAuthRouter.get(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);
 authOAuthRouter.put(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);
 authOAuthRouter.post(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);
 authOAuthRouter.patch(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);
 authOAuthRouter.delete(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);
+// authサーバーのAPIをラッパーした自前のAPI
 // authOAuthRouter.options(`/proxy/:providerType/:providerName/*`, getOAuthApiProxy);  // 利かない
 authOAuthRouter.get(`/basic-api/:providerType/:providerName/*`, getOAuthApiProxy);
 authOAuthRouter.post(`/basic-api/:providerType/:providerName/*`, getOAuthApiProxy);
@@ -276,6 +281,9 @@ authAdminRouter.put('/ext-api-provider/:id', upsertApiProvider);
 authAdminRouter.delete('/ext-api-provider/:id', deleteApiProvider);
 
 authAdminRouter.get(`/ext-api-provider-templates`, getApiProviderTemplates); // 
+authAdminRouter.post('/ext-api-provider-template', upsertApiProviderTemplate); //
+authAdminRouter.put('/ext-api-provider-template/:id', upsertApiProviderTemplate); //
+authAdminRouter.delete('/ext-api-provider-template/:id', deleteApiProviderTemplate); //
 authSuperAdminRouter.post('/ext-api-provider-template', upsertApiProviderTemplate); //
 authSuperAdminRouter.put('/ext-api-provider-template/:id', upsertApiProviderTemplate); //
 authSuperAdminRouter.delete('/ext-api-provider-template/:id', deleteApiProviderTemplate); //

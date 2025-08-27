@@ -1,31 +1,30 @@
-import { promises as fs } from 'fs';
-import _ from 'lodash';
-import { fileURLToPath } from 'url';
-import { In, Not } from 'typeorm/index.js';
-import { ds } from '../../service/db.js';
-import { ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartResultBody } from '../../service/entity/tool-call.entity.js';
-import { ToolCallPartType } from '../../service/entity/tool-call.entity.js';
-import { ContentPartEntity } from '../../service/entity/project-models.entity.js';
-import { ContentPartType } from '../../service/models/values.js';
-import { FileBodyEntity } from '../../service/entity/file-models.entity.js';
-import { genClientByProvider, getTiktokenEncoder, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
-import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL, geminiCountTokensByFile } from '../../service/controllers/chat-by-project-model.js';
-import { detect } from 'jschardet/index.js';
-import * as path from 'path';
+import { VertexAI } from '@google-cloud/vertexai/build/src/vertex_ai.js';
 import * as crypto from 'crypto';
-import { convertToPdfMimeList, extractPdfData } from '../../common/pdf-funcs.js';
+import { promises as fs } from 'fs';
+import { detect } from 'jschardet/index.js';
+import _ from 'lodash';
+import * as path from 'path';
+import { In, Not } from 'typeorm/index.js';
+import { fileURLToPath } from 'url';
 import { convertPptxToPdf } from '../../common/media-funcs.js';
 import { MyVertexAiClient } from '../../common/my-vertexai.js';
-import { VertexAI } from '@google-cloud/vertexai/build/src/vertex_ai.js';
+import { genClientByProvider, getTiktokenEncoder, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
+import { convertToPdfMimeList, extractPdfData } from '../../common/pdf-funcs.js';
+import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL, geminiCountTokensByFile } from '../../service/controllers/chat-by-project-model.js';
+import { ds } from '../../service/db.js';
 import { UserEntity, UserStatus } from '../../service/entity/auth.entity.js';
+import { FileBodyEntity } from '../../service/entity/file-models.entity.js';
+import { ContentPartEntity } from '../../service/entity/project-models.entity.js';
+import { ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartResultBody, ToolCallPartType } from '../../service/entity/tool-call.entity.js';
 import { UserTokenPayloadWithRole } from '../../service/middleware/authenticate.js';
+import { ContentPartType } from '../../service/models/values.js';
 
 /**
  * Get user configuration for agent scripts
  */
 async function getAgentUser(): Promise<UserTokenPayloadWithRole> {
     const { AGENT_USER_ID, AGENT_ORG_KEY = 'public' } = process.env;
-    
+
     if (!AGENT_USER_ID) {
         throw new Error('AGENT_USER_ID environment variable is required for agent scripts');
     }
@@ -43,10 +42,12 @@ async function getAgentUser(): Promise<UserTokenPayloadWithRole> {
         type: 'user',
         orgKey: user.orgKey,
         id: user.id,
-        email: user.email,
-        name: user.name || user.email,
+        // email: user.email,
+        // name: user.name || user.email,
         roleList: [], // Agent scripts typically don't need specific roles
-        authGeneration: user.authGeneration || 0
+        authGeneration: user.authGeneration || 0,
+        jti: '', // Not used in this context
+        sid: '', // Not used in this context
     };
 }
 

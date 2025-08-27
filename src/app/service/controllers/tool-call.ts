@@ -1,21 +1,21 @@
 import { Request, Response } from "express";
 import { body, param, query } from "express-validator";
 
-import { UserRequest } from "../models/info.js";
-import { ProjectEntity, TeamMemberEntity } from "../entity/project-models.entity.js";
-import { validationErrorHandler } from "../middleware/validation.js";
-import { ds } from "../db.js";
-import { functionDefinitions } from '../tool/_index.js';
-import { ToolCallPartEntity, ToolCallGroupEntity, ToolCallPartStatus, ToolCallPart, ToolCallPartInfoBody, ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartResultBody, ToolCallPartType } from "../entity/tool-call.entity.js";
-import { ProjectVisibility } from "../models/values.js";
 import { EntityNotFoundError } from "typeorm/index.js";
+import { ds } from "../db.js";
+import { ProjectEntity, TeamMemberEntity } from "../entity/project-models.entity.js";
+import { ToolCallGroupEntity, ToolCallPart, ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartInfoBody, ToolCallPartResultBody, ToolCallPartStatus, ToolCallPartType } from "../entity/tool-call.entity.js";
+import { validationErrorHandler } from "../middleware/validation.js";
+import { UserRequest } from "../models/info.js";
+import { ProjectVisibility } from "../models/values.js";
+import { functionDefinitions } from '../tool/_index.js';
 
 import crypto from 'crypto';
-import { OAuthAccountEntity, OAuthAccountStatus, OrganizationEntity } from "../entity/auth.entity.js";
-import { ExtApiClient, getExtApiClient } from "./auth.js";
-import { Utils } from "../../common/utils.js";
-import { getAxios } from "../../common/http-client.js";
 import { ChatCompletionCreateParamsStreaming } from "openai/resources.js";
+import { getAxios } from "../../common/http-client.js";
+import { Utils } from "../../common/utils.js";
+import { OAuthAccountEntity, OAuthAccountStatus, UserEntity, UserStatus } from "../entity/auth.entity.js";
+import { ExtApiClient, getExtApiClient } from "./auth.js";
 
 
 const { ENCRYPTION_KEY } = process.env as { ENCRYPTION_KEY: string };
@@ -45,7 +45,7 @@ export const callFunction = [
         try {
             console.dir(_req.body);
             // 汚い。。。
-            const args = { model: 'gemini-1.5-flash', messages: [], stream: true, } as ChatCompletionCreateParamsStreaming;
+            const args = { model: 'gemini-2.5-flash', messages: [], stream: true, } as ChatCompletionCreateParamsStreaming;
             const funcDefs = await functionDefinitions({ inDto: { args }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy');
             const funcDef = funcDefs.find(f => f.info.name === _req.body.function_name);
             if (!funcDef) {
@@ -266,6 +266,8 @@ export const registApiKey = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { provider, accessToken, refreshToken } = req.body;
+        const { id, orgKey } = req.info.user;
+        const user = await ds.getRepository(UserEntity).findOneOrFail({ where: { id, orgKey, status: UserStatus.Active } });
 
         try {
             await ds.transaction(async (manager) => {
@@ -305,13 +307,14 @@ export const registApiKey = [
                 apiKey.userId = req.info.user.id;
                 apiKey.provider = provider;
                 apiKey.providerUserId = req.info.user.id;
-                apiKey.providerEmail = req.info.user.email;
+                apiKey.providerEmail = user.email;
                 apiKey.accessToken = encrypt(accessToken);
                 if (refreshToken) {
                     apiKey.refreshToken = encrypt(refreshToken);
                 } else { }
+                // apiKey.tokenBody = null;
                 // apiKey.tokenExpiresAt = new Date(0); // 有効期限なし
-                apiKey.userInfo = JSON.stringify(result); // 今のところ使っていない
+                apiKey.userInfo = result; // 今のところ使っていない
                 apiKey.status = OAuthAccountStatus.ACTIVE;
                 apiKey.updatedBy = req.info.user.id;
                 apiKey.updatedIp = req.info.ip;

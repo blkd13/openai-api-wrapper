@@ -2,14 +2,14 @@ import { map, toArray } from "rxjs";
 
 const { GITEA_CONFIDENCIAL_OWNERS = '' } = process.env as { GITEA_CONFIDENCIAL_OWNERS: string };
 
-import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
-import { UserRequest } from "../models/info.js";
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { MyToolType, OpenAIApiWrapper } from "../../common/openai-api-wrapper.js";
 import { Utils } from "../../common/utils.js";
-import { ds } from "../db.js";
-import { getOAuthAccountForTool, reform } from "./common.js";
 import { GiteaRepository } from "../api/api-gitea.js";
+import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { ds } from "../db.js";
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
+import { UserRequest } from "../models/info.js";
+import { getOAuthAccountForTool, reform } from "./common.js";
 
 // 1. 関数マッピングの作成
 export async function giteaFunctionDefinitions(providerName: string,
@@ -847,7 +847,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                 const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
-                result.me = reform(JSON.parse(oAuthAccount.userInfo));
+                result.me = reform(oAuthAccount.userInfo);
                 result.uriBase = e.uriBase;
                 return result;
             }

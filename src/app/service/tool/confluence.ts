@@ -1,7 +1,7 @@
-import { MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
-import { UserRequest } from "../models/info.js";
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
+import { MyToolType, OpenAIApiWrapper } from "../../common/openai-api-wrapper.js";
 import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from "../entity/project-models.entity.js";
+import { UserRequest } from "../models/info.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
 
 // 1. 関数マッピングの作成
@@ -90,7 +90,7 @@ export async function confluenceFunctionDefinitions(providerSubName: string,
                 const result = (await axiosWithAuth.get(url)).data;
 
                 reform(result);
-                result.me = reform(JSON.parse(oAuthAccount.userInfo));
+                result.me = reform(oAuthAccount.userInfo);
                 result.uriBase = e.uriBase;
                 return result;
             }

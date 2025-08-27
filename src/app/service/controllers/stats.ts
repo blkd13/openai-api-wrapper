@@ -1,11 +1,11 @@
-import { body, cookie, param, query } from 'express-validator';
 import { Request, Response } from 'express';
+import { body, param, query } from 'express-validator';
 
-import { InviteRequest, UserRequest } from '../models/info.js';
-import { UserEntity, InviteEntity, LoginHistoryEntity, UserRoleType, DepartmentMemberEntity, DepartmentRoleType, DepartmentEntity, UserStatus, SessionEntity, OAuthAccountEntity, OAuthAccountStatus, OrganizationEntity, ApiProviderEntity, ApiProviderTemplateEntity, ApiProviderAuthType, UserRoleEntity, UserRole, ScopeType, DivisionEntity } from '../entity/auth.entity.js';
-import { validationErrorHandler } from '../middleware/validation.js';
-import { EntityManager, In, MoreThan, Not } from 'typeorm';
+import { In } from 'typeorm';
 import { ds } from '../db.js';
+import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, DivisionEntity, ScopeType, UserEntity, UserRoleEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
+import { validationErrorHandler } from '../middleware/validation.js';
+import { UserRequest } from '../models/info.js';
 
 import { Utils } from '../../common/utils.js';
 
@@ -16,12 +16,14 @@ export const getDivisionList = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
+        const { id, orgKey } = req.info.user;
+        const user = await ds.getRepository(UserEntity).findOneOrFail({ where: { id, orgKey, status: UserStatus.Active } });
         const myList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
-                orgKey: req.info.user.orgKey,
+                orgKey,
                 // 自分が所属している部の一覧を取る。
                 // userId: req.info.user.id,
-                name: req.info.user.name,
+                name: user.name,
             },
         });
         const departmentIdList = myList.map((member: DepartmentMemberEntity) => member.departmentId);
@@ -420,22 +422,24 @@ export const patchDepartmentMember = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { role, status } = req.body;
+        const { id, orgKey } = req.info.user;
+        const user = await ds.getRepository(UserEntity).findOneOrFail({ where: { id, orgKey, status: UserStatus.Active } });
         const myList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
-                orgKey: req.info.user.orgKey,
                 // 自分が管理者となっている部の一覧を取る。
+                orgKey,
                 // userId: req.info.user.id,
-                name: req.info.user.name,
+                name: user.name,
                 departmentRole: DepartmentRoleType.Admin,
             },
         });
         const departmentIdList = myList.map((member: DepartmentMemberEntity) => member.departmentId);
         const memberList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
-                orgKey: req.info.user.orgKey,
+                orgKey,
                 // 対称部員が含まれるか
                 departmentId: In(departmentIdList),
-                name: req.info.user.name,
+                name: user.name,
                 // userId: userId,
             },
         });

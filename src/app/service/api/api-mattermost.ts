@@ -1,24 +1,23 @@
-import { In, Not } from 'typeorm';
 import { Request, Response } from 'express';
-import { body, param, query } from "express-validator";
+import { body, param } from "express-validator";
+import { In } from 'typeorm';
 
+import { Axios } from 'axios';
+import { ChatModel } from 'openai/resources.js';
+import { MattermostChannel, MattermostEmoji, Post } from '../../agent/api-mattermost/api.js';
+import { getAxios } from '../../common/http-client.js';
+import { plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
+import { Utils } from '../../common/utils.js';
+import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
+import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../controllers/chat-by-project-model.js';
+import { convertToMapSet, handleFileUpload } from '../controllers/file-manager.js';
+import { ds } from '../db.js';
+import { MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity } from '../entity/api-mattermost.entity.js';
+import { FileAccessEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
-import { UserTokenPayload } from "../middleware/authenticate.js";
-import { MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity } from '../entity/api-mattermost.entity.js';
-import { ds } from '../db.js';
-import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
-import { Utils } from '../../common/utils.js';
-import { MattermostChannel, MattermostEmoji, MattermostPost, MattermostUser, Post } from '../../agent/api-mattermost/api.js';
-import { Axios } from 'axios';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
-import { ContentPartType, MessageGroupType, ProjectVisibility, TeamMemberRoleType, ThreadStatus, ThreadGroupVisibility, FileGroupType } from '../models/values.js';
-import { convertToMapSet, handleFileUpload } from '../controllers/file-manager.js';
-import { FileAccessEntity, FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
-import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../controllers/chat-by-project-model.js';
-import { plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
-import { getAxios } from '../../common/http-client.js';
-import { ChatModel } from 'openai/resources.js';
+import { ContentPartType, FileGroupType, MessageGroupType, ProjectVisibility, ThreadGroupVisibility, ThreadStatus } from '../models/values.js';
 
 export const getMmUsers = [
     param('providerName').isString().notEmpty(),
@@ -707,9 +706,9 @@ export const mattermostToAi = [
                 const tokenCountFileList = Object.entries(fileBodyMapSet.hashMap).map(([sha256, value]) => {
                     if (value.fileBodyEntity) {
                         const fileBodyEntity = value.fileBodyEntity;
-                        if (fileBodyEntity.tokenCount && fileBodyEntity.tokenCount['gemini-1.5-flash']) {
+                        if (fileBodyEntity.tokenCount && fileBodyEntity.tokenCount['gemini-2.5-flash']) {
                             // 既にトークンカウント済みの場合はスキップ
-                            // console.log(value.tokenCount['gemini-1.5-flash'] + ' tokens for ' + sha256);
+                            // console.log(value.tokenCount['gemini-2.5-flash'] + ' tokens for ' + sha256);
                             return null;
                         } else {
                             if (value.fileType.startsWith('text/') || plainExtensions.includes(fileBodyEntity.innerPath) || plainMime.includes(fileBodyEntity.fileType) || fileBodyEntity.fileType.endsWith('+xml') || fileBodyMapSet.hashMap[sha256].base64Data.startsWith('IyEv')) {

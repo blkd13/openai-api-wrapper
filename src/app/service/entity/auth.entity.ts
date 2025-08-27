@@ -1,18 +1,18 @@
-import { Column, CreateDateColumn, Entity, Generated, In, Index, ManyToOne, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Generated, Index } from 'typeorm';
 import { MyBaseEntity } from './base.js';
 export enum UserStatus {
     // アクティブ系
-    Active = "Active",                // アクティブ状態
-    Inactive = "Inactive",            // 非アクティブ状態
+    Active = 'Active',                // アクティブ状態
+    Inactive = 'Inactive',            // 非アクティブ状態
 
     // セキュリティ系
-    Suspended = "Suspended",          // アクセス停止
-    Locked = "Locked",                // アカウントロック
-    Banned = "Banned",                // アクセス禁止
+    Suspended = 'Suspended',          // アクセス停止
+    Locked = 'Locked',                // アカウントロック
+    Banned = 'Banned',                // アクセス禁止
 
     // アカウントの状態系
-    Deleted = "Deleted",              // 削除済み
-    Archived = "Archived",            // アーカイブ済み
+    Deleted = 'Deleted',              // 削除済み
+    Archived = 'Archived',            // アーカイブ済み
 }
 
 export enum UserRoleType {
@@ -31,6 +31,25 @@ export enum UserRoleType {
     Admin = 'Admin', // 管理者
     SuperAdmin = 'SuperAdmin', // スーパーユーザー
 }
+
+export enum SessionStatus {
+    Active = 'Active', // アクティブ状態で、トークンが有効で使用可能
+    Expired = 'Expired', // トークンが期限切れの状態
+    Revoked = 'Revoked', // トークンが取り消された状態
+    Error = 'Error', // トークンの取得や更新に問題が発生した状態
+    // PENDING = 'PENDING', // アカウントがまだ完全に設定されていない、または確認中の状態
+    // DISCONNECTED = 'DISCONNECTED', // ユーザーがアカウントの接続を解除した状態
+}
+export enum OnetimeStatus {
+    Unused = 'Unused',
+    Used = 'Used',                // 使用済み
+    Expired = 'Expired',          // 期限切れ
+    Revoked = 'Revoked',          // 取り消し済み
+}
+//   CREATE TABLE invite_entity_bk AS SELECT * FROM invite_entity;
+//   INSERT INTO invite_entity (id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data,"limit",org_key,status) SELECT id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data::jsonb,"limit",org_key,status FROM invite_entity_bk;
+//   DROP TABLE invite_entity_bk;
+
 // CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 // SELECT uuid_generate_v4();
 @Entity()
@@ -58,7 +77,7 @@ export class UserEntity extends MyBaseEntity {
     passwordHash?: string;
 
     @Column({ type: 'integer', default: 0 })
-    authGeneration?: number;
+    authGeneration!: number;
 }
 
 export enum ScopeType {
@@ -74,8 +93,6 @@ export class ScopeInfo {
 }
 
 export interface UserRole {
-    orgKey: string;
-    userId: string;
     scopeInfo: ScopeInfo;
     role: UserRoleType;
     priority: number; // 複数divisionのroleを持つことがあるのでその優先度。数値が大きいほど優先される。
@@ -100,14 +117,14 @@ export class UserRoleEntity extends MyBaseEntity implements UserRole {
     @Column({ type: 'enum', enum: UserStatus, default: UserStatus.Active })
     status!: UserStatus;
 }
-// INSERT INTO ribbon.role_binding_entity(org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,role,scope_info_scope_type,scope_info_scope_id) 
-// SELECT org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,id,'ORGANIZATION','{95051ea1-c8f6-4485-a407-f5b19c3245bc}'FROM user_entity;
 
+// CREATE TABLE invite_entity_bk AS SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data,status,"limit" FROM invite_entity;
+// DROP   TABLE invite_entity;
+// INSERT INTO invite_entity(id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data,status,expires_at) 
+// SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data::jsonb,status,to_timestamp("limit" / 1000.0)::timestamptz FROM invite_entity_bk;
+// DROP   TABLE invite_entity_bk;
 @Entity()
 export class InviteEntity extends MyBaseEntity {
-    // @PrimaryGeneratedColumn('uuid')
-    // id!: string;
-
     @Column({ type: 'integer', nullable: false })
     @Generated('increment')
     seq!: number;
@@ -121,14 +138,14 @@ export class InviteEntity extends MyBaseEntity {
     @Column()
     onetimeToken!: string;
 
-    @Column()
-    data!: string;
+    @Column({ type: 'jsonb', nullable: true })
+    data!: Record<string, any> | null; // UAやIPのハッシュ等
 
-    @Column()
-    status!: string;
+    @Column({ type: 'enum', enum: OnetimeStatus, default: OnetimeStatus.Unused })
+    status!: OnetimeStatus;
 
-    @Column({ type: 'bigint' })
-    limit!: number;
+    @Column({ type: 'timestamptz' })
+    expiresAt!: Date;
 }
 
 @Entity()
@@ -149,14 +166,18 @@ export class LoginHistoryEntity extends MyBaseEntity {
     deviceInfo!: string;
 
     @Column({ type: 'integer', default: 0 })
-    authGeneration?: number;
+    authGeneration!: number;
 }
 
-@Entity()
-export class SessionEntity extends MyBaseEntity {
-    // @PrimaryGeneratedColumn('uuid')
-    // id!: string;  // UUIDとしてセッションを一意に識別
+//   CREATE TABLE session_entity_bk AS 
+//   SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,login_date,provider,auth_info,expires_at,last_active_at,device_info,status::text FROM session_entity;
+//   DROP TABLE session_entity;
+//   INSERT INTO session_entity(id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,login_date,provider,auth_info,expires_at,last_active_at,device_info)
+//   SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,login_date,provider,auth_info::jsonb,expires_at,last_active_at,device_info::jsonb FROM session_entity_bk;
 
+@Entity()
+@Index(['orgKey', 'userId'])
+export class SessionEntity extends MyBaseEntity {
     @Column({ type: 'uuid' })
     userId!: string;  // ユーザーID
 
@@ -164,13 +185,10 @@ export class SessionEntity extends MyBaseEntity {
     loginDate!: Date;  // ログイン日時
 
     @Column()
-    ipAddress!: string;  // IPアドレス
-
-    @Column()
     provider!: string;  // 認証プロバイダ（local, mattermost, boxなど）
 
-    @Column()
-    authInfo!: string;  // 認証に関連する追加情報（トークンIDや認証世代など）
+    @Column({ type: 'jsonb' })
+    authInfo!: Record<string, any> | null; // 認証に関する追加情報（UAやIPのハッシュ等）
 
     @Column({ nullable: true, type: 'timestamptz' })
     expiresAt?: Date;  // セッションの有効期限（無効化された場合は現在の日時に設定）
@@ -178,8 +196,71 @@ export class SessionEntity extends MyBaseEntity {
     @Column({ type: 'timestamptz' })
     lastActiveAt!: Date;  // 最後のアクティビティ日時
 
-    @Column({ nullable: true })
-    deviceInfo?: string;  // デバイス情報
+    @Column({ type: 'jsonb', nullable: true })
+    deviceInfo?: Record<string, any> | null; // デバイス情報
+
+    @Column({ type: 'enum', enum: SessionStatus, default: SessionStatus.Active })
+    status!: SessionStatus;
+}
+
+@Entity()
+@Index(['orgKey', 'userId', 'sid'])
+@Index(['orgKey', 'jti'])
+export class SessionRefreshEntity extends MyBaseEntity {
+    @Column({ type: 'uuid' })
+    userId!: string;
+
+    @Column({ type: 'uuid' })
+    sid!: string;
+
+    @Column()
+    jti!: string;
+
+    @Column()
+    hash!: string; // refreshトークンのハッシュ
+
+    @Column()
+    salt!: string; // per-token salt
+
+    @Column({ type: 'integer', default: 0 })
+    authGeneration!: number;
+
+    @Column({ default: true })
+    current!: boolean; // 最新トークンかどうか
+
+    @Column({ default: false })
+    revoked!: boolean; // 失効済みフラグ
+
+    @Column({ type: 'timestamptz', nullable: true })
+    rotatedAt!: Date | null;
+
+    @Column({ type: 'timestamptz' })
+    expiresAt!: Date; // 最大存続期限
+
+    @Column({ type: 'jsonb', nullable: true })
+    deviceInfo?: Record<string, any> | null; // デバイス情報
+}
+
+@Entity()
+export class OAuthStateEntity extends MyBaseEntity {
+    @Column({ type: 'uuid' })
+    @Index()
+    state!: string;
+
+    @Column()
+    provider!: string; // mattermost, box, gitlab,,,
+
+    @Column({ type: 'uuid', nullable: true })
+    userId?: string | null;
+
+    @Column({ type: 'timestamptz' })
+    expiresAt!: Date; // 最大存続期限
+
+    @Column({ type: 'jsonb' })
+    meta!: Record<string, any> | null; // UAやIPのハッシュ等
+
+    @Column({ type: 'enum', enum: OnetimeStatus, default: OnetimeStatus.Unused })
+    status!: OnetimeStatus;
 }
 
 // TODO ユーザー登録内容変更履歴管理テーブル。いつか作りたいけど今はログがあるから後回し。
@@ -296,6 +377,12 @@ export enum OAuthAccountStatus {
     DISCONNECTED = 'DISCONNECTED', // ユーザーがアカウントの接続を解除した状態
 }
 
+//   CREATE TABLE o_auth_account_entity_bk AS
+//   SELECT id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,provider,provider_user_id,provider_email,access_token,refresh_token,token_expires_at,token_body,user_info,status,label,org_key,id_token FROM o_auth_account_entity; 
+
+//   DROP TABLE o_auth_account_entity;
+//   INSERT INTO o_auth_account_entity(id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,provider,provider_user_id,provider_email,access_token,refresh_token,token_expires_at,token_body,user_info,status,label,org_key,id_token) 
+//   SELECT id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,provider,provider_user_id,provider_email,access_token,refresh_token,token_expires_at,token_body::jsonb,user_info::jsonb,status,label,org_key,id_token FROM o_auth_account_entity_bk; 
 @Entity()
 @Index(['orgKey', 'userId', 'provider', 'providerUserId'], { unique: true })
 export class OAuthAccountEntity extends MyBaseEntity {
@@ -324,13 +411,16 @@ export class OAuthAccountEntity extends MyBaseEntity {
     refreshToken?: string;
 
     @Column({ nullable: true })
+    idToken?: string;
+
+    @Column({ nullable: true })
     tokenExpiresAt?: Date;
 
-    @Column({ nullable: true })
-    tokenBody!: string;
+    @Column({ type: 'jsonb', nullable: true })
+    tokenBody!: Record<string, any> | null;
 
-    @Column({ nullable: true })
-    userInfo!: string;
+    @Column({ type: 'jsonb', nullable: true })
+    userInfo!: Record<string, any> | null;
 
     @Column({ type: 'enum', enum: OAuthAccountStatus, default: OAuthAccountStatus.ACTIVE })
     status!: OAuthAccountStatus;

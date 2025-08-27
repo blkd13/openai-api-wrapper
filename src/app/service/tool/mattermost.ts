@@ -1,13 +1,13 @@
 import { In } from 'typeorm';
 
-import { MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
-import { UserRequest } from '../models/info.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
-import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
+import { MattermostChannel, MattermostUser } from '../../agent/api-mattermost/api.js';
+import { MyToolType, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
+import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
-import { GetChannelsPostsResponse, MattermostChannel, MattermostUser } from '../../agent/api-mattermost/api.js';
 import { MmUserEntity } from '../entity/api-mattermost.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../entity/project-models.entity.js';
+import { UserRequest } from '../models/info.js';
 import { getOAuthAccountForTool, reform } from './common.js';
 
 
@@ -263,7 +263,7 @@ export async function mattermostFunctionDefinitions(
                 exclude_policy_constrained?: boolean
             }): Promise<any> => {
                 const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
-                const userInfo = JSON.parse(oAuthAccount.userInfo) as MattermostUser;
+                const userInfo = oAuthAccount.userInfo as MattermostUser;
 
                 // クエリパラメータの構築
                 const queryParams = new URLSearchParams();

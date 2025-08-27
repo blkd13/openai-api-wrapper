@@ -1,25 +1,25 @@
-import { NextFunction, Request, Response } from 'express';
-import { body, param, query, validationResult } from 'express-validator';
-import { EntityManager, EntityNotFoundError, In } from 'typeorm';
+import * as crypto from 'crypto';
+import { Request, Response } from 'express';
+import { body, param, query } from 'express-validator';
 import { promises as fs } from 'fs';
-import { lastValueFrom, map } from 'rxjs';
+import sizeOf from 'image-size';
 import { detect } from 'jschardet';
 import * as path from 'path';
-import * as crypto from 'crypto';
-import sizeOf from 'image-size';
+import { lastValueFrom } from 'rxjs';
+import { EntityManager, EntityNotFoundError, In } from 'typeorm';
 
+import { convertPptxToPdf, detectMimeType, getMetaDataFromFile } from '../../common/media-funcs.js';
+import { disabledDirectoryList, disabledFilenameList, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
+import { convertPdf, convertToPdfMimeList } from '../../common/pdf-funcs.js';
+import { Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
-import { FileEntity, FileTagEntity, FileVersionEntity, FileAccessEntity, FileBodyEntity, FileGroupEntity } from '../entity/file-models.entity.js';
+import { FileAccessEntity, FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
 import { ProjectEntity, TeamMemberEntity } from '../entity/project-models.entity.js';
-import { FileGroupType, ProjectVisibility, TeamMemberRoleType } from '../models/values.js';
-import { UserRequest } from '../models/info.js';
 import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 import { validationErrorHandler } from '../middleware/validation.js';
-import { convertPptxToPdf, convertAndOptimizeImage, detectMimeType, getMetaDataFromFile, minimizeVideoForMinutes, normalizeAndMinimizeAudio } from '../../common/media-funcs.js';
-import { Utils } from '../../common/utils.js';
+import { UserRequest } from '../models/info.js';
+import { FileGroupType, ProjectVisibility, TeamMemberRoleType } from '../models/values.js';
 import { geminiCountTokensByFile } from './chat-by-project-model.js';
-import { plainMime, plainExtensions, invalidMimeList, disabledFilenameList, disabledDirectoryList } from '../../common/openai-api-wrapper.js';
-import { convertPdf, convertToPdfMimeList } from '../../common/pdf-funcs.js';
 
 export const { UPLOAD_DIR } = process.env;
 
@@ -149,9 +149,9 @@ export async function convertToMapSet(tm: EntityManager, contents: { filePath: s
     });
 
     const tokenCountFileList = Object.entries(hashMap).map(([sha256, value]) => {
-        if (value.tokenCount && value.tokenCount['gemini-1.5-flash']) {
+        if (value.tokenCount && value.tokenCount['gemini-2.5-flash']) {
             // 既にトークンカウント済みの場合はスキップ
-            // console.log(value.tokenCount['gemini-1.5-flash'] + ' tokens for ' + sha256);
+            // console.log(value.tokenCount['gemini-2.5-flash'] + ' tokens for ' + sha256);
             return null;
         } else {
             if (value.fileType.startsWith('text/') || plainExtensions.includes(value.innerPath) || plainMime.includes(value.fileType) || value.fileType.endsWith('+xml') || mapSet.hashMap[sha256].base64Data.startsWith('IyEv')) {
