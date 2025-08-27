@@ -46,9 +46,6 @@ export enum OnetimeStatus {
     Expired = 'Expired',          // 期限切れ
     Revoked = 'Revoked',          // 取り消し済み
 }
-//   CREATE TABLE invite_entity_bk AS SELECT * FROM invite_entity;
-//   INSERT INTO invite_entity (id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data,"limit",org_key,status) SELECT id,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data::jsonb,"limit",org_key,status FROM invite_entity_bk;
-//   DROP TABLE invite_entity_bk;
 
 // CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 // SELECT uuid_generate_v4();
@@ -121,7 +118,7 @@ export class UserRoleEntity extends MyBaseEntity implements UserRole {
 // CREATE TABLE invite_entity_bk AS SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data,status,"limit" FROM invite_entity;
 // DROP   TABLE invite_entity;
 // INSERT INTO invite_entity(id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data,status,expires_at) 
-// SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data::jsonb,status,to_timestamp("limit" / 1000.0)::timestamptz FROM invite_entity_bk;
+// SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,seq,email,type,onetime_token,data::jsonb,initcap(status)::invite_entity_status_enum,to_timestamp("limit" / 1000.0)::timestamptz FROM invite_entity_bk;
 // DROP   TABLE invite_entity_bk;
 @Entity()
 export class InviteEntity extends MyBaseEntity {
@@ -170,11 +167,11 @@ export class LoginHistoryEntity extends MyBaseEntity {
 }
 
 //   CREATE TABLE session_entity_bk AS 
-//   SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,login_date,provider,auth_info,expires_at,last_active_at,device_info,status::text FROM session_entity;
+//   SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,login_date,provider,auth_info,expires_at,last_active_at,device_info FROM session_entity;
 //   DROP TABLE session_entity;
 //   INSERT INTO session_entity(id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,login_date,provider,auth_info,expires_at,last_active_at,device_info)
 //   SELECT id,org_key,created_by,updated_by,created_at,updated_at,created_ip,updated_ip,user_id,login_date,provider,auth_info::jsonb,expires_at,last_active_at,device_info::jsonb FROM session_entity_bk;
-
+//   DROP TABLE session_entity_bk;
 @Entity()
 @Index(['orgKey', 'userId'])
 export class SessionEntity extends MyBaseEntity {
