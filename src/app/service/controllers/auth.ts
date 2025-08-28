@@ -41,6 +41,7 @@ export const JWT_STAT_PARAM = { algorithm: 'HS256' as Algorithm, issuer: JWT_ISS
 import { getAxios } from '../../common/http-client.js';
 import { getAccessToken } from '../api/api-proxy.js';
 import { safeWhere } from '../entity/base.js';
+import { redirectingPage } from './auth/page.js';
 import { genTokenSet, verifyRefresh } from './auth/token.js';
 import { decrypt, encrypt } from './tool-call.js';
 
@@ -920,9 +921,10 @@ export const userLoginOAuth2Callback = [
                     try {
                         // console.log(`OAuth2 login success: ${existing.provider} ${oAuthUserInfo.email} ${existing.meta?.query.fromUrl || e.pathTop}`);
                         console.log(`OAuth2 login success: provider=${existing.provider}, userId=${user.id}`);
-                        res.redirect(`${existing.meta?.query.fromUrl || e.pathTop}`);
+                        // res.redirect(`${existing.meta?.query.fromUrl || e.pathTop}`);
                         // // HTMLをクライアントに送信
                         // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title><meta http-equiv="refresh" content="0; URL=${decoded.query.fromUrl || e.pathTop}"></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
+                        res.send(redirectingPage(existing.meta?.query.fromUrl || e.pathTop));
                         return;
                     } catch (err) {
                         throw new Error(`OAuth2 flow state verification failed. ${err}`);
@@ -1450,7 +1452,7 @@ export const refresh = [
         } catch (err) {
             // // リフレッシュトークン無し
             console.log(`リフレッシュトークンの検証に失敗しました。`);
-            console.log(err);
+            // console.log(err);
             res.status(401).json({ message: 'トークンの検証に失敗しました。再度ログインしてください。' });
         }
     }
