@@ -227,7 +227,7 @@ async function fileEntity() {
     // toolCallPartListの取得
     const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
     const client = my_vertexai.client as VertexAI;
-    const generativeModel = client.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
+    const generativeModel = client.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
     let toolCallPartList = await ds.getRepository(ToolCallPartEntity).findBy({
         type: In([ToolCallPartType.CALL, ToolCallPartType.COMMAND, ToolCallPartType.RESULT]),
     }) as ToolCallPartEntity[];

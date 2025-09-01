@@ -30,7 +30,7 @@ export const { ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_E
 Utils.requiredEnvVarsCheck({
     ACCESS_TOKEN_JWT_SECRET, ACCESS_TOKEN_EXPIRES_IN, REFRESH_TOKEN_EXPIRES_IN, API_TOKEN_EXPIRES_IN, ONETIME_TOKEN_JWT_SECRET, ONETIME_TOKEN_EXPIRES_IN,
     API_TOKEN_FOR_CONSOLE_EXPIRES_IN,
-    API_KEY_PEPPER, SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_DOMAIN_WHITELIST, MAIL_EXPIRES_IN,
+    API_KEY_PEPPER, SMTP_USER, SMTP_PASSWORD, SMTP_ALIAS, FRONT_BASE_URL, SMTP_SERVER, SMTP_PORT, SMTP_DOMAIN, MAIL_EXPIRES_IN,
     OAUTH2_PATH_MAIL_MESSAGE, OAUTH2_PATH_MAIL_AUTH,
     JWT_ISS, JWT_AUD,
 });
@@ -245,7 +245,7 @@ export async function verifyApiKey(xRealIp: string, manager: EntityManager, raw:
     return userTokenPayload;
 }
 
-const genApiTokenCore = async (user: UserTokenPayloadWithRole, label: string, deviceInfo: any, xRealIp: string, manager: EntityManager, expirationTime: number): Promise<{ entity: OAuthAccountEntity, apiKey: string } | null> => {
+const genApiTokenCore = async (user: UserTokenPayloadWithRole, label: string, deviceInfo: any, xRealIp: string, manager: EntityManager, expirationTime: number): Promise<{ entity: OAuthAccountEntity, apiKey: string }> => {
     const loginHistory = new LoginHistoryEntity();
     loginHistory.userId = user.id; // ユーザー認証後に設定
     loginHistory.ipAddress = xRealIp;
@@ -288,7 +288,7 @@ const genApiTokenCore = async (user: UserTokenPayloadWithRole, label: string, de
 
     const exists = await manager.getRepository(OAuthAccountEntity).findOneBy({ orgKey: user.orgKey, userId: user.id, provider: `local-${label}` });
     if (exists && exists.status === OAuthAccountStatus.ACTIVE) {
-        return null;
+        throw new Error('APIトークンは既に存在します。');
     } else { }
 
     const row = new SessionRefreshEntity();
@@ -355,15 +355,19 @@ export const genApiKey = [
         const xRealIp = req.ip || '';
 
         const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
-        await ds.transaction(async (manager) => {
-            // セッション有効期限を設定
-            const apiKeyObj = await genApiTokenCore(user, label, deviceInfo, xRealIp, manager, expirationTime);
-            if (!apiKeyObj) {
-                res.status(400).json({ error: 'APIトークンは既に存在します。' });
-                return;
-            } else { }
-            res.json({ apiKey: apiKeyObj.apiKey });
-        });
+        try {
+            await ds.transaction(async (manager) => {
+                try {
+                    // セッション有効期限を設定
+                    const apiKeyObj = await genApiTokenCore(user, label, deviceInfo, xRealIp, manager, expirationTime);
+                    res.json({ apiKey: apiKeyObj.apiKey });
+                } catch (error) {
+                    res.status(400).json({ error: 'APIトークンは既に存在します。' });
+                }
+            });
+        } catch (error) {
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
     }
 ];
 
@@ -797,7 +801,7 @@ export const userLoginOAuth2Callback = [
                 } else { }
 
                 // emailを事実上の鍵として紐づけに行くので、メアドが変なやつじゃないかはちゃんとチェックする。
-                if (MAIL_DOMAIN_WHITELIST.split(',').find(domain => oAuthUserInfo.email.endsWith(`@${domain}`))) {
+                if (!MAIL_DOMAIN_WHITELIST || MAIL_DOMAIN_WHITELIST.split(',').find(domain => oAuthUserInfo.email.endsWith(`@${domain}`))) {
                 } else {
                     // whiltelist登録されているドメインのアドレス以外は登録禁止。
                     throw new Error(JSON.stringify({
@@ -923,8 +927,9 @@ export const userLoginOAuth2Callback = [
                         console.log(`OAuth2 login success: provider=${existing.provider}, userId=${user.id}`);
                         // res.redirect(`${existing.meta?.query.fromUrl || e.pathTop}`);
                         // // HTMLをクライアントに送信
-                        // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title><meta http-equiv="refresh" content="0; URL=${decoded.query.fromUrl || e.pathTop}"></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
+                        // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title><meta http-equiv="refresh" content="0; URL=${existing.meta?.query.fromUrl || e.pathTop}"></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
                         res.send(redirectingPage(existing.meta?.query.fromUrl || e.pathTop));
+                        // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
                         return;
                     } catch (err) {
                         throw new Error(`OAuth2 flow state verification failed. ${err}`);
@@ -1846,7 +1851,7 @@ export const checkProjectPermission = [
                         }
                         return chunks;
                     }
-                    splitString(encodeURIComponent(decrypt(apiTokenEntity.tokenBody?.apiKey || ''))).forEach((chunk, index) => {
+                    splitString(encodeURIComponent(ent.apiKey)).forEach((chunk, index) => {
                         res.setHeader(`X-API-Key_${index + 1}`, chunk);
                     });
                     res.status(200).json({ message: 'アクセス許可' });

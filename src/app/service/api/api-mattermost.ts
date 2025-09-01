@@ -300,7 +300,7 @@ export const mattermostToAi = [
 
         const initialArgs = {
             args: {
-                model: "gemini-1.5-pro" as ChatModel,
+                model: "gemini-2.5-pro" as ChatModel,
                 temperature: 0.7,
                 top_p: 1,
                 max_tokens: 8192,

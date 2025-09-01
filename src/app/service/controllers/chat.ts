@@ -323,7 +323,7 @@ export const geminiCountTokens = [
         try {
             const my_vertexai = (await getAIProvider(req.info.user, args.model)).client as MyVertexAiClient;
             const client = my_vertexai.client as VertexAI;
-            const generativeModel = client.preview.getGenerativeModel({
+            const generativeModel = client.getGenerativeModel({
                 model: 'gemini-2.5-flash',
                 safetySettings: [
                     // { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE, },

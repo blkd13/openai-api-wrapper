@@ -1054,7 +1054,7 @@ class RunBit {
                 let isOver128 = false;
                 runPromise = generateContentStream(req.region, req.resourcePath, this.provider.client.getAccessToken(), args, req.apiEndpoint, req.generationConfig, req.safetySettings, req.tools, {}).then(async streamingResp => {
                     // かつてはModelを使って投げていた。
-                    // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
+                    // runPromise = vertex_ai.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
 
                     let tokenBuilder: string = '';
 
@@ -1281,7 +1281,7 @@ class RunBit {
                 // }
                 runPromise = this.provider.client.client.getGenerativeModel({ model: commonArgs.model }).generateContentStream(reqGemini).then(async streamingResp => {
                     // かつてはModelを使って投げていた。
-                    // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
+                    // runPromise = vertex_ai.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
 
                     let tokenBuilder: string = '';
 
@@ -2776,7 +2776,7 @@ export class OpenAIApiWrapper {
         const inProgressQueue = this.inProgressQueue;
         for (const key of Object.keys(waitQueue)) {
             // 未知モデル名の場合はlimit=1のObjectを追加しておく
-            if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { maxTokens: 40960000, limitRequests: 10, limitTokens: 10, remainingRequests: 10, remainingTokens: 10, resetRequests: '', resetTokens: '' };
+            if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { maxTokens: 4096000000000, limitRequests: 10, limitTokens: 4096000000000, remainingRequests: 10, remainingTokens: 4096000000000, resetRequests: '', resetTokens: '' };
             // console.log(`fire ${key} x waitQueue:${waitQueue[key].length} inProgressQueue:${inProgressQueue[key].length} reqlimit:${this.currentRatelimit[key].limitRequests} toklimit:${this.currentRatelimit[key].limitTokens} remainingRequests:${this.currentRatelimit[key].remainingRequests} remaingTokens:${this.currentRatelimit[key].remainingTokens}`);
             const ratelimitObj = this.currentRatelimit[key];
             // console.log(`fire ${key} x waitQueue:${waitQueue[key].length} inProgressQueue:${inProgressQueue[key].length} reqlimit:${ratelimitObj.limitRequests} toklimit:${ratelimitObj.limitTokens} remainingRequests:${ratelimitObj.remainingRequests} remaingTokens:${ratelimitObj.remainingTokens}`);

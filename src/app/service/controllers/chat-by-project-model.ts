@@ -809,7 +809,7 @@ export const chatCompletionByProjectModel = [
 
             const my_vertexai = ((await getAIProvider(req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient);
             const client = my_vertexai.client;
-            const generativeModel = client.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
+            const generativeModel = client.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
             const idList = id.split('|');
             const { messageArgsSetList } = await buildArgs(req.info.user, type, idList);
@@ -1784,7 +1784,7 @@ export const geminiCountTokensByProjectModel = [
                             const req: GenerateContentRequest = mapForGemini(args);
                             const countCharsObj = countChars(args);
                             // console.dir(req, { depth: null });
-                            const generativeModel = client.client.preview.getGenerativeModel({
+                            const generativeModel = client.client.getGenerativeModel({
                                 model: COUNT_TOKEN_MODEL,
                                 safetySettings: [],
                             });
@@ -1889,7 +1889,7 @@ export const geminiCountTokensByThread = [
 export async function geminiCountTokensByContentPart(transactionalEntityManager: EntityManager, contents: ContentPartEntity[], user: UserTokenPayloadWithRole, model: string = COUNT_TOKEN_MODEL): Promise<ContentPartEntity[]> {
     const client = ((await getAIProvider(user, model)).client as MyVertexAiClient).client;
     // console.dir(contents, { depth: null });
-    const generativeModel = client.preview.getGenerativeModel({
+    const generativeModel = client.getGenerativeModel({
         model, safetySettings: [],
     });
 
@@ -1970,7 +1970,7 @@ export async function geminiCountTokensByContentPart(transactionalEntityManager:
 export async function geminiCountTokensByFile(transactionalEntityManager: EntityManager, fileList: { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }[], user: UserTokenPayloadWithRole, model: string = COUNT_TOKEN_MODEL): Promise<FileBodyEntity[]> {
     const my_vertexai = ((await getAIProvider(user, model)).client as MyVertexAiClient);
     const client = my_vertexai.client;
-    const generativeModel = client.preview.getGenerativeModel({
+    const generativeModel = client.getGenerativeModel({
         model, safetySettings: [],
     });
 
@@ -2168,7 +2168,7 @@ export const geminiCreateContextCacheByProjectModel = [
                         const countCharsObj = countChars(args);
                         const my_vertexai = (await getAIProvider(req.info.user, model)).client as MyVertexAiClient;
                         const client = my_vertexai.client;
-                        const generativeModel = client.preview.getGenerativeModel({
+                        const generativeModel = client.getGenerativeModel({
                             model: COUNT_TOKEN_MODEL,
                             safetySettings: [],
                         });

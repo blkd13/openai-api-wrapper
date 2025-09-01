@@ -263,7 +263,7 @@ export async function main() {
 
         const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
         const client = my_vertexai.client as VertexAI;
-        const generativeModel = client.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
+        const generativeModel = client.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
         // toolCallPartListの取得
         const toolCallPartList = await ds.getRepository(ToolCallPartEntity).findBy({
