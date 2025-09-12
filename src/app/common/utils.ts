@@ -1011,6 +1011,9 @@ export class Utils {
         return JSON.parse(JSON.stringify(copied));
     }
 
+    static sleep(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
 }
 
 /**

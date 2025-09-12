@@ -39,12 +39,16 @@ export async function getAccessToken(orgKey: string, userId: string, provider: s
             }
 
             // console.log(token.data);
-            oAuthAccount.accessToken = token.data.access_token ? encrypt(token.data.access_token) : token.data.access_token;
+            token.data.access_token = token.data.access_token ? encrypt(token.data.access_token) : token.data.access_token;
             // リフレッシュトークン
-            oAuthAccount.refreshToken = token.data.refresh_token ? encrypt(token.data.refresh_token) : token.data.refresh_token;
+            token.data.refresh_token = token.data.refresh_token ? encrypt(token.data.refresh_token) : token.data.refresh_token;
             // IDトークン
-            oAuthAccount.idToken = token.data.id_token ? encrypt(token.data.id_token) : token.data.id_token;
+            token.data.id_token = token.data.id_token ? encrypt(token.data.id_token) : token.data.id_token;
 
+            oAuthAccount.accessToken = token.data.access_token;
+            oAuthAccount.refreshToken = token.data.refresh_token;
+            oAuthAccount.idToken = token.data.id_token;
+            // トークン情報全体を保存
             oAuthAccount.tokenBody = token.data;
             // 現在の時刻にexpiresInSeconds（秒）を加算して、有効期限のDateオブジェクトを作成
             if (token.data.expires_in) {
@@ -167,8 +171,6 @@ export const getOAuthApiProxy = [
                             // proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
                             proxyReq.write(bodyData);
                         } else { }
-
-                        // console.log(`proxyReq: ${req.method} ${req.url} ${target}${proxyReq.path} ${accessToken ? 'with token' : 'without token'}`);
                     },
                     proxyRes: async (proxyRes, req, res) => {
                         // // 必要に応じてヘッダーを設定

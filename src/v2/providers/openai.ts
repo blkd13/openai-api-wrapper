@@ -1,17 +1,12 @@
 // src/providers/openai.ts
 import OpenAI from 'openai';
+import { Stream } from 'openai/streaming.js';
 import { Observable, Subscriber } from 'rxjs';
-import {
-    ChatCompletionCreateParamsBase,
-    ChatCompletionChunk
-} from 'openai/resources/chat/completions';
-import { APIPromise, RequestOptions } from 'openai/core';
-import { Stream } from 'openai/streaming';
 
+import { SHORT_NAME } from '../config/model-definition.js';
+import { TokenCounter } from '../core/token-counter.js';
 import { IAiProvider, RateLimit, TokenUsage } from '../types/common.js';
 import { Logger } from '../utils/logger.js';
-import { TokenCounter } from '../core/token-counter.js';
-import { COST_TABLE, SHORT_NAME } from '../config/model-definition.js';
 import { normalizeMessages } from '../utils/message-formatter.js';
 
 /**
@@ -64,10 +59,10 @@ export class OpenAIProvider implements IAiProvider {
      * @returns Observable stream of completion chunks
      */
     chatCompletionStream(
-        args: ChatCompletionCreateParamsBase,
-        options: RequestOptions
-    ): Observable<ChatCompletionChunk> {
-        return new Observable<ChatCompletionChunk>((subscriber) => {
+        args: OpenAI.ChatCompletionCreateParams,
+        options: OpenAI.RequestOptions
+    ): Observable<OpenAI.ChatCompletionChunk> {
+        return new Observable<OpenAI.ChatCompletionChunk>((subscriber) => {
             // Force streaming mode
             args.stream = true;
             args.stream_options = { include_usage: true };
@@ -89,9 +84,9 @@ export class OpenAIProvider implements IAiProvider {
      * @param subscriber Subscriber to emit results to
      */
     private executeStreamRequest(
-        args: ChatCompletionCreateParamsBase,
-        options: RequestOptions,
-        subscriber: Subscriber<ChatCompletionChunk>
+        args: OpenAI.ChatCompletionCreateParams,
+        options: OpenAI.RequestOptions,
+        subscriber: Subscriber<OpenAI.ChatCompletionChunk>
     ): void {
         const modelShort = SHORT_NAME[args.model] || args.model;
         const tokenCounter = new TokenCounter(args.model as any);
@@ -115,14 +110,14 @@ export class OpenAIProvider implements IAiProvider {
         );
 
         // Make the API call
-        (this.client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
+        (this.client.chat.completions.create(args, options))
             .withResponse()
             .then(response => {
                 // Update rate limits from headers
                 this.updateRateLimitsFromHeaders(modelShort, response.response.headers);
 
                 // Process the streaming response
-                const reader = response.data.toReadableStream().getReader();
+                const reader = (response.data as Stream<OpenAI.ChatCompletionChunk>).toReadableStream().getReader();
                 let tokenBuilder = '';
 
                 const readStream = async () => {
@@ -142,7 +137,7 @@ export class OpenAIProvider implements IAiProvider {
                         const content = new TextDecoder().decode(value);
                         if (!content) continue;
 
-                        const chunk: ChatCompletionChunk = JSON.parse(content);
+                        const chunk: OpenAI.ChatCompletionChunk = JSON.parse(content);
 
                         // Build token string for counting
                         tokenBuilder += chunk.choices

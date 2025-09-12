@@ -1,10 +1,26 @@
-import { fileURLToPath } from 'url';
 import * as fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { BaseStep, MultiStep, StepOutputFormat } from "../../common/base-step.js";
+import fss from '../../common/fss.js';
 import { GPTModels } from '../../common/model-definition.js';
 import { Utils } from '../../common/utils.js';
-import fss from '../../common/fss.js';
-import path from 'path';
+
+function getFilesRecursively(directory: string): string[] {
+    const filesInDirectory = fs.readdirSync(directory);
+    let filesList: string[] = [];
+
+    for (const file of filesInDirectory) {
+        const absolutePath = path.join(directory, file);
+        if (fs.statSync(absolutePath).isDirectory()) {
+            filesList = [...filesList, ...getFilesRecursively(absolutePath)];
+        } else {
+            filesList.push(absolutePath);
+        }
+    }
+
+    return filesList;
+}
 
 /**
  * runner.tsでは以下の3つが必須。
@@ -24,9 +40,6 @@ abstract class BaseStepSample extends BaseStep {
     temperature: number = 0.0; // ランダム度合い。0に近いほど毎回同じ結果になる。プログラムのようなものは 0 に、文章系は 1 にするのが良い。
     format = StepOutputFormat.MARKDOWN;
 }
-
-const SRC_JAVA = 'src_java/';
-const SRC_GO = 'src_go/';
 
 /**
  * 最初のプロンプト。
@@ -109,10 +122,10 @@ class Step0010_Usecase extends MultiStep {
                                 content: `変換サンプルは以下の通りです。注意深く参考にしてください。`,
                                 children: [{
                                     title: `変換前`,
-                                    content: Utils.setMarkdownBlock(fs.readFileSync(SRC_JAVA + 'sample.java', 'utf-8'), 'java'),
+                                    content: Utils.setMarkdownBlock(fs.readFileSync('./src/main/java/example/usecase/SampleUsecase.java', 'utf-8'), 'java'),
                                 }, {
                                     title: `変換後`,
-                                    content: Utils.setMarkdownBlock(fs.readFileSync(SRC_GO + 'sample.go', 'utf-8'), 'go'),
+                                    content: Utils.setMarkdownBlock(fs.readFileSync('sample-cc/domain/usecase/refactor_usecase_SampleUsecase.go', 'utf-8'), 'go'),
                                 }]
                             },
                             {
@@ -124,7 +137,7 @@ class Step0010_Usecase extends MultiStep {
                 ];
             }
         }
-        this.fileNameList = fss.getFilesRecursively(SRC_JAVA).filter(filename => filename.endsWith('Usecase.java'));
+        this.fileNameList = getFilesRecursively('./src/main/java/example/usecase/').filter(filename => filename.endsWith('Usecase.java'));
         // childStepListを組み立て。
         this.childStepList = this.fileNameList.map(targetName => new Step0010_UsecaseChil(targetName));
     }
@@ -181,10 +194,10 @@ class Step0010_Controller extends MultiStep {
                                 content: `変換サンプルは以下の通りです。注意深く参考にしてください。`,
                                 children: [{
                                     title: `変換前`,
-                                    content: Utils.setMarkdownBlock(fs.readFileSync(`${SRC_JAVA}/SampleController.java`, 'utf-8'), 'java'),
+                                    content: Utils.setMarkdownBlock(fs.readFileSync('./src/main/java/example/usecase/SampleUsecase.java', 'utf-8'), 'java'),
                                 }, {
                                     title: `変換後`,
-                                    content: Utils.setMarkdownBlock(fs.readFileSync(`${SRC_GO}/SampleController.go`, 'utf-8'), 'go'),
+                                    content: Utils.setMarkdownBlock(fs.readFileSync('./src/main/go/example/usecase/SampleUsecase.go', 'utf-8'), 'go'),
                                 }]
                             },
                             {
@@ -196,7 +209,7 @@ class Step0010_Controller extends MultiStep {
                 ];
             }
         }
-        this.fileNameList = fss.getFilesRecursively(SRC_JAVA).filter(filename => filename.endsWith('Controller.java'));
+        this.fileNameList = getFilesRecursively('./src/main/java/example/usecase/').filter(filename => filename.endsWith('Controller.java'));
         // childStepListを組み立て。
         this.childStepList = this.fileNameList.map(targetName => new Step0010_ControllerChil(targetName));
     }
@@ -252,10 +265,10 @@ class Step0010_RestRepository extends MultiStep {
                                 content: `変換サンプルは以下の通りです。注意深く参考にしてください。`,
                                 children: [{
                                     title: `変換前`,
-                                    content: Utils.setMarkdownBlock(fs.readFileSync(`${SRC_JAVA}/SampleRestRepository.java`, 'utf-8'), 'java'),
+                                    content: Utils.setMarkdownBlock(fs.readFileSync('./src/main/java/example/usecase/SampleUsecase.java', 'utf-8'), 'java'),
                                 }, {
                                     title: `変換後`,
-                                    content: Utils.setMarkdownBlock(fs.readFileSync(`${SRC_JAVA}/SampleRestRepository.go`, 'utf-8'), 'go'),
+                                    content: Utils.setMarkdownBlock(fs.readFileSync('./src/main/go/example/usecase/SampleUsecase.go', 'utf-8'), 'go'),
                                 }]
                             },
                             {
@@ -267,7 +280,7 @@ class Step0010_RestRepository extends MultiStep {
                 ];
             }
         }
-        this.fileNameList = fss.getFilesRecursively(SRC_JAVA).filter(filename => filename.endsWith('Repository.java'));
+        this.fileNameList = getFilesRecursively('./src/main/java/example/usecase/').filter(filename => filename.endsWith('Repository.java'));
         // childStepListを組み立て。
         this.childStepList = this.fileNameList.map(targetName => new Step0010_RestRepositoryChil(targetName));
     }
@@ -320,10 +333,10 @@ class Step0010_Refactor extends MultiStep {
                                 content: ``,
                                 children: [{
                                     title: `リファクタリング前`,
-                                    content: Utils.setMarkdownBlock(fs.readFileSync(`${SRC_GO}_bef.go`, 'utf-8'), 'go'),
+                                    content: Utils.setMarkdownBlock(fs.readFileSync('./src/main/go/example/usecase/example_usecase_SampleUsecase_bef.go', 'utf-8'), 'go'),
                                 }, {
                                     title: `リファクタリング後`,
-                                    content: Utils.setMarkdownBlock(fs.readFileSync(`${SRC_GO}.go`, 'utf-8'), 'go'),
+                                    content: Utils.setMarkdownBlock(fs.readFileSync('./src/main/go/example/usecase/example_usecase_SampleUsecase.go', 'utf-8'), 'go'),
                                 }]
                             },
                             {
@@ -335,7 +348,7 @@ class Step0010_Refactor extends MultiStep {
                 ];
             }
         }
-        this.fileNameList = fss.getFilesRecursively(SRC_GO).filter(filename => path.basename(filename).startsWith('star_') || path.basename(filename).startsWith('usecase_'));
+        this.fileNameList = getFilesRecursively('./domain/usecase/').filter(filename => path.basename(filename).startsWith('example_') || path.basename(filename).startsWith('usecase_'));
         // childStepListを組み立て。
         this.childStepList = this.fileNameList.map(targetName => new Step0010_RefactorChil(targetName));
     }
@@ -388,10 +401,10 @@ class Step0010_Refactor2 extends MultiStep {
                                 content: ``,
                                 children: [{
                                     title: `リファクタリング前`,
-                                    content: Utils.setMarkdownBlock(fs.readFileSync('sample.go_bef', 'utf-8'), 'go'),
+                                    content: Utils.setMarkdownBlock(fs.readFileSync('./adapter/httpclient/SampleRepository.go_bef', 'utf-8'), 'go'),
                                 }, {
                                     title: `リファクタリング後`,
-                                    content: Utils.setMarkdownBlock(fs.readFileSync('sample.go_aft', 'utf-8'), 'go'),
+                                    content: Utils.setMarkdownBlock(fs.readFileSync('./adapter/httpclient/SampleRepository.go_aft', 'utf-8'), 'go'),
                                 }]
                             },
                             {
@@ -403,8 +416,7 @@ class Step0010_Refactor2 extends MultiStep {
                 ];
             }
         }
-
-        this.fileNameList = fss.getFilesRecursively(SRC_GO).filter(filename => path.basename(filename).endsWith('.go'));
+        this.fileNameList = getFilesRecursively('./adapter/httpclient/').filter(filename => path.basename(filename).endsWith('.go'));
         // childStepListを組み立て。
         this.childStepList = this.fileNameList.map(targetName => new Step0010_Refactor2Chil(targetName));
     }
@@ -439,29 +451,29 @@ class Step0010_Refactor2 extends MultiStep {
 export async function main() {
     let obj;
     return Promise.resolve().then(() => {
-        // obj = new Step0000_FirstStep();
+        //     // obj = new Step0000_FirstStep();
+        //     // obj.initPrompt();
+        //     // return obj.run();
+        // }).then(() => {
+        //     obj = new Step0010_Usecase();
+        //     obj.initPrompt();
+        //     // return obj.run();
+        //     // obj.postProcess(obj.childStepList.map(chil => chil.result));
+        // }).then(() => {
+        //     obj = new Step0010_Controller();
+        //     obj.initPrompt();
+        //     // return obj.run();
+        //     // obj.postProcess(obj.childStepList.map(chil => chil.result));
+        // }).then(() => {
+        //     obj = new Step0010_RestRepository()
         // obj.initPrompt();
         // return obj.run();
-    }).then(() => {
-        obj = new Step0010_Usecase();
-        obj.initPrompt();
-        // return obj.run();
-        // obj.postProcess(obj.childStepList.map(chil => chil.result));
-    }).then(() => {
-        obj = new Step0010_Controller();
-        obj.initPrompt();
-        // return obj.run();
-        // obj.postProcess(obj.childStepList.map(chil => chil.result));
-    }).then(() => {
-        obj = new Step0010_RestRepository()
-        obj.initPrompt();
-        return obj.run();
-        // obj.postProcess(obj.childStepList.map(chil => chil.result));
-    }).then(() => {
-        obj = new Step0010_Refactor()
-        obj.initPrompt();
-        // return obj.run();
-        // obj.postProcess(obj.childStepList.map(chil => chil.result));
+        //     // obj.postProcess(obj.childStepList.map(chil => chil.result));
+        // }).then(() => {
+        //     obj = new Step0010_Refactor()
+        //     obj.initPrompt();
+        //     // return obj.run();
+        //     // obj.postProcess(obj.childStepList.map(chil => chil.result));
     }).then(() => {
         obj = new Step0010_Refactor2()
         obj.initPrompt();

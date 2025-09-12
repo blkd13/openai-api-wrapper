@@ -171,7 +171,7 @@ export const getApiProviders = [
                         requireMailAuth: true
                     } as FindOptionsSelect<OAuth2Config>;
                 } else {
-                    select.oAuth2Config = false;
+                    select.oAuth2Config = {};
                 }
             }
 

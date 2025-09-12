@@ -4,7 +4,7 @@ import { BaseStep, MultiStep, StepOutputFormat } from "../../common/base-step.js
 import { Utils } from '../../common/utils.js';
 import fss from '../../common/fss.js';
 import { boxDownloadCore, downloadAllFilesInFolder } from '../..//service/api/api-box.js';
-const { BATCH_USER_ID } = process.env as { BATCH_USER_ID: string };
+const { BATCH_USER_ID, BATCH_TENANT_KEY } = process.env as { BATCH_USER_ID: string, BATCH_TENANT_KEY: string };
 
 
 import os from 'os';
@@ -45,7 +45,8 @@ export async function main() {
     let obj;
     console.log(`Box Agent RUN`);
 
-    const provider = 'box';
+    const provider = `box-${BATCH_TENANT_KEY}`;
+    const tenantKey = BATCH_TENANT_KEY;
     const userId = BATCH_USER_ID;
     const ip = ipAddress;
 
@@ -62,7 +63,7 @@ export async function main() {
         // console.log(`Files: ${allItems.filter(item => item.type === 'file').length}`);
         // console.log(`Folders: ${allItems.filter(item => item.type === 'folder').length}`);
 
-        const e = await getExtApiClient('common', userId);
+        const e = await getExtApiClient(tenantKey, userId);
 
         // 全ファイルをダウンロード（再帰的にサブフォルダも処理）
         const result = await downloadAllFilesInFolder(

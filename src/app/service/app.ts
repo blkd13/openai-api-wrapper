@@ -35,7 +35,7 @@ app.use((req, res, next) => {
 });
 
 // これはデバッグ用
-app.use(cors()); // CORS許可
+// app.use(cors()); // CORS許可
 
 // Morganのタイムスタンプをに設定
 if (process.env.TZ) { morgan.token('date', (req: Request, res: Response) => moment().tz(process.env.TZ ?? '').format()); }

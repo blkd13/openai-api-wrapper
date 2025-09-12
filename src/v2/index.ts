@@ -1,20 +1,16 @@
 // src/index.ts
+import { OpenAI } from 'openai';
 import { Observable } from 'rxjs';
-import { RequestOptions } from 'openai/core';
-import {
-    ChatCompletionCreateParamsBase,
-    ChatCompletionChunk
-} from 'openai/resources/chat/completions';
 
-import { IAiProvider } from './types/common.js';
 import { RequestQueueManager } from './core/request-queue.js';
-import { getProviderForModel, AiProviderType } from './providers/provider-factory.js';
+import { AiProviderType, getProviderForModel } from './providers/provider-factory.js';
+import { IAiProvider } from './types/common.js';
 import { Logger, LogLevel } from './utils/logger.js';
 
 /**
  * Options for AI completion requests
  */
-export interface CompletionOptions extends RequestOptions {
+export interface CompletionOptions extends OpenAI.RequestOptions {
     /** Optional label for tracking */
     label?: string;
     /** Provider override */
@@ -62,9 +58,9 @@ export class AIApiWrapper {
      * @returns Observable stream of completion chunks
      */
     chatCompletionStream(
-        args: ChatCompletionCreateParamsBase,
+        args: OpenAI.ChatCompletionCreateParams,
         options: CompletionOptions = {}
-    ): Observable<ChatCompletionChunk> {
+    ): Observable<OpenAI.ChatCompletionChunk> {
         // Ensure stream is enabled
         args.stream = true;
 
@@ -108,7 +104,8 @@ export class AIApiWrapper {
 export const aiApi = new AIApiWrapper();
 
 // Export types
-export * from './types/common.js';
-export * from './providers/provider-factory.js';
 export * from './core/token-counter.js';
+export * from './providers/provider-factory.js';
+export * from './types/common.js';
 export * from './utils/logger.js';
+

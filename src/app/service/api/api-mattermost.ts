@@ -1,23 +1,24 @@
+import { In, Not } from 'typeorm';
 import { Request, Response } from 'express';
-import { body, param } from "express-validator";
-import { In } from 'typeorm';
+import { body, param, query } from "express-validator";
 
-import { Axios } from 'axios';
-import { ChatModel } from 'openai/resources.js';
-import { MattermostChannel, MattermostEmoji, Post } from '../../agent/api-mattermost/api.js';
-import { getAxios } from '../../common/http-client.js';
-import { plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
-import { Utils } from '../../common/utils.js';
-import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
-import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../controllers/chat-by-project-model.js';
-import { convertToMapSet, handleFileUpload } from '../controllers/file-manager.js';
-import { ds } from '../db.js';
-import { MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity } from '../entity/api-mattermost.entity.js';
-import { FileAccessEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
-import { ContentPartType, FileGroupType, MessageGroupType, ProjectVisibility, ThreadGroupVisibility, ThreadStatus } from '../models/values.js';
+import { UserTokenPayload } from "../middleware/authenticate.js";
+import { MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity } from '../entity/api-mattermost.entity.js';
+import { ds } from '../db.js';
+import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
+import { Utils } from '../../common/utils.js';
+import { MattermostChannel, MattermostEmoji, MattermostPost, MattermostUser, Post } from '../../agent/api-mattermost/api.js';
+import { Axios } from 'axios';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
+import { ContentPartType, MessageGroupType, ProjectVisibility, TeamMemberRoleType, ThreadStatus, ThreadGroupVisibility, FileGroupType } from '../models/values.js';
+import { convertToMapSet, handleFileUpload } from '../controllers/file-manager.js';
+import { FileAccessEntity, FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
+import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../controllers/chat-by-project-model.js';
+import { plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
+import { getAxios } from '../../common/http-client.js';
+import { ChatModel } from 'openai/resources.js';
 
 export const getMmUsers = [
     param('providerName').isString().notEmpty(),

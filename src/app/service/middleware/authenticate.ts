@@ -82,7 +82,7 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                     );
 
                     if (!userTokenPayload) {
-                        throw new Error('API key not found');
+                        throw new Error(`${req.ip} API key not found`);
                     }
 
                     // ロールを毎回DBから取得
@@ -100,10 +100,17 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                     const enrichedPayload = { ...userTokenPayload, roleList };
                     (req as UserRequest).info = { ip: xRealIp, user: enrichedPayload };
                     return { isAuth: true, obj: enrichedPayload };
-                } catch (err) {
-                    // // アクセストークン無し
-                    console.debug(`アクセストークンの検証に失敗しました。`);
-                    console.error(err);
+                } catch (err: Error | any) {
+                    if (err instanceof jwt.TokenExpiredError) {
+                        console.warn(`${req.ip} Access token has expired.`);
+                    } else if (err instanceof jwt.JsonWebTokenError) {
+                        console.error(`${req.ip} Failed to verify JWT.`);
+                    } else if (err instanceof Error) {
+                        console.error(`${req.ip} ${err.message}`);
+                    } else {
+                        console.error(`${req.ip} Unexpected error occurred during authentication.`);
+                        // console.error(err);
+                    }
                 }
 
                 console.log(`auth info not found 1`);

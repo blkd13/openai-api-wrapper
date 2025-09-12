@@ -164,7 +164,7 @@ export enum AIModelPricingUnit {
 @Entity()
 @Index(['orgKey', 'modelId'])
 @Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId'])
-@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId', 'name'], { unique: true })
+@Index(['orgKey', 'scopeInfo.scopeType', 'scopeInfo.scopeId', 'name', 'validFrom'], { unique: true })
 export class AIModelPricingEntity extends MyBaseEntity {
     @Column({ type: 'uuid' })
     modelId!: string; // ModelのIDを参照する

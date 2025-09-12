@@ -37,7 +37,8 @@ export async function getProxyUrl(targetUrl: string): Promise<string> {
             const path = new URL(PROXY_PAC_URL).pathname;
             pacScript = await fs.readFile(path, 'utf-8');
         } else {
-            throw new Error('PROXY_PAC_URL is not valid');
+            pacScript = await fs.readFile(PROXY_PAC_URL, 'utf-8');
+            // throw new Error('PROXY_PAC_URL is not valid');
         }
         proxyPacMap[PROXY_PAC_URL] = pacScript;
 
@@ -86,6 +87,19 @@ export async function getPuppeteer(): Promise<Browser> {
         browserArgs.push(`--proxy-server=${PROXY_FIXED_URL}`);
     } else if (PROXY_TYPE === 'PAC') {
         browserArgs.push(`--proxy-pac-url=${PROXY_PAC_URL}`);
+        // let proxyUrl = '';
+        // try {
+        //     proxyUrl = await getProxyUrl(url);
+        //     if (proxyUrl) {
+        //         browserArgs.push(`--proxy-server=${proxyUrl}`);
+        //     } else {
+        //         browserArgs.push(`--no-proxy-server`);
+        //     }
+        // } catch (err) {
+        //     browserArgs.push('--no-proxy-server');
+        //     console.error('getProxyUrlError');
+        //     console.error(err);
+        // }
     } else {
         browserArgs.push(`--no-proxy-server`);
     }

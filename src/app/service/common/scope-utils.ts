@@ -1,4 +1,4 @@
-import { ScopeType, OrganizationEntity, DivisionEntity, UserRoleType, UserRole } from '../entity/auth.entity.js';
+import { ScopeType, OrganizationEntity, DivisionEntity, UserRoleType, UserRoleEntity, UserRole } from '../entity/auth.entity.js';
 import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 import { safeWhere } from '../entity/base.js';
 import { ds } from '../db.js';
@@ -74,7 +74,9 @@ export class ScopeUtils {
                 const divisionRoles = user.roleList.filter(role =>
                     role.scopeInfo.scopeType === ScopeType.DIVISION &&
                     ScopeUtils.ADMIN_ROLE_TYPES.includes(role.role)
-                );
+                ).sort((a, b) => {
+                    return b.priority - a.priority;
+                });
 
                 if (divisionRoles.length === 0) {
                     throw new Error('管理権限を持つ部門が見つかりません');
@@ -116,9 +118,10 @@ export class ScopeUtils {
      * エンティティ配列をスコープ優先順位でソート
      */
     static sortByScopePriority<T extends ScopedEntity>(roles: UserRole[], entities: T[]): T[] {
-        const priorityMap: Record<string, number> = Object.fromEntries(
-            roles.map((role, index) => [`${role.scopeInfo.scopeType}:${role.scopeInfo.scopeId}`, role.priority])
-        );
+        const priorityMap = roles.reduce((prev, curr) => {
+            prev[`${curr.scopeInfo.scopeType}:${curr.scopeInfo.scopeId}`] = curr.priority;
+            return prev;
+        }, {} as { [key: string]: number });
         return entities.sort((a, b) => {
             const scopePriorityA = this.SCOPE_PRIORITY.indexOf(a.scopeInfo.scopeType);
             const scopePriorityB = this.SCOPE_PRIORITY.indexOf(b.scopeInfo.scopeType);

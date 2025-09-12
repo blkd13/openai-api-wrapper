@@ -16,11 +16,13 @@ export const getDivisionList = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { id, orgKey } = req.info.user;
-        const user = await ds.getRepository(UserEntity).findOneOrFail({ where: { id, orgKey, status: UserStatus.Active } });
+        const user = await ds.getRepository(UserEntity).findOneOrFail({
+            select: { name: true },
+            where: { orgKey: req.info.user.orgKey, id: req.info.user.id },
+        })
         const myList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
-                orgKey,
+                orgKey: req.info.user.orgKey,
                 // 自分が所属している部の一覧を取る。
                 // userId: req.info.user.id,
                 name: user.name,
@@ -121,7 +123,11 @@ export const getDivisionMemberStatsList = [
                 'meta/llama3-405b-instruct-maas',
                 'claude-3-5-sonnet@20240620',
                 'claude-3-5-sonnet-v2@20241022',
-                'claude-3-7-sonnet@20250219',
+                'claude-3-7-sonnet-thinking@20250219',
+                'claude-sonnet-4@20250514',
+                'claude-sonnet-4-thinking@20250514',
+                'claude-opus-4@20250514',
+                'claude-opus-4-thinking@20250514',
                 'gemini-flash-experimental',
                 'gemini-pro-experimental',
                 'gemini-exp-1206',
@@ -130,6 +136,7 @@ export const getDivisionMemberStatsList = [
                 'gemini-2.5-pro-preview',
                 'gemini-2.5-flash',
                 'gemini-2.5-pro-preview-05-06',
+                'gemini-2.5-pro-preview-06-05',
                 'gemini-2.0-flash',
                 'gemini-2.0-flash-001',
                 'gemini-2.0-flash-exp',
@@ -150,7 +157,8 @@ export const getDivisionMemberStatsList = [
 
         // 纏める
         const divisionMemberList = divisionList.map(division => {
-            const roles = isContainRole.filter(role => role.scopeInfo.scopeType === ScopeType.DIVISION && role.scopeInfo.scopeId === division.id);
+            // Userロールだけに絞る。Userロールは複数所属できないようにしようと思う。そうすると課金がすっきりするので。
+            const roles = isContainRole.filter(role => role.scopeInfo.scopeType === ScopeType.DIVISION && role.scopeInfo.scopeId === division.id && role.role === UserRoleType.User);
             const members = memberUserList
                 .filter(user => roles.some(role => role.userId === user.id))
                 .sort((a, b) => (a.name || a.email).localeCompare((b.name || b.email)))
@@ -422,12 +430,14 @@ export const patchDepartmentMember = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { role, status } = req.body;
-        const { id, orgKey } = req.info.user;
-        const user = await ds.getRepository(UserEntity).findOneOrFail({ where: { id, orgKey, status: UserStatus.Active } });
+        const user = await ds.getRepository(UserEntity).findOneOrFail({
+            select: { name: true },
+            where: { orgKey: req.info.user.orgKey, id: req.info.user.id },
+        })
         const myList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
+                orgKey: req.info.user.orgKey,
                 // 自分が管理者となっている部の一覧を取る。
-                orgKey,
                 // userId: req.info.user.id,
                 name: user.name,
                 departmentRole: DepartmentRoleType.Admin,
@@ -436,7 +446,7 @@ export const patchDepartmentMember = [
         const departmentIdList = myList.map((member: DepartmentMemberEntity) => member.departmentId);
         const memberList = await ds.getRepository(DepartmentMemberEntity).find({
             where: {
-                orgKey,
+                orgKey: req.info.user.orgKey,
                 // 対称部員が含まれるか
                 departmentId: In(departmentIdList),
                 name: user.name,

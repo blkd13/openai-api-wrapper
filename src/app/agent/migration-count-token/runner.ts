@@ -4,15 +4,15 @@ import { promises as fs } from 'fs';
 import { detect } from 'jschardet/index.js';
 import _ from 'lodash';
 import * as path from 'path';
-import { In, Not } from 'typeorm/index.js';
+import { In, Not } from 'typeorm';
 import { fileURLToPath } from 'url';
 import { convertPptxToPdf } from '../../common/media-funcs.js';
 import { MyVertexAiClient } from '../../common/my-vertexai.js';
 import { genClientByProvider, getTiktokenEncoder, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
-import { convertToPdfMimeList, extractPdfData } from '../../common/pdf-funcs.js';
+import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
 import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL, geminiCountTokensByFile } from '../../service/controllers/chat-by-project-model.js';
 import { ds } from '../../service/db.js';
-import { UserEntity, UserStatus } from '../../service/entity/auth.entity.js';
+import { UserEntity, UserRoleEntity, UserStatus } from '../../service/entity/auth.entity.js';
 import { FileBodyEntity } from '../../service/entity/file-models.entity.js';
 import { ContentPartEntity } from '../../service/entity/project-models.entity.js';
 import { ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartResultBody, ToolCallPartType } from '../../service/entity/tool-call.entity.js';
@@ -22,33 +22,40 @@ import { ContentPartType } from '../../service/models/values.js';
 /**
  * Get user configuration for agent scripts
  */
-async function getAgentUser(): Promise<UserTokenPayloadWithRole> {
-    const { AGENT_USER_ID, AGENT_ORG_KEY = 'public' } = process.env;
+export async function getAgentUser(): Promise<UserTokenPayloadWithRole> {
+    const { BATCH_USER_ID, BATCH_TENANT_KEY = 'public' } = process.env;
 
-    if (!AGENT_USER_ID) {
+    if (!BATCH_USER_ID) {
         throw new Error('AGENT_USER_ID environment variable is required for agent scripts');
     }
 
-    const user = await ds.getRepository(UserEntity).findOne({
-        where: { orgKey: AGENT_ORG_KEY, id: AGENT_USER_ID, status: UserStatus.Active }
+    const userEntity = await ds.getRepository(UserEntity).findOneByOrFail({
+        orgKey: BATCH_TENANT_KEY,
+        id: BATCH_USER_ID,
+        status: UserStatus.Active,
+    });
+    const userRoleEntity = await ds.getRepository(UserRoleEntity).findBy({
+        orgKey: BATCH_TENANT_KEY,
+        userId: userEntity.id,
+        status: UserStatus.Active,
     });
 
-    if (!user) {
-        throw new Error(`User not found: orgKey=${AGENT_ORG_KEY}, id=${AGENT_USER_ID}`);
-    }
-
-    // Convert UserEntity to UserTokenPayloadWithRole format
-    return {
+    const user = {
         type: 'user',
-        orgKey: user.orgKey,
-        id: user.id,
-        // email: user.email,
-        // name: user.name || user.email,
-        roleList: [], // Agent scripts typically don't need specific roles
-        authGeneration: user.authGeneration || 0,
-        jti: '', // Not used in this context
-        sid: '', // Not used in this context
-    };
+        orgKey: userEntity.orgKey,
+        id: userEntity.id,
+        email: userEntity.email,
+        name: userEntity.name,
+        sid: '',
+        jti: '',
+        authGeneration: userEntity.authGeneration,
+        roleList: userRoleEntity.map(role => ({
+            role: role.role,
+            scopeInfo: role.scopeInfo,
+            priority: 0,
+        }))
+    } as UserTokenPayloadWithRole;
+    return user;
 }
 
 /**
@@ -68,59 +75,58 @@ export async function main() {
 
     try {
 
-        // pdfのテキストを抽出して保存する
-        const fileBodyList = await ds.getRepository(FileBodyEntity).findBy({
-            fileType: 'application/pdf',
-        });
-        console.log(`fileBodyList.length: ${fileBodyList.length}`);
-        for (const fileBody of fileBodyList) {
-            fileBody.innerPath = fileBody.innerPath.replaceAll(/\\/g, '/');
-            // const pathBase = file.innerPath.split('-')[0];
-            // const innerPath = file.innerPath;
-            // const basename = path.basename(innerPath);
-            const pdfPath = fileBody.innerPath.replaceAll(/\.[^.]*$/g, '') + '.pdf';
-            console.log(`Processing PDF: ${pdfPath}`);
-            const textFilePath = fileBody.innerPath.replaceAll(/\.[^.]*$/g, '') + '.1.txt';
-            try {
-                // すでにテキストファイルがある場合はスキップ
-                await fs.access(textFilePath);
-                console.log(`Text file already exists: ${textFilePath}`);
-                continue;
-            } catch {
-                const pdfData = await extractPdfData(pdfPath);
-                console.log("----- PDF ドキュメント情報 -----");
-                console.log("Info:", pdfData.info);
-                console.log("Metadata:", JSON.stringify(pdfData.metadata));
+        // // pdfのテキストを抽出して保存する
+        // const fileBodyList = await ds.getRepository(FileBodyEntity).findBy({
+        //     fileType: 'application/pdf',
+        // });
+        // console.log(`fileBodyList.length: ${fileBodyList.length}`);
+        // for (const fileBody of fileBodyList) {
+        //     fileBody.innerPath = fileBody.innerPath.replaceAll(/\\/g, '/');
+        //     // const pathBase = file.innerPath.split('-')[0];
+        //     // const innerPath = file.innerPath;
+        //     // const basename = path.basename(innerPath);
+        //     const pdfPath = fileBody.innerPath.replaceAll(/\.[^.]*$/g, '') + '.pdf';
+        //     console.log(`Processing PDF: ${pdfPath}`);
+        //     const textFilePath = fileBody.innerPath.replaceAll(/\.[^.]*$/g, '') + '.1.txt';
+        //     try {
+        //         // すでにテキストファイルがある場合はスキップ
+        //         await fs.access(textFilePath);
+        //         console.log(`Text file already exists: ${textFilePath}`);
+        //         continue;
+        //     } catch {
+        //         const pdfData = await extractPdfData(pdfPath);
+        //         console.log("----- PDF ドキュメント情報 -----");
+        //         console.log("Info:", pdfData.info);
+        //         console.log("Metadata:", JSON.stringify(pdfData.metadata));
 
-                console.log("----- アウトライン／目次 -----");
-                if (pdfData.outline) {
-                    // アウトラインは階層構造になっているため、再帰的に表示することも可能です
-                    console.log(JSON.stringify(pdfData.outline));
-                } else {
-                    console.log("アウトライン情報はありません。");
-                }
+        //         console.log("----- アウトライン／目次 -----");
+        //         if (pdfData.outline) {
+        //             // アウトラインは階層構造になっているため、再帰的に表示することも可能です
+        //             console.log(JSON.stringify(pdfData.outline));
+        //         } else {
+        //             console.log("アウトライン情報はありません。");
+        //         }
 
-                const numPages = pdfData.pdfDocument.numPages;
-                // メタデータをDB保存しておく
-                const isEnable = pdfData.pdfDocument.numPages <= 1000;
-                fileBody.metaJson = { isEnable, numPages: pdfData.pdfDocument.numPages };
+        //         const numPages = pdfData.pdfDocument.numPages;
+        //         // メタデータをDB保存しておく
+        //         const isEnable = pdfData.pdfDocument.numPages <= 1000;
+        //         fileBody.metaJson = { isEnable, numPages: pdfData.pdfDocument.numPages };
 
-                if (isEnable) {
-                    const basePath = pdfPath.substring(0, pdfPath.lastIndexOf('.'));
-                    // 1000ページ以下のドキュメントはテキストを抽出して保存する
-                    pdfData.textPages.forEach((text, index) => {
-                        const pagePath = `${basePath}.${index + 1}.txt`;
-                        console.log(`----- Page ${index + 1} Chars ${text.length} -----`);
-                        // console.log(text);
-                        fs.writeFile(pagePath, text, 'utf-8').catch((err) => {
-                            console.error(`Error writing text file for page ${index + 1}:`, err);
-                        });
-                    });
-                } else {
-                    // 1000ページ以上のドキュメントは無視する
-                }
-            }
-        }
+        //         if (isEnable) {
+        //             // 1000ページ以下のドキュメントはテキストを抽出して保存する
+        //             pdfData.textPages.forEach((text, index) => {
+        //                 const pagePath = path.dirname(pdfPath) + '/' + path.basename(pdfPath, '.pdf') + '.' + (index + 1) + '.txt';
+        //                 console.log(`----- Page ${index + 1} Chars ${text.length} -----`);
+        //                 // console.log(text);
+        //                 fs.writeFile(pagePath, text, 'utf-8').catch((err) => {
+        //                     console.error(`Error writing text file for page ${index + 1}:`, err);
+        //                 });
+        //             });
+        //         } else {
+        //             // 1000ページ以上のドキュメントは無視する
+        //         }
+        //     }
+        // }
 
 
 
@@ -163,6 +169,7 @@ export async function main() {
         files = files.filter(file => file && (!file.tokenCount || !file.tokenCount[COUNT_TOKEN_MODEL] || !(file.tokenCount[COUNT_TOKEN_MODEL].totalTokens >= 0) || !file.tokenCount[COUNT_TOKEN_OPENAI_MODEL] || !(file.tokenCount[COUNT_TOKEN_OPENAI_MODEL].totalTokens >= 0)));
         console.log(`file time ${new Date()} filtered files ${files.length}`);
         for (const chunkData of _.chunk(files, 500)) {
+
             console.log(`file time ${new Date()} chunk ${chunkData.length}`);
             const fileEntityRebuildList = chunkData.map(async file => {
                 file.innerPath = file.innerPath.replaceAll(/\\/g, '/');
@@ -214,23 +221,29 @@ export async function main() {
                     // テキストファイルの場合はデコードしてテキストにしてしまう。
                     if (buffer && buffer.length > 0) {
                         const data = buffer;
-                        const detectedEncoding = detect(data);
-                        if (detectedEncoding.encoding === 'ISO-8859-2') {
-                            detectedEncoding.encoding = 'Windows-31J'; // 文字コード自動判定でSJISがISO-8859-2ことがあるので
-                        } else if (!detectedEncoding.encoding) {
-                            detectedEncoding.encoding = 'Windows-31J'; // nullはおかしいのでとりあえず
-                        }
-                        if (['UTF-8', 'ascii'].includes(detectedEncoding.encoding)) {
-                        } else {
-                            // 他の文字コードの場合は変換しておく
-                            const decoder = new TextDecoder(detectedEncoding.encoding);
-                            decodedString = decoder.decode(data);
-                            buffer = Buffer.from(decodedString);
-                            // console.log(`time ${new Date()} ${detectedEncoding.encoding} ${decodedString.substring(0, 20)}`);
-                            // console.log(`time ${new Date()} ${ext} ${fileType} ${detectedEncoding.encoding} ${innerPath} ${pathBase}-original${ext}`);
-                            // console.log(`time ${new Date()} ${ext} ${detectedEncoding.encoding} ${fileType}`);
-                            await fs.rename(innerPath, `${pathBase}-original${ext}`);
-                            await fs.writeFile(innerPath, decodedString);
+                        try {
+                            const detectedEncoding = detect(data);
+                            if (detectedEncoding.encoding === 'ISO-8859-2') {
+                                detectedEncoding.encoding = 'Windows-31J'; // 文字コード自動判定でSJISがISO-8859-2ことがあるので
+                            } else if (!detectedEncoding.encoding) {
+                                detectedEncoding.encoding = 'Windows-31J'; // nullはおかしいのでとりあえず
+                            }
+                            if (['UTF-8', 'ascii'].includes(detectedEncoding.encoding)) {
+                            } else {
+                                // 他の文字コードの場合は変換しておく
+                                const decoder = new TextDecoder(detectedEncoding.encoding);
+                                decodedString = decoder.decode(data);
+                                buffer = Buffer.from(decodedString);
+                                // console.log(`time ${new Date()} ${detectedEncoding.encoding} ${decodedString.substring(0, 20)}`);
+                                // console.log(`time ${new Date()} ${ext} ${fileType} ${detectedEncoding.encoding} ${innerPath} ${pathBase}-original${ext}`);
+                                // console.log(`time ${new Date()} ${ext} ${detectedEncoding.encoding} ${fileType}`);
+                                await fs.rename(innerPath, `${pathBase}-original${ext}`);
+                                await fs.writeFile(innerPath, decodedString);
+                            }
+                        } catch (error) {
+                            console.error(error);
+                            decodedString = '';
+                            buffer = Buffer.from('');
                         }
                     } else {
                         // 空の場合はデコーダーに掛けると面倒なので直接空文字を入れる
@@ -259,11 +272,12 @@ export async function main() {
                 const agentUser = await getAgentUser();
                 const tokenCountedFileBodyList = await geminiCountTokensByFile(transactionalEntityManager, tokenCountFileList, agentUser);
             });
+
         }
 
         const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
         const client = my_vertexai.client as VertexAI;
-        const generativeModel = client.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
+        const generativeModel = client.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
         // toolCallPartListの取得
         const toolCallPartList = await ds.getRepository(ToolCallPartEntity).findBy({

@@ -1,12 +1,11 @@
-import { Content, CountTokensResponse, FunctionCallingMode, FunctionDeclaration, FunctionDeclarationSchema, FunctionDeclarationSchemaType, GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, SchemaType, Tool, UsageMetadata, VertexAI } from "@google-cloud/vertexai";
-import { exec, execSync } from "child_process";
-import { promisify } from 'util';
+import { Content, CountTokensResponse, FunctionCallingMode, FunctionDeclaration, FunctionDeclarationSchema, GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, SchemaType, Tool, UsageMetadata, VertexAI } from "@google-cloud/vertexai";
+import { exec } from "child_process";
 import { detect } from "jschardet";
-import { ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionFunctionMessageParam, ChatCompletionMessageParam, ChatCompletionRole, ChatCompletionSystemMessageParam, ChatCompletionTool, ChatCompletionToolMessageParam } from "openai/resources/chat/completions";
+import OpenAI from "openai";
+import { promisify } from 'util';
 
-import { AIProviderClient, plainMime } from "./openai-api-wrapper.js";
-import { CompletionUsage } from "openai/resources/completions.js";
 import { VertexAIConfig } from "../service/entity/ai-model-manager.entity.js";
+import { AIProviderClient, plainMime } from "./openai-api-wrapper.js";
 
 const execPromise = promisify(exec);
 interface CommandResult {
@@ -60,18 +59,18 @@ export class MyVertexAiClient {
     private clients: VertexAI[] = [];
     private clientsParams: (Omit<VertexAIConfig, 'locationList'> & { location: string })[] = [];
 
-    constructor(public params: VertexAIConfig[]) {
+    constructor(public params?: VertexAIConfig[]) {
         // this.client = new VertexAI({ project: this.params.projectId, location: this.params.region, apiEndpoint: this.params.baseURL, httpAgent: this.params.httpAgent });
-        if (!this.params || this.params.length === 0) {
-            this.clientsParams.push({
-                project: GCP_PROJECT_ID || 'your-default-project-id',
-                location: GCP_REGION || 'us-central1',
-                apiEndpoint: GCP_API_BASE_PATH || 'aiplatform.googleapis.com',
-                httpAgent: undefined,
-            });
-            this.clients.push(new VertexAI(this.clientsParams[0]));
+        if (!params) {
+            this.clients = [new VertexAI({
+                project: GCP_PROJECT_ID || '',
+                location: GCP_REGION || 'asia-northeast1',
+                apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
+            })];
         } else {
-            this.params.forEach(param => {
+            // console.log(`params-foorl`)
+            // console.dir(params, { depth: null });
+            params.forEach(param => {
                 param.locationList.forEach(location => {
                     this.clients.push(new VertexAI({ ...param, location }));
                     this.clientsParams.push({ ...param, location });
@@ -126,7 +125,7 @@ export class MyVertexAiClient {
     }
 }
 
-export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateContentRequest {
+export function mapForGemini(args: OpenAI.ChatCompletionCreateParams): GenerateContentRequest {
     const req: GenerateContentRequest = {
         contents: [],
         // systemInstruction: undefined,
@@ -166,8 +165,8 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
                         // console.log(`tool_call_id:${toolCall.id} function name:${toolCall.function.name} arguments:${toolCall.function.arguments}`);
                         content.parts.push({
                             functionCall: {
-                                name: toolCall.function.name,
-                                args: JSON.parse(toolCall.function.arguments),
+                                name: (toolCall as OpenAI.ChatCompletionFunctionTool).function.name,
+                                args: (toolCall as OpenAI.ChatCompletionFunctionTool).function.parameters || {},
                             }
                         });
                     });
@@ -230,8 +229,8 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
                 message.tool_calls.forEach(toolCall => {
                     remappedContent.parts.push({
                         functionCall: {
-                            name: toolCall.function.name,
-                            args: JSON.parse(toolCall.function.arguments),
+                            name: (toolCall as OpenAI.ChatCompletionFunctionTool).function.name,
+                            args: (toolCall as OpenAI.ChatCompletionFunctionTool).function.parameters || {},
                         }
                     });
                 });
@@ -319,7 +318,7 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
             const mode = (args.tool_choice || 'auto').toString().toUpperCase() as FunctionCallingMode;
             req.toolConfig = { functionCallingConfig: { mode } };
             if (mode === 'ANY' && req.toolConfig && req.toolConfig.functionCallingConfig) {
-                req.toolConfig.functionCallingConfig.allowedFunctionNames = args.tools.map(tool => tool.function.name);
+                req.toolConfig.functionCallingConfig.allowedFunctionNames = args.tools.map(tool => (tool as OpenAI.ChatCompletionFunctionTool).function.name);
             } else { }
         } else { }
     }
@@ -329,7 +328,7 @@ export function mapForGemini(args: ChatCompletionCreateParamsBase): GenerateCont
     return req;
 }
 
-export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, aiProvider: AIProviderClient, _req?: GenerateContentRequest): GenerateContentRequestExtended {
+export function mapForGeminiExtend(args: OpenAI.ChatCompletionCreateParams, aiProvider: AIProviderClient, _req?: GenerateContentRequest): GenerateContentRequestExtended {
     const req: GenerateContentRequestExtended = (_req || mapForGemini(args)) as GenerateContentRequestExtended;
     req.generationConfig = {
         maxOutputTokens: args.max_tokens || undefined,
@@ -367,10 +366,12 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, aiProvi
     } else if (args.model === 'gemini-2.5-flash-thinking-preview-05-20') {
         args.model = 'gemini-2.5-flash-preview-05-20';
     } else if (args.model.includes('gemini-2.5-flash')) {
-        (req.generationConfig as any).thinking_config = { thinking_budget: 0 };
-    } else if (args.model.includes('-thinking')) {
-        args.model = args.model.replace('-thinking', '');
-        (req.generationConfig as any).thinking_config = { thinking_budget: -1 };
+        if (args.model.includes('-thinking')) {
+            args.model = args.model.replace('-thinking', '');
+            (req.generationConfig as any).thinking_config = { thinking_budget: -1 };
+        } else {
+            (req.generationConfig as any).thinking_config = { thinking_budget: 0 };
+        }
     }
     // コンテンツキャッシュ
     const cachedContent = (args as any).cachedContent as CachedContent;
@@ -416,19 +417,19 @@ export function mapForGeminiExtend(args: ChatCompletionCreateParamsBase, aiProvi
 
 
 // Usage を Gemini 形式から OpenAI 形式へ変換する関数。使ってないので動作保証できてない。
-function convertGeminiToOpenAI(gemini: UsageMetadata): CompletionUsage {
+function convertGeminiToOpenAI(gemini: UsageMetadata): OpenAI.CompletionUsage {
     // Gemini では promptTokenCount と candidatesTokenCount をそれぞれ prompt_tokens と completion_tokens として扱う例です。
     const prompt_tokens = gemini.promptTokenCount || 0;
     const completion_tokens = gemini.candidatesTokenCount || 0;
     const total_tokens = gemini.totalTokenCount || 0;
 
     // Gemini の詳細情報は配列になっていますが、OpenAI 形式ではオブジェクトとなるため、ここではデフォルト値（0）を利用
-    const prompt_tokens_details: CompletionUsage.PromptTokensDetails = {
+    const prompt_tokens_details: OpenAI.CompletionUsage.PromptTokensDetails = {
         cached_tokens: 0,
         audio_tokens: 0,
     };
     // {"promptTokenCount":70,"candidatesTokenCount":6,"totalTokenCount":76,"promptTokensDetails":[{"modality":"TEXT","tokenCount":70}],"candidatesTokensDetails":[{"modality":"TEXT","tokenCount":6}]}
-    const completion_tokens_details: CompletionUsage.CompletionTokensDetails = {
+    const completion_tokens_details: OpenAI.CompletionUsage.CompletionTokensDetails = {
         reasoning_tokens: 0,
         audio_tokens: 0,
         accepted_prediction_tokens: 0,
@@ -450,7 +451,7 @@ function convertGeminiToOpenAI(gemini: UsageMetadata): CompletionUsage {
  * @param tool ChatCompletionTool の JSON オブジェクト
  * @returns FunctionDeclaration の JSON オブジェクト
  */
-export function convertToolDef(tool: ChatCompletionTool): FunctionDeclaration {
+export function convertToolDef(tool: OpenAI.ChatCompletionTool): FunctionDeclaration {
     // オブジェクトのコピーを作成
     tool = JSON.parse(JSON.stringify(tool));
 
@@ -495,23 +496,23 @@ export function convertToolDef(tool: ChatCompletionTool): FunctionDeclaration {
 
     // ChatCompletionTool の JSON から FunctionDeclaration の形式へ変換
     const func: FunctionDeclaration = {
-        name: tool.function.name,
-        description: tool.function.description,
+        name: (tool as OpenAI.ChatCompletionFunctionTool).function.name,
+        description: (tool as OpenAI.ChatCompletionFunctionTool).function.description,
     };
-    if (tool.function.parameters) {
-        func.parameters = convertSchema(tool.function.parameters);
+    if ((tool as OpenAI.ChatCompletionFunctionTool).function.parameters) {
+        func.parameters = convertSchema((tool as OpenAI.ChatCompletionFunctionTool).function.parameters || {});
     } else { }
     return func;
 }
 
 
-export function countChars(args: ChatCompletionCreateParamsBase): { image: number, text: number, video: number, audio: number } {
+export function countChars(args: OpenAI.ChatCompletionCreateParams): { image: number, text: number, video: number, audio: number } {
     return args.messages.reduce((prev0, curr0) => {
         if (curr0.content) {
             if (typeof curr0.content === 'string') {
                 prev0.text += curr0.content.length;
             } else {
-                (curr0.content as Array<ChatCompletionContentPart>).reduce((prev1, curr1) => {
+                (curr0.content as Array<OpenAI.ChatCompletionContentPart>).reduce((prev1, curr1) => {
                     if (curr1.type === 'text') {
                         prev1.text += curr1.text.replace(/\s/g, '').length; // 空白文字を除いた文字数
                     } else if (curr1.type === 'image_url') {
@@ -556,7 +557,7 @@ export function countChars(args: ChatCompletionCreateParamsBase): { image: numbe
  * @param funcDecl Vertex AIの関数宣言
  * @returns OpenAIのツール定義
  */
-export function convertFunctionToOpenAITool(funcDecl: FunctionDeclaration): ChatCompletionTool {
+export function convertFunctionToOpenAITool(funcDecl: FunctionDeclaration): OpenAI.ChatCompletionTool {
     // 型変換の関数
     function convertSchemaType(type: string): string {
         return type.toLowerCase();
@@ -606,8 +607,8 @@ export function convertFunctionToOpenAITool(funcDecl: FunctionDeclaration): Chat
  * @param modelName OpenAIに渡すモデル名
  * @returns OpenAI形式のパラメータ
  */
-export function mapForOpenAI(request: GenerateContentRequest, modelName: string): ChatCompletionCreateParamsBase {
-    const openAIParams: ChatCompletionCreateParamsBase = {
+export function mapForOpenAI(request: GenerateContentRequest, modelName: string): OpenAI.ChatCompletionCreateParams {
+    const openAIParams: OpenAI.ChatCompletionCreateParams = {
         model: modelName,
         messages: [],
     };
@@ -619,7 +620,7 @@ export function mapForOpenAI(request: GenerateContentRequest, modelName: string)
         openAIParams.messages.push({
             role: 'system',
             content: systemText
-        } as ChatCompletionSystemMessageParam);
+        } as OpenAI.ChatCompletionSystemMessageParam);
     }
 
     // コンテンツの処理（通常のメッセージ）
@@ -700,8 +701,8 @@ export function mapForOpenAI(request: GenerateContentRequest, modelName: string)
 /**
  * Vertex AIのメッセージ配列をOpenAIのメッセージ配列に変換
  */
-function convertVertexContentsToOpenAIMessages(contents: Content[]): ChatCompletionMessageParam[] {
-    const messages: ChatCompletionMessageParam[] = [];
+function convertVertexContentsToOpenAIMessages(contents: Content[]): OpenAI.ChatCompletionMessageParam[] {
+    const messages: OpenAI.ChatCompletionMessageParam[] = [];
 
     for (const content of contents) {
         const role = mapVertexRoleToOpenAI(content.role);
@@ -713,7 +714,7 @@ function convertVertexContentsToOpenAIMessages(contents: Content[]): ChatComplet
                 role: 'tool',
                 tool_call_id: functionResponse.name,
                 content: JSON.stringify(functionResponse.response || {})
-            } as ChatCompletionToolMessageParam);
+            } as OpenAI.ChatCompletionToolMessageParam);
             continue;
         }
 
@@ -774,18 +775,18 @@ function extractTextFromParts(parts: Content | string | undefined): string {
 /**
  * OpenAIメッセージを作成
  */
-function createOpenAIMessage(role: string, parts: Part[]): ChatCompletionMessageParam {
+function createOpenAIMessage(role: string, parts: Part[]): OpenAI.ChatCompletionMessageParam {
     // 単純なテキストのみの場合
     const textParts = parts.filter(part => 'text' in part);
     if (parts.length === textParts.length) {
         return {
-            role: role as ChatCompletionRole,
+            role: role as OpenAI.ChatCompletionRole,
             content: textParts.map(part => part.text).join('')
-        } as ChatCompletionMessageParam;
+        } as OpenAI.ChatCompletionMessageParam;
     }
 
     // マルチモーダルコンテンツの場合
-    const contentParts: ChatCompletionContentPart[] = [];
+    const contentParts: OpenAI.ChatCompletionContentPart[] = [];
 
     for (const part of parts) {
         if ('text' in part && part.text) {
@@ -815,9 +816,9 @@ function createOpenAIMessage(role: string, parts: Part[]): ChatCompletionMessage
     }
 
     return {
-        role: role as ChatCompletionRole,
+        role: role as OpenAI.ChatCompletionRole,
         content: contentParts
-    } as ChatCompletionMessageParam;
+    } as OpenAI.ChatCompletionMessageParam;
 }
 
 /**
@@ -826,8 +827,8 @@ function createOpenAIMessage(role: string, parts: Part[]): ChatCompletionMessage
 export function mapForOpenAIExtended(
     request: GenerateContentRequest & { resourcePath?: string, region?: string, cached_content?: string },
     modelName: string
-): ChatCompletionCreateParamsBase & { gcpProjectId?: string, cachedContent?: any } {
-    const openAIParams = mapForOpenAI(request, modelName) as ChatCompletionCreateParamsBase & {
+): OpenAI.ChatCompletionCreateParams & { gcpProjectId?: string, cachedContent?: any } {
+    const openAIParams = mapForOpenAI(request, modelName) as OpenAI.ChatCompletionCreateParams & {
         gcpProjectId?: string,
         cachedContent?: any
     };

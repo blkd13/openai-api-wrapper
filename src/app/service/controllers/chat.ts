@@ -49,16 +49,20 @@ export const initEvent = [
         //     return;
         // } else { /** do nothing */ }
 
+        const HEARTBEAT_MS = 15000;
+        const timer = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
+
         // クライアントIDを登録
         clients[clientId] = { id: clientId, response: res };
 
         req.on('close', () => {
             delete clients[clientId]; // クライアントが切断した場合、リストから削除
+            clearInterval(timer);
             console.log(`${req.method} ${req.url} req.on(close)`)
         });
 
         res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders(); // flushHeaders()がないとヘッダーが飛ばない
 
@@ -79,106 +83,106 @@ export const chatCompletionStream = [
         // TODO 雑に作ってしまったので後で直したい。
         // ログが取れてないのと、レスポンスを結局textにしてしまった弊害が出てるのでそこを直した版にする。
 
-        const req = _req as UserRequest;
-        const inDto = {
-            args: {
-                model: req.body.model,
-                messages: req.body.messages, // ユーザーからのメッセージをそのまま渡す
-                stream: true, // ストリーミングを無効にする
-                // 他のパラメータも必要に応じて設定
-            } as ChatCompletionCreateParamsStreaming,
-            options: {
-                idempotencyKey: req.body.options?.idempotencyKey,
-            },
-        };
-        if (req.body.temperature !== undefined) {
-            inDto.args.temperature = req.body.temperature;
-        } else { }
-        if (req.body.max_tokens !== undefined) {
-            inDto.args.max_tokens = req.body.max_tokens;
-        } else { }
-        if (req.body.stop !== undefined) {
-            inDto.args.stop = req.body.stop;
-        } else { }
-
-        const connectionId = Utils.generateUUID();
-
-        // クライアントIDを取得
-        const clientId = `${req.info.user.id}-${connectionId}` as string;
-
-        const label = inDto.options?.idempotencyKey || `api-${clientId}`;
-
-        const provider = await getAIProvider(req.info.user, inDto.args.model);
-
-        let subscriber: Partial<Observer<ChatCompletionChunk>> | ((value: ChatCompletionChunk) => void) | undefined;
-
-        if (req.body.stream) {
-            // streamモード
-
-            // クライアントIDを登録
-            clients[clientId] = { id: clientId, response: res };
-
-            req.on('close', () => {
-                delete clients[clientId]; // クライアントが切断した場合、リストから削除
-                console.log(`${req.method} ${req.url} req.on(close)`)
-            });
-
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            res.flushHeaders(); // flushHeaders()がないとヘッダーが飛ばない
-
-            // // 開始イベントを送信する。本来はflushHeadersだけでも十分のはずだが、
-            // // プロキシが挟まっていたりするとヘッダーだけだと詰まることもあるので、データ部を送ることで詰まらないようにする。
-            // clients[clientId]?.response.write('event: chatCompletionStream\n\n');
-            subscriber = {
-                next: next => {
-                    clients[clientId]?.response.write(`data: ${JSON.stringify(next)}\n\n`);
-                },
-                error: error => {
-                    console.log(error);
-                    clients[clientId]?.response.end(`error: ${req.query.streamId} ${error}\n\n`);
-                },
-                complete: () => {
-                    // 通常モードは素直に終了
-                    const resObj = {
-                        choices: [{ content_filter_results: {}, delta: {}, finish_reason: 'stop', index: 0, logprobs: null }],
-                        created: Date.now(), id: `chatcmpl-${clientId}`, model: req.body.model, object: 'chat.completion.chunk', system_fingerprint: `fp_${clientId}`,
-                    };
-                    clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
-                    clients[clientId]?.response.write(`data: [DONE]\n`);
-                    clients[clientId]?.response.end();
-                },
-            };
-        } else {
-            // 通常モード
-            // aiApiがstreamingモードしか出来ないので、streamを纏める感じにしている。
-            let text = '';
-            const resObj = {} as ChatCompletion;
-            subscriber = {
-                next: next => {
-                    text += next.choices[0]?.delta?.content || '';
-                    Object.assign(resObj, next);
-                },
-                error: error => {
-                    throw error;
-                },
-                complete: () => {
-                    resObj.object = "chat.completion";
-                    resObj.choices = [{
-                        index: 0,
-                        message: { role: "assistant", content: text, refusal: null },
-                        logprobs: null,
-                        finish_reason: "stop"
-                    }]
-                    // console.dir(resObj, { depth: null });
-                    res.json(resObj);
-                    res.end();
-                },
-            };
-        }
-
         try {
+            const req = _req as UserRequest;
+            const inDto = {
+                args: {
+                    model: req.body.model,
+                    messages: req.body.messages, // ユーザーからのメッセージをそのまま渡す
+                    stream: true, // ストリーミングを無効にする
+                    // 他のパラメータも必要に応じて設定
+                } as ChatCompletionCreateParamsStreaming,
+                options: {
+                    idempotencyKey: req.body.options?.idempotencyKey,
+                },
+            };
+            if (req.body.temperature !== undefined) {
+                inDto.args.temperature = req.body.temperature;
+            } else { }
+            if (req.body.max_tokens !== undefined) {
+                inDto.args.max_tokens = req.body.max_tokens;
+            } else { }
+            if (req.body.stop !== undefined) {
+                inDto.args.stop = req.body.stop;
+            } else { }
+
+            const connectionId = Utils.generateUUID();
+
+            // クライアントIDを取得
+            const clientId = `${req.info.user.id}-${connectionId}` as string;
+
+            const label = inDto.options?.idempotencyKey || `api-${clientId}`;
+
+            const provider = await getAIProvider(req.info.user, inDto.args.model);
+
+            let subscriber: Partial<Observer<ChatCompletionChunk>> | ((value: ChatCompletionChunk) => void) | undefined;
+
+            if (req.body.stream) {
+                // streamモード
+
+                // クライアントIDを登録
+                clients[clientId] = { id: clientId, response: res };
+
+                req.on('close', () => {
+                    delete clients[clientId]; // クライアントが切断した場合、リストから削除
+                    console.log(`${req.method} ${req.url} req.on(close)`)
+                });
+
+                res.setHeader('Content-Type', 'text/event-stream');
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Connection', 'keep-alive');
+                res.flushHeaders(); // flushHeaders()がないとヘッダーが飛ばない
+
+                // // 開始イベントを送信する。本来はflushHeadersだけでも十分のはずだが、
+                // // プロキシが挟まっていたりするとヘッダーだけだと詰まることもあるので、データ部を送ることで詰まらないようにする。
+                // clients[clientId]?.response.write('event: chatCompletionStream\n\n');
+                subscriber = {
+                    next: next => {
+                        clients[clientId]?.response.write(`data: ${JSON.stringify(next)}\n\n`);
+                    },
+                    error: error => {
+                        console.log(error);
+                        clients[clientId]?.response.end(`error: ${req.query.streamId} ${error}\n\n`);
+                    },
+                    complete: () => {
+                        // 通常モードは素直に終了
+                        const resObj = {
+                            choices: [{ content_filter_results: {}, delta: {}, finish_reason: 'stop', index: 0, logprobs: null }],
+                            created: Date.now(), id: `chatcmpl-${clientId}`, model: req.body.model, object: 'chat.completion.chunk', system_fingerprint: `fp_${clientId}`,
+                        };
+                        clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
+                        clients[clientId]?.response.write(`data: [DONE]\n`);
+                        clients[clientId]?.response.end();
+                    },
+                };
+            } else {
+                // 通常モード
+                // aiApiがstreamingモードしか出来ないので、streamを纏める感じにしている。
+                let text = '';
+                const resObj = {} as ChatCompletion;
+                subscriber = {
+                    next: next => {
+                        text += next.choices[0]?.delta?.content || '';
+                        Object.assign(resObj, next);
+                    },
+                    error: error => {
+                        throw error;
+                    },
+                    complete: () => {
+                        resObj.object = "chat.completion";
+                        resObj.choices = [{
+                            index: 0,
+                            message: { role: "assistant", content: text, refusal: null },
+                            logprobs: null,
+                            finish_reason: "stop"
+                        }]
+                        // console.dir(resObj, { depth: null });
+                        res.json(resObj);
+                        res.end();
+                    },
+                };
+            }
+
             aiApi.chatCompletionObservableStream(
                 inDto.args, { label, userId: req.info.user.id, ip: req.info.ip, authType: 'api' }, provider
             ).subscribe(subscriber);

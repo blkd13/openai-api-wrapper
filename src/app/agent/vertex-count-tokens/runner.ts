@@ -1,4 +1,3 @@
-import { VertexAI } from '@google-cloud/vertexai';
 import * as crypto from 'crypto';
 import { promises as fs } from 'fs';
 import { detect } from 'jschardet/index.js';
@@ -6,9 +5,8 @@ import _ from 'lodash';
 import * as path from 'path';
 import { In, Not } from 'typeorm';
 import { fileURLToPath } from 'url';
-
 import { convertPptxToPdf } from '../../common/media-funcs.js';
-import { genClientByProvider, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
+import { invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
 import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
 import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../../service/controllers/chat-by-project-model.js';
 import { ds } from '../../service/db.js';
@@ -16,44 +14,12 @@ import { FileBodyEntity } from '../../service/entity/file-models.entity.js';
 import { ContentPartEntity } from '../../service/entity/project-models.entity.js';
 import { ContentPartType } from '../../service/models/values.js';
 
-import { MyVertexAiClient } from '../../common/my-vertexai.js';
+import { VertexAI } from '@google-cloud/vertexai/build/src/vertex_ai.js';
 import { getTiktokenEncoder } from '../../common/openai-api-wrapper.js';
 import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL } from '../../service/controllers/chat-by-project-model.js';
-import { UserEntity, UserStatus } from '../../service/entity/auth.entity.js';
 import { ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartResultBody, ToolCallPartType } from '../../service/entity/tool-call.entity.js';
-import { UserTokenPayloadWithRole } from '../../service/middleware/authenticate.js';
+import { getAgentUser } from '../migration-count-token/runner.js';
 
-/**
- * Get user configuration for agent scripts
- */
-async function getAgentUser(): Promise<UserTokenPayloadWithRole> {
-    const { AGENT_USER_ID, AGENT_ORG_KEY = 'public' } = process.env;
-
-    if (!AGENT_USER_ID) {
-        throw new Error('AGENT_USER_ID environment variable is required for agent scripts');
-    }
-
-    const user = await ds.getRepository(UserEntity).findOne({
-        where: { orgKey: AGENT_ORG_KEY, id: AGENT_USER_ID, status: UserStatus.Active }
-    });
-
-    if (!user) {
-        throw new Error(`User not found: orgKey=${AGENT_ORG_KEY}, id=${AGENT_USER_ID}`);
-    }
-
-    // Convert UserEntity to UserTokenPayloadWithRole format
-    return {
-        type: 'user',
-        orgKey: user.orgKey,
-        id: user.id,
-        // email: user.email,
-        // name: user.name || user.email,
-        roleList: [], // Agent scripts typically don't need specific roles
-        authGeneration: user.authGeneration || 0,
-        jti: '', // Not used in this context
-        sid: '', // Not used in this context
-    };
-}
 
 
 // CREATE TABLE message_group_entity_bk AS SELECT * FROM message_group_entity;
@@ -82,6 +48,7 @@ async function getAgentUser(): Promise<UserTokenPayloadWithRole> {
 
 
 async function fileEntity() {
+    const user = await getAgentUser();
 
     // テキスト
     let contents = await ds.getRepository(ContentPartEntity).find({
@@ -102,8 +69,7 @@ async function fileEntity() {
         await ds.transaction(async transactionalEntityManager => {
             console.log(`text time ${new Date()} chunk ${chunkData.length}`);
             // console.dir(chunkData.map(content => ({ id: content.id, type: content.type, text: content.text?.substring(0, 20) })));
-            const agentUser = await getAgentUser();
-            await geminiCountTokensByContentPart(transactionalEntityManager, chunkData, agentUser);
+            await geminiCountTokensByContentPart(transactionalEntityManager, chunkData, user);
             // console.dir(chunkData.map(content => ({ id: content.id, type: content.type, text: content.text?.substring(0, 20), tokenCount: content.tokenCount })));
         });
     }
@@ -125,109 +91,108 @@ async function fileEntity() {
         )
     );
     for (const chunkData of _.chunk(files, 500)) {
-        console.log(`file time ${new Date()} chunk ${chunkData.length}`);
-        const fileEntityRebuildList = chunkData.map(async file => {
-            file.innerPath = file.innerPath.replaceAll(/\\/g, '/');
-            const pathBase = file.innerPath.split('-')[0];
-            // console.log(`time ${new Date()} ${pathBase}`);
-            const outPathBase = pathBase + '-optimize';
-            let fileType = file.fileType;
-            const innerPath = file.innerPath;
-            const basename = path.basename(innerPath);
-            try {
-                await fs.readFile(innerPath);
-            } catch {
-                console.log(file.id, innerPath);
-                return file;
-            }
-
-            const hashSumSha1 = crypto.createHash('sha1');
-
-            let buffer: Buffer;
-            let buffer2: Buffer;
-            if (convertToPdfMimeList.includes(file.fileType)) {
-                const outputPath = innerPath.replaceAll(/\.[^.]*$/g, '.pdf');
-                try {
-                    fs.access(outputPath);
-                    console.log(`Already converted. ${outputPath}`);
-                } catch (error) {
-                    await convertPptxToPdf(innerPath, outputPath);
-                }
-                console.log(`time ${new Date()} ${innerPath} ${basename} ${fileType} ${outputPath}`);
-                buffer = await fs.readFile(innerPath);
-                hashSumSha1.update(buffer);
-                file.sha1 = hashSumSha1.digest('hex');
-
-                buffer = await fs.readFile(outputPath);
-            } else {
-                buffer = await fs.readFile(innerPath);
-                hashSumSha1.update(buffer);
-                file.sha1 = hashSumSha1.digest('hex');
-            }
-            bufferMap[file.sha256] = buffer;
-
-            const ext = file.innerPath.includes('.') ? `.${(file.innerPath.split('\.').pop() || '').toLowerCase()}` : ''; // 拡張子無しのパターンもある
-            console.log(`time ${new Date()} ${innerPath} ${basename} ${fileType} ${ext} ${buffer.length}`);
-
-            if (fileType.startsWith('text/') || plainExtensions.includes(innerPath) || plainMime.includes(fileType) || fileType.endsWith('+xml')) {
-
-                fileType = (fileType === 'application/octet-stream') ? 'text/plain' : fileType;
-                let decodedString;
-                // テキストファイルの場合はデコードしてテキストにしてしまう。
-                if (buffer && buffer.length > 0) {
-                    const data = buffer;
-                    const detectedEncoding = detect(data);
-                    if (detectedEncoding.encoding === 'ISO-8859-2') {
-                        detectedEncoding.encoding = 'Windows-31J'; // 文字コード自動判定でSJISがISO-8859-2ことがあるので
-                    } else if (!detectedEncoding.encoding) {
-                        detectedEncoding.encoding = 'Windows-31J'; // nullはおかしいのでとりあえず
-                    }
-                    if (['UTF-8', 'ascii'].includes(detectedEncoding.encoding)) {
-                    } else {
-                        // 他の文字コードの場合は変換しておく
-                        const decoder = new TextDecoder(detectedEncoding.encoding);
-                        decodedString = decoder.decode(data);
-                        buffer = Buffer.from(decodedString);
-                        // console.log(`time ${new Date()} ${detectedEncoding.encoding} ${decodedString.substring(0, 20)}`);
-                        // console.log(`time ${new Date()} ${ext} ${fileType} ${detectedEncoding.encoding} ${innerPath} ${pathBase}-original${ext}`);
-                        // console.log(`time ${new Date()} ${ext} ${detectedEncoding.encoding} ${fileType}`);
-                        await fs.rename(innerPath, `${pathBase}-original${ext}`);
-                        await fs.writeFile(innerPath, decodedString);
-                    }
-                } else {
-                    // 空の場合はデコーダーに掛けると面倒なので直接空文字を入れる
-                    decodedString = '';
-                }
-            } else { }
-            return file;
-        });
-
-        const updatedList = await Promise.all(fileEntityRebuildList);
-        const tokenCountFileList = updatedList.map(value => {
-            if (bufferMap[value.sha256]) {
-                if (value.fileType.startsWith('text/') || plainExtensions.includes(value.innerPath) || plainMime.includes(value.fileType)) {
-                    // textの場合は生データを渡す
-                    return { buffer: bufferMap[value.sha256].toString(), fileBodyEntity: value };
-                } else {
-                    // それ以外はbase64データを渡す
-                    return { base64Data: bufferMap[value.sha256].toString('base64'), fileBodyEntity: value };
-                }
-            } else {
-                return null;
-            }
-        }).filter(Boolean) as ({ buffer: Buffer; fileBodyEntity: FileBodyEntity; base64Data?: undefined; } | { base64Data: string; fileBodyEntity: FileBodyEntity; buffer?: undefined; })[];
         await ds.transaction(async transactionalEntityManager => {
-            const agentUser = await getAgentUser();
-            const tokenCountedFileBodyList = await geminiCountTokensByFile(transactionalEntityManager, tokenCountFileList, agentUser);
+            console.log(`file time ${new Date()} chunk ${chunkData.length}`);
+            const fileEntityRebuildList = chunkData.map(async file => {
+                file.innerPath = file.innerPath.replaceAll(/\\/g, '/');
+                const pathBase = file.innerPath.split('-')[0];
+                // console.log(`time ${new Date()} ${pathBase}`);
+                const outPathBase = pathBase + '-optimize';
+                let fileType = file.fileType;
+                const innerPath = file.innerPath;
+                const basename = path.basename(innerPath);
+                try {
+                    await fs.readFile(innerPath);
+                } catch {
+                    console.log(file.id, innerPath);
+                    return file;
+                }
+
+                const hashSumSha1 = crypto.createHash('sha1');
+
+                let buffer: Buffer;
+                let buffer2: Buffer;
+                if (convertToPdfMimeList.includes(file.fileType)) {
+                    const outputPath = innerPath.replaceAll(/\.[^.]*$/g, '.pdf');
+                    try {
+                        fs.access(outputPath);
+                        console.log(`Already converted. ${outputPath}`);
+                    } catch (error) {
+                        await convertPptxToPdf(innerPath, outputPath);
+                    }
+                    console.log(`time ${new Date()} ${innerPath} ${basename} ${fileType} ${outputPath}`);
+                    buffer = await fs.readFile(innerPath);
+                    hashSumSha1.update(buffer);
+                    file.sha1 = hashSumSha1.digest('hex');
+
+                    buffer = await fs.readFile(outputPath);
+                } else {
+                    buffer = await fs.readFile(innerPath);
+                    hashSumSha1.update(buffer);
+                    file.sha1 = hashSumSha1.digest('hex');
+                }
+                bufferMap[file.sha256] = buffer;
+
+                const ext = file.innerPath.includes('.') ? `.${(file.innerPath.split('\.').pop() || '').toLowerCase()}` : ''; // 拡張子無しのパターンもある
+                console.log(`time ${new Date()} ${innerPath} ${basename} ${fileType} ${ext} ${buffer.length}`);
+
+                if (fileType.startsWith('text/') || plainExtensions.includes(innerPath) || plainMime.includes(fileType) || fileType.endsWith('+xml')) {
+
+                    fileType = (fileType === 'application/octet-stream') ? 'text/plain' : fileType;
+                    let decodedString;
+                    // テキストファイルの場合はデコードしてテキストにしてしまう。
+                    if (buffer && buffer.length > 0) {
+                        const data = buffer;
+                        const detectedEncoding = detect(data);
+                        if (detectedEncoding.encoding === 'ISO-8859-2') {
+                            detectedEncoding.encoding = 'Windows-31J'; // 文字コード自動判定でSJISがISO-8859-2ことがあるので
+                        } else if (!detectedEncoding.encoding) {
+                            detectedEncoding.encoding = 'Windows-31J'; // nullはおかしいのでとりあえず
+                        }
+                        if (['UTF-8', 'ascii'].includes(detectedEncoding.encoding)) {
+                        } else {
+                            // 他の文字コードの場合は変換しておく
+                            const decoder = new TextDecoder(detectedEncoding.encoding);
+                            decodedString = decoder.decode(data);
+                            buffer = Buffer.from(decodedString);
+                            // console.log(`time ${new Date()} ${detectedEncoding.encoding} ${decodedString.substring(0, 20)}`);
+                            // console.log(`time ${new Date()} ${ext} ${fileType} ${detectedEncoding.encoding} ${innerPath} ${pathBase}-original${ext}`);
+                            // console.log(`time ${new Date()} ${ext} ${detectedEncoding.encoding} ${fileType}`);
+                            await fs.rename(innerPath, `${pathBase}-original${ext}`);
+                            await fs.writeFile(innerPath, decodedString);
+                        }
+                    } else {
+                        // 空の場合はデコーダーに掛けると面倒なので直接空文字を入れる
+                        decodedString = '';
+                    }
+                } else { }
+                return file;
+            });
+
+            const updatedList = await Promise.all(fileEntityRebuildList);
+            const tokenCountFileList = updatedList.map(value => {
+                if (bufferMap[value.sha256]) {
+                    if (value.fileType.startsWith('text/') || plainExtensions.includes(value.innerPath) || plainMime.includes(value.fileType)) {
+                        // textの場合は生データを渡す
+                        return { buffer: bufferMap[value.sha256].toString(), fileBodyEntity: value };
+                    } else {
+                        // それ以外はbase64データを渡す
+                        return { base64Data: bufferMap[value.sha256].toString('base64'), fileBodyEntity: value };
+                    }
+                } else {
+                    return null;
+                }
+            }).filter(Boolean) as ({ buffer: Buffer; fileBodyEntity: FileBodyEntity; base64Data?: undefined; } | { base64Data: string; fileBodyEntity: FileBodyEntity; buffer?: undefined; })[];
+            const tokenCountedFileBodyList = await geminiCountTokensByFile(transactionalEntityManager, tokenCountFileList, user);
         });
     }
 
+    const { GCP_PROJECT_ID, GCP_REGION, GCP_REGION_ANTHROPIC, GCP_API_BASE_PATH } = process.env as { GCP_PROJECT_ID: string, GCP_REGION: string, GCP_REGION_ANTHROPIC: string, GCP_API_BASE_PATH: string };
+    const vertex_ai = new VertexAI({ project: GCP_PROJECT_ID || '', location: GCP_REGION || 'asia-northeast1', apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}` });
 
     // tool
     // toolCallPartListの取得
-    const my_vertexai = (genClientByProvider(COUNT_TOKEN_MODEL).client as MyVertexAiClient);
-    const client = my_vertexai.client as VertexAI;
-    const generativeModel = client.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
+    const generativeModel = vertex_ai.preview.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
     let toolCallPartList = await ds.getRepository(ToolCallPartEntity).findBy({
         type: In([ToolCallPartType.CALL, ToolCallPartType.COMMAND, ToolCallPartType.RESULT]),
     }) as ToolCallPartEntity[];

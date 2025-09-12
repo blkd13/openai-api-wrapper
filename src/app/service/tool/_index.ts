@@ -1,4 +1,5 @@
-import { IsNull, MoreThan } from 'typeorm/index.js';
+import { OpenAI } from 'openai';
+import { IsNull, MoreThan } from 'typeorm';
 import { MyToolType, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
 import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
@@ -86,11 +87,12 @@ export async function functionDefinitions(
     // 重複排除のため、isActiveがtrueのもののみを残し、nameで一意にする
     const updatedFunctionDefinitions = functionDefinitions.map(_func => {
         const func = _func as MyToolType;
+        const definition = func.definition as OpenAI.ChatCompletionFunctionTool;
         // nameの補充（二重定義になると修正時漏れが怖いので、nameは一か所で定義してここで補充する）
-        func.info.name = func.definition.function.name;
-        func.definition.function.description = `${func.info.group}\n${func.definition.function.description}`;
+        func.info.name = definition.function.name;
+        definition.function.description = `${func.info.group}\n${definition.function.description}`;
         return func;
-    }).filter((func, index, self) => func.info.isActive && index === self.findIndex(t => t.definition.function.name === func.definition.function.name)) as MyToolType[];
+    }).filter((func, index, self) => func.info.isActive && index === self.findIndex(t => (t.definition as OpenAI.ChatCompletionFunctionTool).function.name === (func.definition as OpenAI.ChatCompletionFunctionTool).function.name)) as MyToolType[];
 
     return updatedFunctionDefinitions;
 }

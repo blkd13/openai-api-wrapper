@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { changePassword, checkProjectPermission, deleteUser, genApiKey, getOAuthAccount, getOAuthAccountList, getScopeLabels, getUser, getUserList, logout, oAuthEmailAuth, onetimeLogin, passwordReset, refresh, requestForPasswordReset, updateUser, userLogin, userLoginOAuth2, userLoginOAuth2Callback } from './controllers/auth.js';
+import { changePassword, checkProjectPermission, deleteUser, genApiKey, getOAuthAccount, getOAuthAccountList, getScopeLabels, getUser, getUserList, guestLogin, logout, oAuthEmailAuth, onetimeLogin, passwordReset, refresh, requestForPasswordReset, updateUser, userLogin, userLoginOAuth2, userLoginOAuth2Callback } from './controllers/auth.js';
 import { chatCompletion, chatCompletionStream, codegenCompletion, geminiCountTokens, geminiCreateContextCache, initEvent } from './controllers/chat.js';
 import {
     addTeamMember,
@@ -43,7 +43,7 @@ import * as gitlab from './api/api-gitlab.js';
 import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
 import { getOAuthApiProxy } from './api/api-proxy.js';
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
-import { chatCompletionByProjectModel, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
+import { chatCompletionByProjectModel, embeddingsApi, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
 import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPICountTokens, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
 import { deleteDivision, getDivisionList, getDivisionMembers, removeDivisionMember, upsertDivision, upsertDivisionMember } from './controllers/division.js';
 import { downloadFile, fileActivate, getFileGroup, getFileList, updateFileAccess, uploadFiles } from './controllers/file-manager.js';
@@ -90,7 +90,7 @@ authUserRouter.get('/logout', logout);
 
 // authNoneRouter.post('/onetime', onetimeLogin);
 // authNoneRouter.post('/rwequest-for-password-reset', requestForPasswordReset);
-// authNoneRouter.post('/guest', guestLogin);
+authNoneRouter.post('/:orgKey/guest', guestLogin);
 authInviteRouter.post('/password-reset', passwordReset);
 authInviteRouter.post('/oauth-emailauth', oAuthEmailAuth);
 
@@ -118,6 +118,7 @@ authUserRouter.delete(`/user-setting/:userId/:key`, deleteUserSetting);
 authUserRouter.get('/event', initEvent);
 authUserRouter.post('/chat-completion', chatCompletion);
 authUserRouter.post('/v1/chat/completions', chatCompletionStream);
+authUserRouter.post('/v1/embeddings', embeddingsApi);
 authUserRouter.post('/codegen/completions', codegenCompletion);
 authUserRouter.post('/create-cache', geminiCreateContextCache);
 authUserRouter.post('/v2/chat-completion', chatCompletionByProjectModel);
@@ -215,7 +216,8 @@ authUserRouter.put('/:id/access', updateFileAccess); // ファイルアクセス
 
 // nginx auth用
 authUserRouter.get('/auth/project-permission/:projectId', checkProjectPermission);
-authUserRouter.get('/auth/project-permission/:projectId/:type', checkProjectPermission);
+authUserRouter.get('/auth/project-permission/:projectId/', checkProjectPermission);
+authUserRouter.get('/auth/project-permission/:projectId/*', checkProjectPermission);
 
 // // 認証なしでのメッセージグループ詳細取得
 // authNoneRouter.get('/message-group/:messageGroupId', getMessageGroupDetails);
@@ -322,6 +324,7 @@ authUserRouter.get('/scope-labels', getScopeLabels);
 
 // Claude Code用プロキシ
 authUserRouter.post('/vertexai-claude-proxy/v1/messages', vertexAIByAnthropicAPIStream);
+authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/count-tokens\\:rawPredict', vertexAIByAnthropicAPICountTokens);
 authUserRouter.post('/vertexai-claude-proxy/v1/messages/count_tokens', vertexAIByAnthropicAPICountTokens);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:rawPredict', vertexAIByAnthropicAPI);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:streamRawPredict', vertexAIByAnthropicAPIStream);

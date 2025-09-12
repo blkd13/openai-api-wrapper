@@ -517,12 +517,17 @@ class Step0033_DesignSummaryRefine extends MultiStepDomainModelGenerator {
             contentJa: Utils.trimLines(`
                             以下のレビュー指摘に基づいて与えられた設計書を修正してください。
 
-                            ${instruction.content.map((target) => "- " + target).join("\n")}
+                            ${instruction.content
+                              .map((target) => "- " + target)
+                              .join("\n")}
                             `),
             contentEn: Utils.trimLines(`
                             Please modify the given design document based on the following review comments.
 
-                            ${instruction.content.map((target) => "- " + target).join("\n")}`),
+                            ${instruction.content
+                              .map((target) => "- " + target)
+                              .join("\n")}
+                        `),
           },
           {
             title: "Input Document",
@@ -564,7 +569,8 @@ class Step0033_DesignSummaryRefine extends MultiStepDomainModelGenerator {
     const reportList = result.map(
       (targetName: string, index: number) => `${targetName}`
     );
-    const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/summary/${this.constructor.name
+    const outputFileName = `results/${this.agentName}/${PROJECT_NAME}/summary/${
+      this.constructor.name
       }_${Utils.formatDate(new Date(), "yyyyMMddHHmmssSSS")}-report_all.md`;
     fss.writeFileSync(outputFileName, reportList.join("\n---\n"));
     return result;
@@ -2032,7 +2038,8 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                 field.type
               ].props.map(
                 (prop) =>
-                  `\t\t\t@AttributeOverride(name = "${prop.name
+                  `\t\t\t@AttributeOverride(name = "${
+                    prop.name
                   }", column = @Column(name = "${Utils.toSnakeCase(
                     field.name
                   )}_${prop.name}"))`
@@ -2084,13 +2091,15 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                     // @Columnが既にあるので、columnDefinitionを追加する。
                     field.annotations[i] =
                       anno.substring(0, anno.length - 1) +
-                      `, columnDefinition = "${TIME_TYPE_COLUMN_DEFINITION[field.type]
+                      `, columnDefinition = "${
+                        TIME_TYPE_COLUMN_DEFINITION[field.type]
                       }")`;
                     break;
                   } else if (i == field.annotations.length - 1) {
                     // 最後の要素なので、@Columnを追加する。
                     field.annotations.push(
-                      `@Column(columnDefinition = "${TIME_TYPE_COLUMN_DEFINITION[field.type]
+                      `@Column(columnDefinition = "${
+                        TIME_TYPE_COLUMN_DEFINITION[field.type]
                       }")`
                     );
                     imports.add("Column"); // Columnをimportにも追加する。
@@ -2139,10 +2148,12 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                 package ${PACKAGE_NAME}.domain.entity;
 
                 ${importList || Utils.TRIM_LINES_DELETE_LINE}
-                ${classObject.annotations.join("\n") ||
+                ${
+                  classObject.annotations.join("\n") ||
           Utils.TRIM_LINES_DELETE_LINE
           }
-                public class ${className}${classObject.type === "entity" ? " extends BaseEntity" : ""
+                public class ${className}${
+            classObject.type === "entity" ? " extends BaseEntity" : ""
           } {
                 
                 ${fields}
@@ -2163,7 +2174,8 @@ class Step0056_EntityAttributesJpaJson extends BaseStepDomainModelGenerator {
                 ${(classObject.props as any[])
             .map(
               (prop) =>
-                `| ${prop.name} | ${prop.type} | ${prop.isOptional ? "Yes" : "No"
+                      `| ${prop.name} | ${prop.type} | ${
+                        prop.isOptional ? "Yes" : "No"
                 } |`
             )
             .join("\n")}
@@ -4032,7 +4044,8 @@ class Step0110_ApiSourceReqRes extends MultiStepDomainModelGenerator {
     );
     Object.entries(angularServiceSourceMap).forEach(([key, value]) => {
       fss.writeFileSync(
-        `results/${this.agentName
+        `results/${
+          this.agentName
         }/${PROJECT_NAME}/angular/src/app/service/${Utils.toKebabCase(
           key
         )}.service.ts`,

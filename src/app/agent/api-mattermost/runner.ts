@@ -7,6 +7,7 @@ import fss from '../../common/fss.js';
 import { ds } from './../../service/db.js';
 import { MmUserEntity, MmUserPreEntity } from './../../service/entity/api-mattermost.entity.js';
 import { ApiMattermostService, GetChannelsPostsResponse, MattermostChannel, MattermostTeam } from './api.js';
+const { BATCH_USER_ID, BATCH_TENANT_KEY } = process.env as { BATCH_USER_ID: string, BATCH_TENANT_KEY: string };
 
 function sleep(ms: number) {
     if (ms < 0) {
@@ -83,7 +84,7 @@ async function insert() {
                 const jsonString = fs.readFileSync(file, 'utf-8');
                 const jsonObject = JSON.parse(jsonString) as MmUserPreEntity[];
                 jsonObject.forEach(obj => {
-                    obj.orgKey = 'public';
+                    obj.orgKey = BATCH_TENANT_KEY;
                     obj.seq = seq;
                     seq++;
                     if (obj.delete_at) {

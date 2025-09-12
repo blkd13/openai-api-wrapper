@@ -1,11 +1,10 @@
 // src/core/request-queue.ts
+import { OpenAI } from 'openai';
 import { Observable, Subscriber } from 'rxjs';
-import { ChatCompletionCreateParamsBase, ChatCompletionChunk } from 'openai/resources/chat/completions';
-import { RequestOptions } from 'openai/core';
 
 import { IAiProvider, RateLimit } from '../types/common.js';
-import { TokenCounter } from './token-counter.js';
 import { Logger } from '../utils/logger.js';
+import { TokenCounter } from './token-counter.js';
 
 /**
  * A queued API request
@@ -15,13 +14,13 @@ export interface QueuedRequest {
     id: string;
 
     /** Arguments for the request */
-    args: ChatCompletionCreateParamsBase;
+    args: OpenAI.ChatCompletionCreateParams;
 
     /** Options for the request */
-    options: RequestOptions;
+    options: OpenAI.RequestOptions;
 
     /** Subscriber to receive the response */
-    subscriber: Subscriber<ChatCompletionChunk>;
+    subscriber: Subscriber<OpenAI.ChatCompletionChunk>;
 
     /** Token counter for the request */
     tokenCounter: TokenCounter;
@@ -61,10 +60,10 @@ export class RequestQueueManager {
      * @returns A queued request object
      */
     createQueuedRequest(
-        args: ChatCompletionCreateParamsBase,
-        options: RequestOptions,
+        args: OpenAI.ChatCompletionCreateParams,
+        options: OpenAI.RequestOptions,
         provider: IAiProvider,
-        subscriber: Subscriber<ChatCompletionChunk>
+        subscriber: Subscriber<OpenAI.ChatCompletionChunk>
     ): QueuedRequest {
         // Create a token counter for the request
         const tokenCounter = new TokenCounter(args.model as any);
@@ -398,11 +397,11 @@ export class RequestQueueManager {
      * @returns Observable for the streamed response
      */
     createCompletionObservable(
-        args: ChatCompletionCreateParamsBase,
-        options: RequestOptions,
+        args: OpenAI.ChatCompletionCreateParams,
+        options: OpenAI.RequestOptions,
         provider: IAiProvider
-    ): Observable<ChatCompletionChunk> {
-        return new Observable<ChatCompletionChunk>(subscriber => {
+    ): Observable<OpenAI.ChatCompletionChunk> {
+        return new Observable<OpenAI.ChatCompletionChunk>(subscriber => {
             const request = this.createQueuedRequest(
                 args,
                 options,

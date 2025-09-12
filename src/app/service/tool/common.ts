@@ -1,27 +1,28 @@
-import { exec } from 'child_process';
-import { randomUUID } from 'crypto';
-import fs from 'fs/promises';
 import os from 'os';
+import fs from 'fs/promises';
 import path from 'path';
+import { exec } from 'child_process';
 import { promisify } from 'util';
+import { randomUUID } from 'crypto';
 
-import { map, toArray } from 'rxjs';
+import { map, timeout, toArray } from 'rxjs';
 import TurndownService from 'turndown';
 // import * as cheerio from 'cheerio';
 import { AxiosInstance } from 'axios';
 
-import createDOMPurify from 'dompurify';
-import { JSDOM } from 'jsdom';
-import { Browser } from 'puppeteer';
-import { getAxios, getPuppeteer } from '../../common/http-client.js';
-import { MyToolType, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
-import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
+import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
+import { UserRequest } from '../models/info.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
 import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
+import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
 import { OAuthAccountEntity } from '../entity/auth.entity.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
-import { UserRequest } from '../models/info.js';
+import { getAxios, getPuppeteer } from '../../common/http-client.js';
+import { Browser } from 'puppeteer';
+import createDOMPurify from 'dompurify';
+import { JSDOM } from 'jsdom';
+import { uploadFiles } from '../controllers/file-manager.js';
 
 
 const turndownService = new TurndownService();
@@ -41,15 +42,18 @@ export function sanitizeHTML(dirty: string): string {
 
 export async function isPdfUrl(url: string): Promise<boolean> {
     try {
-        const res = await fetch(url, { method: 'HEAD' });
-        const type = res.headers.get('content-type') || '';
+        const res = await (await getAxios(url)).head<CustomSearchResponse>(url);
+        // const res = await fetch(url, { method: 'HEAD' });
+        const type = res.headers['Content-Type']?.toString() || '';
         if (type.toLowerCase().includes('application/pdf')) return true;
     } catch (_) { }
 
     // fallback: check file signature
     try {
-        const res = await fetch(url);
-        const buffer = await res.arrayBuffer();
+        // const res = await fetch(url);
+        // const buffer = await res.arrayBuffer();
+        const res = await (await getAxios(url, { responseType: 'arraybuffer' })).get(url);
+        const buffer = res.data as ArrayBuffer;
         const signature = new Uint8Array(buffer.slice(0, 4));
         return signature[0] === 0x25 && signature[1] === 0x50 && signature[2] === 0x44 && signature[3] === 0x46; // %PDF
     } catch (_) {
@@ -440,6 +444,7 @@ export function commonFunctionDefinitions(
                                 aiApi.chatCompletionObservableStream(
                                     inDto.args, { label: newLabel }, aiProvider,
                                 ).pipe(
+                                timeout(30_000), // ← 30秒のタイムアウトを設定（ミリ秒）
                                     map(res => res.choices.map(choice => choice.delta.content).join('')),
                                     toArray(),
                                     map(res => res.join('')),
@@ -448,7 +453,9 @@ export function commonFunctionDefinitions(
                                         text += next;
                                     },
                                     error: error => {
-                                        reject(error);
+                                    // reject(error);
+                                    // console.log(`WebSearch fineCounter=${fineCounter++} error`);
+                                    resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: 'error' });
                                     },
                                     complete: () => {
                                         resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: text });
@@ -661,7 +668,8 @@ export function commonFunctionDefinitions(
                         await execAsync(`chmod +x "${shellScriptPath}"`);
 
                         // Dockerでコンテナを実行
-                        command = `docker run --rm -v "${tmpDir}:/app" python:${pythonVersion}-slim /app/run.sh`;
+                        const PROXY_SETTINGS = `-e http_proxy=\${http_proxy} -e https_proxy=\${https_proxy} -e no_proxy=\${no_proxy}`;
+                        command = `docker run --rm ${PROXY_SETTINGS} -v "${tmpDir}:/app" python:${pythonVersion}-slim /app/run.sh`;
                     }
                     // console.log(`Executing command: ${command}`);
                     // console.log(`Python version: ${pythonVersion}`);

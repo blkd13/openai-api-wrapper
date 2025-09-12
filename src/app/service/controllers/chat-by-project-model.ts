@@ -1,17 +1,35 @@
+import { CountTokensResponse, GenerateContentRequest } from '@google-cloud/vertexai';
 import axios from 'axios';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";
 import { promises as fs } from 'fs';
-import { ChatCompletionAssistantMessageParam, ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionContentPartImage, ChatCompletionMessageParam, ChatCompletionMessageToolCall, ChatCompletionToolMessageParam } from "openai/resources";
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { OpenAI } from 'openai';
 import { concatMap, from } from 'rxjs';
+import { EntityManager, In, IsNull, Not } from 'typeorm';
 
-import { CountTokensResponse, GenerateContentRequest } from '@google-cloud/vertexai';
-import { aiApi, AIProviderClient, calculateTokenCost, getTiktokenEncoder, invalidMimeList, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, normalizeMessage, providerInstances, providerPrediction, TokenCount } from '../../common/openai-api-wrapper.js';
+import { CachedContent, countChars, GenerateContentRequestForCache, mapForGemini, MyVertexAiClient, TokenCharCount } from '../../common/my-vertexai.js';
+import { aiApi, AIProviderClient, calculateTokenCost, embeddings, getTiktokenEncoder, invalidMimeList, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, normalizeMessage, providerInstances, providerPrediction, TokenCount } from '../../common/openai-api-wrapper.js';
+import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
+import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
+import { ScopedEntityService } from '../common/scoped-entity-service.js';
 import { ds } from '../db.js';
+import { AIModelEntity, AIModelPricingEntity, AIProviderEntity, AIProviderType, getAIProviderConfig } from '../entity/ai-model-manager.entity.js';
+import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus, ScopeType, UserEntity, UserStatus } from '../entity/auth.entity.js';
+import { safeWhere } from '../entity/base.js';
+import { FileBodyEntity, FileEntity } from '../entity/file-models.entity.js';
+import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
+import { ToolCallGroupEntity, ToolCallPart, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartEntity, ToolCallPartInfo, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
+import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
+import { ContentPartStatus, ContentPartType, MessageGroupType, TeamMemberRoleType, ThreadGroupStatus, ThreadStatus } from '../models/values.js';
+import { functionDefinitions } from '../tool/_index.js';
+import { clients } from './chat.js';
+import { appendToolCallPart } from './tool-call.js';
 
-import { HttpsProxyAgent } from 'https-proxy-agent';
+
 const { GCP_PROJECT_ID, GCP_CONTEXT_CACHE_LOCATION, GCP_API_BASE_PATH } = process.env;
 
 const proxyObj: { [key: string]: string | undefined } = {
@@ -24,23 +42,6 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
     axios.defaults.proxy = false; // httpsAgentを使ってプロキシするので、axiosの元々のproxyはoffにしておかないと変なことになる。
 } else { }
 
-import { EntityManager, In, IsNull, Not } from 'typeorm';
-import { CachedContent, countChars, GenerateContentRequestForCache, mapForGemini, MyVertexAiClient, TokenCharCount } from '../../common/my-vertexai.js';
-import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
-import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
-import { ScopedEntityService } from '../common/scoped-entity-service.js';
-import { AIModelEntity, AIModelPricingEntity, AIProviderEntity, AIProviderType, getAIProviderConfig } from '../entity/ai-model-manager.entity.js';
-import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus, ScopeType, UserEntity, UserStatus } from '../entity/auth.entity.js';
-import { safeWhere } from '../entity/base.js';
-import { FileBodyEntity, FileEntity } from '../entity/file-models.entity.js';
-import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
-import { ToolCallGroupEntity, ToolCallPart, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartEntity, ToolCallPartInfo, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
-import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
-import { ContentPartStatus, ContentPartType, MessageGroupType, TeamMemberRoleType, ThreadGroupStatus, ThreadStatus } from '../models/values.js';
-import { functionDefinitions } from '../tool/_index.js';
-import { clients } from './chat.js';
-import { appendToolCallPart } from './tool-call.js';
 
 export const COUNT_TOKEN_MODEL = 'gemini-2.5-flash' as const;
 export const COUNT_TOKEN_OPENAI_MODEL = 'gpt-5' as const;
@@ -51,8 +52,8 @@ async function buildFileGroupBodyMap(
     orgKey: string,
     contentPartList: (ContentPartEntity | { type: 'text', text: string } | { type: 'file', text: string, fileGroupId: string })[],
     // fileGroupBodyMap: { [fileGroupId: string]: { file: FileEntity, fileBody: FileBodyEntity, base64: string }[] } = {},
-    fileGroupIdChatCompletionContentPartImageMap: { [fileGroupId: string]: ChatCompletionContentPartImage[][] } = {},
-): Promise<{ [fileGroupId: string]: ChatCompletionContentPartImage[][] }> {
+    fileGroupIdChatCompletionContentPartImageMap: { [fileGroupId: string]: OpenAI.ChatCompletionContentPartImage[][] } = {},
+): Promise<{ [fileGroupId: string]: OpenAI.ChatCompletionContentPartImage[][] }> {
     // コンテンツの内容がファイルの時用
     const fileGroupIdList = contentPartList.filter(contentPart => contentPart.type === 'file').map(contentPart => (contentPart as { linkId: string }).linkId || (contentPart as { fileGroupId: string }).fileGroupId);
     const fileList = await ds.getRepository(FileEntity).find({
@@ -126,7 +127,7 @@ async function buildFileGroupBodyMap(
 
     Object.entries(fileGroupBodyMap).forEach(([fileGroupId, value]) => {
         fileGroupIdChatCompletionContentPartImageMap[fileGroupId] = value.filter(file => file.file.isActive && !invalidMimeList.includes(file.fileBody.fileType)).map(file => {
-            return file.base64List.map(base64 => ({ type: 'image_url', image_url: { url: base64, label: file.file.fileName } })) as ChatCompletionContentPartImage[];
+            return file.base64List.map(base64 => ({ type: 'image_url', image_url: { url: base64, label: file.file.fileName } })) as OpenAI.ChatCompletionContentPartImage[];
         });
     });
 
@@ -149,7 +150,7 @@ async function buildArgs(
     mode: 'countOnly' | 'createCache' | undefined = undefined,
     // dataUrlMap: Record<string, { file: FileEntity, fileBody: FileBodyEntity, base64: string }> = {},
     // fileGroupBodyMap: { [fileGroupId: string]: { file: FileEntity, fileBody: FileBodyEntity, base64: string }[] } = {},
-    fileGroupIdChatCompletionContentPartImageMap: { [fileGroupId: string]: ChatCompletionContentPartImage[][] } = {},
+    fileGroupIdChatCompletionContentPartImageMap: { [fileGroupId: string]: OpenAI.ChatCompletionContentPartImage[][] } = {},
 ): Promise<{
     messageArgsSetList: MessageArgsSet[],
 }> {
@@ -437,8 +438,8 @@ async function buildArgs(
         for (const messageSet of messageSetList) {
             let message = {
                 role: messageSet.messageGroup.role,
-                content: [] as ChatCompletionContentPart[],
-            } as { role: string, content: ChatCompletionContentPart[] };
+                content: [] as OpenAI.ChatCompletionContentPart[],
+            } as { role: string, content: OpenAI.ChatCompletionContentPart[] };
             for (const content of contentPartMap[messageSet.message.id]) {
                 // contentPartMap[messageSet.message.id].forEach(content => {
                 if (content.type === 'text') {
@@ -459,7 +460,7 @@ async function buildArgs(
                                 message.content.push(image);
                             } else if (provider === 'openai') {
                                 // gpt系はPDFを画像化して突っ込む。
-                                message.content.push({ type: 'file', file: { file_data: image.image_url.url, filename: content.text } } as ChatCompletionContentPart.File);
+                                message.content.push({ type: 'file', file: { file_data: image.image_url.url, filename: content.text } } as OpenAI.ChatCompletionContentPart.File);
                             } else {
                                 // gemini系以外は画像化したものとテキスト抽出したものを組合せる。
                                 const jsonString = Utils.dataUrlToData(imageAry[1].image_url.url);
@@ -480,7 +481,7 @@ async function buildArgs(
                                 imageAry.slice(2).forEach((image, iPage) => {
                                     // mimeがapplication/pdfになってしまっているのでimage/pngに直す
                                     const [mimeType, base64String] = Utils.dataUrlSplit(image.image_url.url);
-                                    message.content.push({ type: 'image_url', image_url: { url: `data:image/png;base64,${base64String}`, label: (image.image_url as any).label } } as ChatCompletionContentPartImage);
+                                    message.content.push({ type: 'image_url', image_url: { url: `data:image/png;base64,${base64String}`, label: (image.image_url as any).label } } as OpenAI.ChatCompletionContentPartImage);
                                     message.content.push({ type: 'text', text: pdfMetaData.textPages[iPage] });
                                 });
                                 message.content.push({ type: 'text', text: `${(image.image_url as any).label} end\n---\n` });
@@ -501,17 +502,17 @@ async function buildArgs(
                     const toolCallObjectMap = toolCallList.filter(toolCall => [ToolCallPartType.CALL, ToolCallPartType.RESULT].includes(toolCall.type)).reduce((prev, curr) => {
                         if (prev[curr.toolCallId]) {
                         } else {
-                            prev[curr.toolCallId] = { tool_call_id: curr.id, call: curr.body as ToolCallPartCallBody as ChatCompletionMessageToolCall };
+                            prev[curr.toolCallId] = { tool_call_id: curr.id, call: curr.body as ToolCallPartCallBody as OpenAI.ChatCompletionMessageToolCall };
                             tollCallObjectKeyListSequencial.push(curr.toolCallId);
                         }
                         // 
                         if (curr.type === ToolCallPartType.CALL) {
-                            prev[curr.toolCallId].call = curr.body as ToolCallPartCallBody as ChatCompletionMessageToolCall;
+                            prev[curr.toolCallId].call = curr.body as ToolCallPartCallBody as OpenAI.ChatCompletionMessageToolCall;
                         } else if (curr.type === ToolCallPartType.RESULT) {
-                            prev[curr.toolCallId].result = curr.body as ToolCallPartResultBody as ChatCompletionToolMessageParam;
+                            prev[curr.toolCallId].result = curr.body as ToolCallPartResultBody as OpenAI.ChatCompletionToolMessageParam;
                         }
                         return prev;
-                    }, {} as { [tool_call_id: string]: { tool_call_id: string, call: ChatCompletionMessageToolCall, result?: ChatCompletionToolMessageParam } });
+                    }, {} as { [tool_call_id: string]: { tool_call_id: string, call: OpenAI.ChatCompletionMessageToolCall, result?: OpenAI.ChatCompletionToolMessageParam } });
 
                     for (const toolCallId of tollCallObjectKeyListSequencial) {
                         const toolCall = toolCallObjectMap[toolCallId];
@@ -522,7 +523,7 @@ async function buildArgs(
                         let isAppend = false;
                         if (message.role === 'assistant') {
                             // 一個前のやつに追加するパsターン
-                            const beforeAssistant = message as ChatCompletionAssistantMessageParam;
+                            const beforeAssistant = message as OpenAI.ChatCompletionAssistantMessageParam;
                             if (beforeAssistant.tool_calls) {
                             } else {
                                 beforeAssistant.tool_calls = [];
@@ -534,45 +535,45 @@ async function buildArgs(
                         } else { }
                         if (!isAppend) {
                             // 新規のtoolの場合は messageレベルでブレイクする
-                            if (message.content.length > 0 || (message as ChatCompletionAssistantMessageParam).tool_calls) {
+                            if (message.content.length > 0 || (message as OpenAI.ChatCompletionAssistantMessageParam).tool_calls) {
                                 // 現在のmessageが空でない場合はargsに追加して新しいmessageを作る
-                                inDto.args.messages.push(message as ChatCompletionMessageParam);
+                                inDto.args.messages.push(message as OpenAI.ChatCompletionMessageParam);
                             } else {
                                 // 現在のmessageがの場合は現在のmessageは破棄する
                             }
                             message = {
                                 role: 'assistant', content: [], tool_calls: [toolCall.call],
-                            } as { role: string, content: ChatCompletionContentPart[], tool_calls: ChatCompletionMessageToolCall[] };
-                            inDto.args.messages.push(message as ChatCompletionMessageParam);
+                            } as { role: string, content: OpenAI.ChatCompletionContentPart[], tool_calls: OpenAI.ChatCompletionMessageToolCall[] };
+                            inDto.args.messages.push(message as OpenAI.ChatCompletionMessageParam);
                             // console.log(`-------------------isNotAppend-------------------`);
                             // console.dir(inDto.args.messages, { depth: null });
                             // 次サイクル用のmessageを初期化
                             message = {
                                 role: messageSet.messageGroup.role,
-                                content: [] as ChatCompletionContentPart[],
-                            } as { role: string, content: ChatCompletionContentPart[] };
+                                content: [] as OpenAI.ChatCompletionContentPart[],
+                            } as { role: string, content: OpenAI.ChatCompletionContentPart[] };
                         } else { }
 
                         // ### resultの設定
                         if (toolCall.result) {
                             const result = toolCall.result;
                             // resultがあればmessageレベルでブレイクする
-                            if (message.content.length > 0 || (message as ChatCompletionAssistantMessageParam).tool_calls) {
+                            if (message.content.length > 0 || (message as OpenAI.ChatCompletionAssistantMessageParam).tool_calls) {
                                 // 現在のmessageが空でない場合はargsに追加して新しいmessageを作る
-                                inDto.args.messages.push(message as ChatCompletionMessageParam);
+                                inDto.args.messages.push(message as OpenAI.ChatCompletionMessageParam);
                             } else {
                                 // 現在のmessageがの場合は現在のmessageは破棄する
                             }
                             // roleは実際はtoolが入ってくる。
                             message = {
                                 role: result.role, content: [{ type: 'text', text: result.content }], tool_call_id: result.tool_call_id,
-                            } as { role: string, content: ChatCompletionContentPart[] };
-                            inDto.args.messages.push(message as ChatCompletionMessageParam);
+                            } as { role: string, content: OpenAI.ChatCompletionContentPart[] };
+                            inDto.args.messages.push(message as OpenAI.ChatCompletionMessageParam);
                             // 次サイクル用のmessageを初期化
                             message = {
                                 role: messageSet.messageGroup.role,
-                                content: [] as ChatCompletionContentPart[],
-                            } as { role: string, content: ChatCompletionContentPart[] };
+                                content: [] as OpenAI.ChatCompletionContentPart[],
+                            } as { role: string, content: OpenAI.ChatCompletionContentPart[] };
                         } else {
                             // 実行前の状態
                         }
@@ -580,7 +581,7 @@ async function buildArgs(
                 } else if (content.type === `meta`) {
                     try {
                         const meta = JSON.parse(content.text || '{}') as { thinking: string, signature: string };
-                        if (meta.thinking && inDto.args.model.includes('-sonnet-thinking')) {
+                        if (meta.thinking && inDto.args.model.includes('-thinking')) {
                             message.content.push({ type: 'thinking' as 'text', thinking: meta.thinking || '', signature: meta.signature || '' } as any);
                         } else {
                             console.log(`\n\nskip content=${JSON.stringify(content)}`);
@@ -594,12 +595,12 @@ async function buildArgs(
             }
             // console.log('message=', message);
             // console.dir(message);
-            inDto.args.messages.push(message as ChatCompletionMessageParam);
+            inDto.args.messages.push(message as OpenAI.ChatCompletionMessageParam);
         }
         inDto.args.messages = inDto.args.messages.filter(message => {
-            const contents = (message.content as ChatCompletionContentPart[] || [])
+            const contents = (message.content as OpenAI.ChatCompletionContentPart[] || [])
             message.content = contents.filter(content => !(content.type === 'text' && !content.text));
-            return contents.length > 0 || ((message as ChatCompletionAssistantMessageParam).tool_calls || []).length > 0
+            return contents.length > 0 || ((message as OpenAI.ChatCompletionAssistantMessageParam).tool_calls || []).length > 0
         });
 
         // AIプロバイダクライアントを取得
@@ -646,7 +647,7 @@ export async function getAIProviderAndModel(user: UserTokenPayloadWithRole, mode
     );
 
     if (!model) {
-        throw new Error(`モデル ${modelName} が見つかりません。`);
+        throw new Error(`モデル ${modelName} が見つかりません。${user.id}`);
     }
 
     if (!TokenCount.COST_TABLE[modelName]) {
@@ -807,12 +808,31 @@ export const chatCompletionByProjectModel = [
         }[] = [];
         try {
 
+            if (process.env.USER_MONTHLY_CREDIT) {
+                // 月次クレジット制限がある場合は今月の使用量を確認する
+                const queryRunner = ds.createQueryRunner();
+                await queryRunner.connect();
+                const result = await queryRunner.query("SELECT COALESCE(SUM(cost),0) AS sum FROM predict_history_view WHERE org_key = $1 AND user_id = $2 AND created_at BETWEEN $3 AND $4", [req.info.user.orgKey, req.info.user.id, new Date(new Date().getFullYear(), new Date().getMonth(), 1), new Date()]);
+                // console.log(result[0].sum);
+                if (result.length > 0 && result[0].sum !== null) {
+                    const balance = parseFloat(process.env.USER_MONTHLY_CREDIT || '2') - parseFloat(result[0].sum);
+                    if (balance < -10) {
+                        throw new Error(`今月の利用可能クレジットを超過しています。管理者にお問い合わせください。（残り${balance}USD）`);
+                    } else { }
+                } else { }
+            } else { }
+
             const my_vertexai = ((await getAIProvider(req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient);
             const client = my_vertexai.client;
             const generativeModel = client.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
             const idList = id.split('|');
             const { messageArgsSetList } = await buildArgs(req.info.user, type, idList);
+            // 取得できるメッセージが無い場合は早期に応答（ハング防止）
+            if (!messageArgsSetList || messageArgsSetList.length === 0) {
+                res.status(404).set('Content-Type', 'text/plain; charset=utf-8').end('Not found or inaccessible');
+                return;
+            }
             // console.dir(messageArgsSetList[0].args.messages, { depth: null });
 
             // 重複無しのメッセージグループリスト
@@ -1070,7 +1090,7 @@ export const chatCompletionByProjectModel = [
                     await transactionalEntityManager.save(PredictHistoryWrapperEntity, history);
 
                     // 入力でtoolCallCommandがある場合はツール実行指示からなので、末尾のメッセージID内の全コンテンツのfunctionを実行する
-                    const toolCallCallList = [] as ChatCompletionChunk.Choice.Delta.ToolCall[];
+                    const toolCallCallList = [] as OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall[];
                     if (toolCallPartCommandList && toolCallPartCommandList.length > 0) {
                         // console.log(`toolCallCommand=${toolCallCommand} inDto.contentPartList.length=${inDto.contentPartList.length}`);
                         // console.dir(inDto, { depth: null });
@@ -1109,7 +1129,7 @@ export const chatCompletionByProjectModel = [
                                 if (toolCallPartCommandList[index] && toolCallPartCommandList[index].body.arguments) {
                                     (toolCall as ToolCallPartCall).body.function.arguments = toolCallPartCommandList[index].body.arguments;
                                 } else { }
-                                toolCallCallList.push(toolCall.body as ChatCompletionChunk.Choice.Delta.ToolCall);
+                                toolCallCallList.push(toolCall.body as OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall);
 
                                 // toolCallCommandを登録する
                                 const toolCallCommandEntity = new ToolCallPartEntity();
@@ -1139,8 +1159,8 @@ export const chatCompletionByProjectModel = [
                 const functions = (await functionDefinitions(
                     obj, req, aiApi, connectionId, streamId, message, label
                 )).reduce((prev, curr) => {
-                    prev[curr.definition.function.name] = curr;
-                    curr.info.name = curr.definition.function.name;
+                    prev[(curr.definition as OpenAI.ChatCompletionFunctionTool).function.name] = curr;
+                    curr.info.name = (curr.definition as OpenAI.ChatCompletionFunctionTool).function.name;
                     return prev;
                 }, {} as { [functionName: string]: MyToolType });
                 return { inDto, messageSet, functions };
@@ -1159,11 +1179,11 @@ export const chatCompletionByProjectModel = [
                 if (inDto.args.tool_choice && inDto.args.tool_choice !== 'none' && inDto.args.tools && inDto.args.tools.length > 0) {
                     // 直近のfunctions定義を当てる。
                     const dupCheck: Set<string> = new Set();
-                    inDto.args.tools = inDto.args.tools.filter(tool => functions[tool.function.name]).map(tool => functions[tool.function.name].definition).filter(tool => dupCheck.has(tool.function.name) ? false : dupCheck.add(tool.function.name));
+                    inDto.args.tools = inDto.args.tools.filter(tool => functions[(tool as OpenAI.ChatCompletionFunctionTool).function.name]).map(tool => functions[(tool as OpenAI.ChatCompletionFunctionTool).function.name].definition).filter(tool => dupCheck.has((tool as OpenAI.ChatCompletionFunctionTool).function.name) ? false : dupCheck.add((tool as OpenAI.ChatCompletionFunctionTool).function.name));
 
                     // toolを使うのであればprovider毎のユーザー情報をシステムプロンプトに付与しておく。
                     const providerSet: Set<string> = new Set();
-                    inDto.args.tools.map(tool => tool.function.name).forEach(functionName => providerSet.add(functions[functionName].info.group));
+                    inDto.args.tools.map(tool => (tool as OpenAI.ChatCompletionFunctionTool).function.name).forEach(functionName => providerSet.add(functions[functionName].info.group));
                     const savedToolCallGroup = await ds.getRepository(OAuthAccountEntity).find({
                         where: {
                             orgKey: req.info.user.orgKey,
@@ -1178,7 +1198,11 @@ export const chatCompletionByProjectModel = [
                         if (typeof inDto.args.messages[0].content === 'string') {
                             inDto.args.messages[0].content += oAuthUserInfoString;
                         } else {
-                            inDto.args.messages[0].content[0].text += oAuthUserInfoString;
+                            if (inDto.args.messages[0].content[0]) {
+                                inDto.args.messages[0].content[0].text += oAuthUserInfoString;
+                            } else {
+                                inDto.args.messages[0].content[0] = { type: 'text', text: oAuthUserInfoString };
+                            }
                         }
                     } else { }
                 } else {
@@ -1197,6 +1221,7 @@ export const chatCompletionByProjectModel = [
                     // 変数を代入しておく
                     if (message.role === 'system' && typeof message.content === 'string') {
                         message.content = message.content.replaceAll(/\$\{user_name\}/g, JSON.stringify(req.info.user));
+                        message.content = message.content.replaceAll(/\$\{current_date\}/g, new Date().toLocaleDateString());
                         message.content = message.content.replaceAll(/\$\{current_datetime\}/g, new Date().toISOString());
                     } else { }
                 });
@@ -1319,7 +1344,7 @@ export const chatCompletionByProjectModel = [
                         // DB更新があるので async/await をする必要があるのでfromでObservable化してconcatMapで纏めて待つ
                         // こうしないとcompleteが先に走ってしまう可能性がある。
                         concatMap(next => from((async _chunk => {
-                            const chunk = _chunk as ChatCompletionChunk & { contentPart?: ContentPartEntity };
+                            const chunk = _chunk as OpenAI.ChatCompletionChunk & { contentPart?: ContentPartEntity };
                             if (chunk.choices[0]) { } else { return; }
                             // toolCallGroupを登録することがあるのでawait書けておかないと抜けちゃう。
                             chunk.choices.map(choice => {
@@ -1623,7 +1648,16 @@ export const chatCompletionByProjectModel = [
             //     }));
             // })
         } catch (error) {
-            res.status(503).set('Content-Type', 'text/plain; charset=utf-8').set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
+            // Avoid sending headers after response already ended
+            if (!res.headersSent && !res.writableEnded) {
+                res
+                    .status(503)
+                    .set('Content-Type', 'text/plain; charset=utf-8')
+                    .end(Utils.errorFormat(error));
+            } else {
+                // Response already sent; just log the error to server logs
+                console.error('chatCompletionByProjectModel error after response sent:', Utils.errorFormat(error));
+            }
         }
     }
 ];
@@ -1730,8 +1764,8 @@ export const geminiCountTokensByProjectModel = [
                 message.role = 'user'; // systemだとトークン計上されないので
                 const _message = {
                     role: message.role,
-                    content: [] as ChatCompletionContentPart[],
-                } as { role: string, content: ChatCompletionContentPart[] };
+                    content: [] as OpenAI.ChatCompletionContentPart[],
+                } as { role: string, content: OpenAI.ChatCompletionContentPart[] };
                 message.content.forEach(content => {
                     if (content.type === 'text' && content.text) {
                         _message.content.push({ type: 'text', text: content.text });
@@ -1746,7 +1780,7 @@ export const geminiCountTokensByProjectModel = [
                     }
                 });
                 return _message;
-            }).filter(bit => bit && bit.content && bit.content.length > 0) as ChatCompletionMessageParam[];
+            }).filter(bit => bit && bit.content && bit.content.length > 0) as OpenAI.ChatCompletionMessageParam[];
 
             // ファイルのトークン数を取得
             const fileTokenCountList = await getCountTokenListByFileGroupIdList(req.info.user.orgKey, fileGroupIdList);
@@ -1797,7 +1831,7 @@ export const geminiCountTokensByProjectModel = [
                                 // tokenObject.totalBillableCharacters = (tokenObject.totalBillableCharacters || 0) + preTokenCount.totalBillableCharacters;
                                 // countCharsObj.text = (countCharsObj.text || 0) + tokenObject.totalBillableCharacters || 0;
 
-                                const prompt = `${args.messages.map(message => ((message.content || []) as ChatCompletionContentPart[]).map(content => content.type === 'text' ? content.text : '').join('\n')).join('\n')}`;
+                                const prompt = `${args.messages.map(message => ((message.content || []) as OpenAI.ChatCompletionContentPart[]).map(content => content.type === 'text' ? content.text : '').join('\n')).join('\n')}`;
                                 const openaiTokenCount = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(prompt).length, totalBillableCharacters: 0 };
 
                                 const tokenObjMap = {
@@ -1831,12 +1865,24 @@ export const geminiCountTokensByProjectModel = [
                                 // console.dir(tokenCountSummaryList, { depth: null });
                                 res.end(JSON.stringify(tokenCountSummaryList));
                             }).catch(error => {
-                                res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
+                                if (!res.headersSent && !res.writableEnded) {
+                                    res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
+                                }
                             });
                         } catch (error) {
+                            if (!res.headersSent && !res.writableEnded) {
+                                res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
+                            }
+                        }
+                    },
+                    error: error => {
+                        if (!res.headersSent && !res.writableEnded) {
                             res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
                         }
                     },
+                    complete: () => {
+                        // no-op (next branch handles response)
+                    }
                 });
             } else {
                 // inputCounterが0の場合は元々計算済みのものを返却するだけ
@@ -2243,9 +2289,19 @@ export const geminiCreateContextCacheByProjectModel = [
                         });
                         res.status(200).json(savedCachedContent);
                     } catch (error) {
+                        if (!res.headersSent && !res.writableEnded) {
+                            res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
+                        }
+                    }
+                },
+                error: error => {
+                    if (!res.headersSent && !res.writableEnded) {
                         res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
                     }
                 },
+                complete: () => {
+                    // no-op
+                }
             });
         } catch (error) {
             res.status(503).set('Content-Type', 'text/plain; charset=utf-8').end(Utils.errorFormat(error));
@@ -2348,6 +2404,11 @@ export const geminiDeleteContextCacheByProjectModel = [
             const threadList = await ds.getRepository(ThreadEntity).find({
                 where: { orgKey: req.info.user.orgKey, threadGroupId: threadGroup.id, status: Not(ThreadStatus.Deleted) }
             });
+            // スレッドが無い場合は早期に応答（ハング回避）
+            if (!threadList || threadList.length === 0) {
+                res.status(404).set('Content-Type', 'text/plain; charset=utf-8').end('No threads found');
+                return;
+            }
             const result = await ds.transaction(async transactionalEntityManager => {
                 for (const thread of threadList) {
                     // TODO for文で書いては見たものの最後axios投げるところが複数スレッド対応していないので注意。
@@ -2417,3 +2478,21 @@ export const geminiGetContextCache = [
     }
 ];
 
+export const embeddingsApi = [
+    body('model').notEmpty(),
+    body('input').notEmpty(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { input, model } = req.body as { input: string, model: string };
+        try {
+            // console.log(model);
+            const provider = await getAIProvider(req.info.user, model);
+            const emb = await embeddings(req.info.user.orgKey, req.info.user.id, req.info.ip, model, provider, input);
+            // res.end(emb);
+            res.end(JSON.stringify(emb));
+        } catch (error) {
+            res.status(503).end(Utils.errorFormat(error));
+        }
+    }
+];

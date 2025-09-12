@@ -710,7 +710,7 @@ export const updateDivisionMember = [
 export const upsertDivisionMember = [
     param('divisionId').notEmpty().isUUID(),
     param('userId').optional({ nullable: true }).isUUID(),
-    body('userId').notEmpty().isUUID(),
+    body('userId').optional({ nullable: true }).isUUID(),
     body('role').notEmpty().isIn(Object.values(UserRoleType)),
     body('status').optional().isIn(Object.values(UserStatus)),
     body('priority').optional().isInt({ min: 0 }),
@@ -718,13 +718,19 @@ export const upsertDivisionMember = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const { divisionId } = req.params as { divisionId: string };
-        const { userId, role, status, priority = 0 } = req.body;
-
-        if (userId && req.params.userId && req.params.userId !== userId) {
+        const { role, status, priority = 0 } = req.body;
+        if (req.body.userId && req.params.userId && req.params.userId !== req.body.userId) {
             res.status(400).json({ message: 'User IDが一致しません' });
             return;
         }
 
+        if (req.params.userId || req.body.userId) {
+        } else {
+            res.status(400).json({ message: 'User IDが指定されていません' });
+            return;
+        }
+        // TODO userIdがパスパラメータ化bodyのどっちかから来るって変な感じするから直した方が良い。
+        const userId = req.body.userId || req.params.userId;
         try {
             const result = await ds.transaction(async transactionalEntityManager => {
                 // 権限チェック: リクエスト元ユーザーがDivisionのAdmin/SuperAdminかチェック

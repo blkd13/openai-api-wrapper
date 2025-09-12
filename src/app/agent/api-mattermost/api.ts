@@ -7,6 +7,7 @@ const agent = new https.Agent({ rejectUnauthorized: false });
 // プロキシ無しaxios
 // export const axiosMattermost = axios.create({ proxy: false, httpAgent: false, httpsAgent: agent, headers: { 'Authorization': `Bearer ${MATTERMOST_TOKEN}` } });
 export const axiosMattermost = axios.create({ proxy: false, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${MATTERMOST_TOKEN}` } });
+export const axiosMattermostPost = axios.create({ proxy: false, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${MATTERMOST_TOKEN}`, 'X-Requested-With': 'XMLHttpRequest' } });
 
 import { paths, components } from "./mattermost-openapi-v4.js";
 
@@ -62,7 +63,28 @@ export class ApiMattermostService {
     //   const url = `${this.baseUrl}/users/me/channels/${channelId}/posts/unread`;
     //   return axiosMattermost.get<{ posts: MattermostPost[] }>(url);
     // }
+    mattermostPostMessage(channelId: string, message: string, options?: { parent_id?: string; file_ids?: string[]; props?: any }): Promise<AxiosResponse<MattermostPost>> {
+        const postData: any = {
+            channel_id: channelId,
+            message: message,
+        };
 
+        if (options?.parent_id) {
+            postData.root_id = options.parent_id; // APIでは root_id を使用
+        }
+        if (options?.file_ids) {
+            postData.file_ids = options.file_ids;
+        }
+        if (options?.props) {
+            postData.props = options.props;
+        }
+        const url = `${this.baseUrl}/posts`;
+        return axiosMattermostPost.post<MattermostPost>(url, postData);
+    }
+    mattermostDeleteMessage(postId: string): Promise<AxiosResponse<MattermostPost>> {
+        const url = `${this.baseUrl}/posts/${postId}`;
+        return axiosMattermostPost.delete<MattermostPost>(url);
+    }
     channels: MattermostChannel[] = [];
     /** これが自身の関与チャネル全量 */
     mattermostUserChannels(userId: string = 'me', last_delete_at: number = 0, include_deleted = false): Promise<AxiosResponse<MattermostChannel[]>> {

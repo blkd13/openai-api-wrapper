@@ -1,10 +1,6 @@
 // src/types/common.ts
+import { OpenAI } from 'openai';
 import { Observable } from 'rxjs';
-import { RequestOptions } from 'openai/core';
-import {
-    ChatCompletionCreateParamsBase,
-    ChatCompletionChunk
-} from 'openai/resources/chat/completions';
 
 /**
  * Represents token usage information from AI API responses
@@ -44,9 +40,9 @@ export interface IAiProvider {
      * @returns Observable stream of chat completion chunks
      */
     chatCompletionStream(
-        args: ChatCompletionCreateParamsBase,
-        options: RequestOptions
-    ): Observable<ChatCompletionChunk>;
+        args: OpenAI.ChatCompletionCreateParams,
+        options: OpenAI.RequestOptions
+    ): Observable<OpenAI.ChatCompletionChunk>;
 
     /**
      * Get the current rate limit information for this provider

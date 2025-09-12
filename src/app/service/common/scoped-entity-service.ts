@@ -92,6 +92,14 @@ export class ScopedEntityService {
             },
         };
 
+        Object.keys(entity).forEach(key => {
+            if (['name', 'scopeInfo'].includes(key)) {
+                // name/scopeInfoは必須項目として追加済みのため無視。
+            } else {
+                conflictWhere[key] = entity[key as keyof Partial<T>];
+            }
+        });
+
         if (excludeId) {
             conflictWhere.id = Not(excludeId);
         }
@@ -140,7 +148,7 @@ export class ScopedEntityService {
         entityData: Partial<T>,
         userIp: string,
         options: {
-            uniqueFields?: string[];
+            uniqueFields?: string[] | string[][];
             beforeSave?: (entity: T, isNew: boolean) => Promise<void> | void;
         } = {}
     ): Promise<{ entity: T; isNew: boolean }> {
@@ -172,11 +180,30 @@ export class ScopedEntityService {
         }
         // 重複チェック（同一スコープ内）
         if (options.uniqueFields && entityData.scopeInfo) {
-            for (const field of options.uniqueFields) {
-                if (entityData[field as keyof T]) {
+            // uniqueFieldsをstring[][]形式に正規化
+            const normalizedUniqueFields: string[][] = Array.isArray(options.uniqueFields[0])
+                ? options.uniqueFields as string[][]
+                : (options.uniqueFields as string[]).map(field => [field]);
+
+            // 正規化されたフィールド配列で重複チェック
+            for (const fieldGroup of normalizedUniqueFields) {
+                // フィールドグループの全フィールドに値が存在するかチェック
+                const hasAllFields = fieldGroup.every(field =>
+                    entityData[field as keyof T] !== undefined &&
+                    entityData[field as keyof T] !== null
+                );
+
+                if (hasAllFields) {
+                    // フィールドグループの条件オブジェクトを作成
+                    const groupCondition = fieldGroup.reduce((acc, field) => {
+                        acc[field] = entityData[field as keyof T];
+                        return acc;
+                    }, {} as any);
+
                     const conflictResult = await this.checkDuplicateInScope(
                         repository,
-                        { ...entityData, [field]: entityData[field as keyof T] },
+                        // name/scopeInfoは必須項目。それ以外は追加項目
+                        { name: entityData.name, scopeInfo: entityData.scopeInfo, ...groupCondition },
                         user,
                         existingId,
                         entityData.scopeInfo.scopeId,
@@ -185,10 +212,24 @@ export class ScopedEntityService {
                     if (conflictResult.entity) {
                         if (conflictResult.isActive) {
                             // アクティブな重複エンティティが存在する場合はエラー
-                            throw new Error(`Conflict: ${field}=${entityData[field as keyof T]}の値が既にアクティブなエンティティで存在します`);
+                            const keyDescription = fieldGroup.length === 1
+                                ? `${fieldGroup[0]}=${entityData[fieldGroup[0] as keyof T]}`
+                                : fieldGroup.map(field =>
+                                    `${field}=${entityData[field as keyof T]}`
+                                ).join(', ');
+
+                            const errorMessage = fieldGroup.length === 1
+                                ? `Conflict: ${keyDescription}の値が既にアクティブなエンティティで存在します`
+                                : `Conflict: 複合キー(${keyDescription})の値が既にアクティブなエンティティで存在します`;
+
+                            throw new Error(errorMessage);
                         } else {
                             // 非アクティブな重複エンティティが存在する場合は、それを復活させる
-                            console.log(`Found inactive duplicate entity, reactivating: ${conflictResult.entity.id}`);
+                            const logMessage = fieldGroup.length === 1
+                                ? `Found inactive duplicate entity, reactivating: ${conflictResult.entity.id}`
+                                : `Found inactive duplicate entity with composite key, reactivating: ${conflictResult.entity.id}`;
+
+                            console.log(logMessage);
                             entity = conflictResult.entity;
                             isNew = false;
                             // 非アクティブから復活させるため、isActiveをtrueに設定
@@ -199,7 +240,6 @@ export class ScopedEntityService {
                 }
             }
         }
-
         // スコープ情報を準備
         const preparedEntity = await this.prepareScopedEntity(entityData, user, entityData.scopeInfo?.scopeId);
 

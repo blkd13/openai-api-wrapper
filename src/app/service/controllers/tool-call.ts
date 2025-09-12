@@ -1,20 +1,19 @@
+import crypto from 'crypto';
 import { Request, Response } from "express";
 import { body, param, query } from "express-validator";
+import OpenAI from "openai";
+import { EntityNotFoundError } from "typeorm";
 
-import { EntityNotFoundError } from "typeorm/index.js";
+import { getAxios } from "../../common/http-client.js";
+import { Utils } from "../../common/utils.js";
 import { ds } from "../db.js";
+import { OAuthAccountEntity, OAuthAccountStatus, UserEntity, UserStatus } from "../entity/auth.entity.js";
 import { ProjectEntity, TeamMemberEntity } from "../entity/project-models.entity.js";
 import { ToolCallGroupEntity, ToolCallPart, ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartInfoBody, ToolCallPartResultBody, ToolCallPartStatus, ToolCallPartType } from "../entity/tool-call.entity.js";
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ProjectVisibility } from "../models/values.js";
 import { functionDefinitions } from '../tool/_index.js';
-
-import crypto from 'crypto';
-import { ChatCompletionCreateParamsStreaming } from "openai/resources.js";
-import { getAxios } from "../../common/http-client.js";
-import { Utils } from "../../common/utils.js";
-import { OAuthAccountEntity, OAuthAccountStatus, UserEntity, UserStatus } from "../entity/auth.entity.js";
 import { ExtApiClient, getExtApiClient } from "./auth.js";
 
 
@@ -29,7 +28,7 @@ export const getFunctionDefinitions = [
         // 汚い。。。
         const funcDefs = await functionDefinitions({ inDto: { args: {} as any }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy', connectedOnly);
         res.json(funcDefs.map(f => {
-            f.info.name = f.definition.function.name;
+            f.info.name = (f.definition as OpenAI.ChatCompletionFunctionTool).function.name;
             return ({ info: f.info, definition: f.definition });
         }));
     }
@@ -45,7 +44,7 @@ export const callFunction = [
         try {
             console.dir(_req.body);
             // 汚い。。。
-            const args = { model: 'gemini-2.5-flash', messages: [], stream: true, } as ChatCompletionCreateParamsStreaming;
+            const args = { model: 'gemini-2.5-flash', messages: [], stream: true, } as OpenAI.ChatCompletionCreateParamsStreaming;
             const funcDefs = await functionDefinitions({ inDto: { args }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy');
             const funcDef = funcDefs.find(f => f.info.name === _req.body.function_name);
             if (!funcDef) {

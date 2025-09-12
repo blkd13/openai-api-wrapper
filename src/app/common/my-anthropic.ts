@@ -1,24 +1,23 @@
 // 各形式のインターフェース定義
 // import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { MessageCreateParams, MessageStreamParams, ContentBlockParam, DocumentBlockParam, ImageBlockParam, MessageParam, TextBlockParam, Tool, ToolChoice, Usage, ThinkingBlockParam, ThinkingConfigParam, ToolResultBlockParam, } from '@anthropic-ai/sdk/resources';
-import { ChatCompletionAssistantMessageParam, ChatCompletionContentPart, ChatCompletionContentPartText, ChatCompletionMessageParam, ChatCompletionSystemMessageParam, ChatCompletionTool, ChatCompletionToolMessageParam, ChatCompletionUserMessageParam, CompletionUsage } from "openai/resources";
-import { ChatCompletionCreateParamsBase } from "openai/resources/chat/completions";
+import { Anthropic } from '@anthropic-ai/sdk';
+import OpenAI from "openai";
 
 // Anthropic 形式から OpenAI 形式へ変換する関数
-export function convertAnthropicToOpenAI(anthropic: Usage): CompletionUsage {
+export function convertAnthropicToOpenAI(anthropic: Anthropic.Usage): OpenAI.CompletionUsage {
     // ここでは input_tokens を prompt_tokens、output_tokens を completion_tokens として扱う例です。
     const prompt_tokens = anthropic.input_tokens;
     const completion_tokens = anthropic.output_tokens;
     const total_tokens = prompt_tokens + completion_tokens;
 
     // prompt_tokens_details にはここでは cache_read_input_tokens を cached_tokens に流用し、audio_tokens は 0 としています
-    const prompt_tokens_details: CompletionUsage.PromptTokensDetails = {
+    const prompt_tokens_details: OpenAI.CompletionUsage.PromptTokensDetails = {
         cached_tokens: anthropic.cache_read_input_tokens === null ? undefined : anthropic.cache_read_input_tokens,
         audio_tokens: 0,
     };
 
     // completion_tokens_details はすべて 0 としています
-    const completion_tokens_details: CompletionUsage.CompletionTokensDetails = {
+    const completion_tokens_details: OpenAI.CompletionUsage.CompletionTokensDetails = {
         reasoning_tokens: 0,
         audio_tokens: 0,
         accepted_prediction_tokens: 0,
@@ -40,12 +39,12 @@ export function convertAnthropicToOpenAI(anthropic: Usage): CompletionUsage {
  * @param chatTool - OpenAI の ChatCompletionTool オブジェクト
  * @returns Anthropic の Tool オブジェクト
  */
-function convertChatCompletionToolToTool(chatTool: ChatCompletionTool): Tool {
+function convertChatCompletionToolToTool(chatTool: OpenAI.ChatCompletionFunctionTool): Anthropic.Tool {
     const { name, description, parameters } = chatTool.function;
 
     // parameters が存在する場合は、その内容を input_schema に展開
     // 存在しない場合は、空のオブジェクトスキーマを定義する
-    const input_schema: Tool.InputSchema = parameters
+    const input_schema: Anthropic.Tool.InputSchema = parameters
         ? { ...parameters, type: 'object' }
         : { type: 'object', properties: {} };
 
@@ -56,7 +55,7 @@ function convertChatCompletionToolToTool(chatTool: ChatCompletionTool): Tool {
     };
 }
 
-function convertOpenAIToolToAnthropic(openAITool: ChatCompletionTool): Tool {
+function convertOpenAIToolToAnthropic(openAITool: OpenAI.ChatCompletionTool): Anthropic.Tool {
     // OpenAIのツールはfunctionタイプのみサポートしているため、
     // typeチェックを行う
     if (openAITool.type !== 'function') {
@@ -67,16 +66,16 @@ function convertOpenAIToolToAnthropic(openAITool: ChatCompletionTool): Tool {
     const parameters = openAITool.function.parameters || {};
 
     // Anthropicのツール形式に変換
-    const anthropicTool: Tool = {
+    const anthropicTool: Anthropic.Tool = {
         name: openAITool.function.name,
         description: openAITool.function.description,
-        input_schema: parameters as Tool.InputSchema,
+        input_schema: parameters as Anthropic.Tool.InputSchema,
     };
 
     return anthropicTool;
 }
 
-export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStreamParams {
+export function remapAnthropic(args: OpenAI.ChatCompletionCreateParams): Anthropic.MessageStreamParams {
     // export interface MessageCreateParamsBase {
     //     max_tokens: number;
     //     messages: Array<MessageParam>;
@@ -98,7 +97,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
     const { max_tokens, messages, model, metadata, stream, temperature, tool_choice, tools, top_p, stop, } = args;
 
     // stop_sequences, system, top_k,
-    const res: MessageStreamParams = {
+    const res: Anthropic.MessageStreamParams = {
         messages: [],
         max_tokens: 0, // TODO ちょっと良く分からないけど0でいいなら0にしておこうということ。
         model,
@@ -108,7 +107,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
         // tool_choice: tool_choice === null ? undefined : tool_choice,
         tools: tools === null ? undefined : tools?.map(tool => convertOpenAIToolToAnthropic(tool)),
         top_p: top_p === null ? undefined : top_p,
-    } as MessageCreateParams;
+    } as Anthropic.MessageCreateParams;
 
     const keys = ['max_tokens', 'messages', 'model', 'metadata', 'stop_sequences', 'stream', 'system', 'temperature', 'tool_choice', 'tools', 'top_k', 'top_p'];
     Object.keys(args).forEach(key => {  // これで全部のプロパティをチェックする
@@ -119,7 +118,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
 
     if (args.tools) {
         if (args.tools.length > 0 && !(args.tool_choice && args.tool_choice === 'none')) {
-            res.tool_choice = { type: 'auto', disable_parallel_tool_use: false } as ToolChoice;
+            res.tool_choice = { type: 'auto', disable_parallel_tool_use: false } as Anthropic.ToolChoice;
             // tools使う場合の項目変換
             if (args.tool_choice) {
                 // 'none' | 'auto' | 'required' // OpenAIの仕様
@@ -159,9 +158,9 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
     // console.dir(args.messages, { depth: null });
     // console.log('++++++++++++++++++++++++++++++++++++++++++++++++++++');
     // イメージタグの作り方が微妙に違う。
-    let toolResult!: ToolResultBlockParam;
+    let toolResult!: Anthropic.ToolResultBlockParam;
     res.messages = args.messages.map(m => {
-        const newMessage = { role: m.role, content: [] } as MessageParam;
+        const newMessage = { role: m.role, content: [] } as Anthropic.MessageParam;
         if (m.content) {
             if (Array.isArray(m.content)) {
                 newMessage.content = m.content.map((c, index) => {
@@ -169,10 +168,10 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
                         const mediaType = c.image_url.url.substring('data:'.length, c.image_url.url.indexOf(';'));
                         const base64 = c.image_url.url.substring(c.image_url.url.indexOf(',') + 1);
                         const type = mediaType.startsWith('application/pdf') ? 'document' : 'image';
-                        (m.content[index] as ContentBlockParam) = { type, source: { type: 'base64', media_type: mediaType, data: base64 } } as ContentBlockParam;
-                        return { type, source: { type: 'base64', media_type: mediaType, data: base64 } } as ImageBlockParam | DocumentBlockParam;
+                        (m.content[index] as Anthropic.ContentBlockParam) = { type, source: { type: 'base64', media_type: mediaType, data: base64 } } as Anthropic.ContentBlockParam;
+                        return { type, source: { type: 'base64', media_type: mediaType, data: base64 } } as Anthropic.ImageBlockParam | Anthropic.DocumentBlockParam;
                     } else {
-                        return c as ContentBlockParam;
+                        return c as Anthropic.ContentBlockParam;
                     }
                 });
             } else {
@@ -183,7 +182,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
         }
 
         if (m.role === 'tool') {
-            const newUserMessage = newMessage as ChatCompletionUserMessageParam;
+            const newUserMessage = newMessage as OpenAI.ChatCompletionUserMessageParam;
             newUserMessage.role = 'user';
 
             if (m.tool_call_id) {
@@ -200,7 +199,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
                     const contentItem = newUserMessage.content[0] as any;
                     if (contentItem.type === 'tool_result') {
                         // 編集済みのものはそのまま - キャッシュ制御を追加
-                        toolResult = contentItem as ToolResultBlockParam;
+                        toolResult = contentItem as Anthropic.ToolResultBlockParam;
                     } else if (contentItem.type === 'text') {
                         // textタイプをtool_resultに変換
                         toolResult = {
@@ -217,7 +216,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
         }
 
         if (m.role === 'assistant') {
-            const newAssistantMessage = newMessage as ChatCompletionAssistantMessageParam;
+            const newAssistantMessage = newMessage as OpenAI.ChatCompletionAssistantMessageParam;
 
             if (m.tool_calls && m.tool_calls.length > 0) {
                 // contentがstringの場合、配列に変換
@@ -233,8 +232,8 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
                         newAssistantMessage.content.push({
                             type: 'tool_use',
                             id: toolCall.id,
-                            name: toolCall.function.name,
-                            input: JSON.parse(toolCall.function.arguments || '{}')
+                            name: (toolCall as OpenAI.ChatCompletionFunctionTool).function.name,
+                            input: (toolCall as OpenAI.ChatCompletionFunctionTool).function.parameters || {}
                         } as any);
                     }
                 }
@@ -256,7 +255,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
         } else {
             return newMessage;
         }
-    }).filter(m => !!m) as MessageParam[];
+    }).filter(m => !!m) as Anthropic.MessageParam[];
 
     // ツール結果があれば、キャッシュ制御を追加
     if (toolResult) {
@@ -284,7 +283,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
                 // 元々配列なので何もしない
             }
             // TODO アップデートしたら型合わなくなったので as を入れる
-            const prevContentArray: ContentBlockParam[] = prev[prev.length - 1].content as ContentBlockParam[];
+            const prevContentArray: Anthropic.ContentBlockParam[] = prev[prev.length - 1].content as Anthropic.ContentBlockParam[];
             if (Array.isArray(prevContentArray)) {
                 if (typeof curr.content === 'string') {
                     if (curr.content) {
@@ -317,7 +316,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
             }
         }
         return prev;
-    }, [] as MessageParam[]);
+    }, [] as Anthropic.MessageParam[]);
 
     // TODO 最大のメッセージのところにキャッシュポイントを置きたいけど出来てない。
     // const largest = res.messages.reduce((prev, curr) => {
@@ -333,7 +332,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
         res.temperature = 1;
         // TODO thinkingの時はトークンの計算がこれじゃダメっぽい。
         res.thinking = { type: 'enabled', budget_tokens: 51200 };
-        res.thinking = { type: 'enabled', budget_tokens: 16384 };
+        res.thinking = { type: 'enabled', budget_tokens: 12800 };
         // (res as any).betas = 'output-128k-2025-02-19';
     } else { }
     // body: MessageStreamParams, options?: Core.RequestOptions
@@ -343,7 +342,7 @@ export function remapAnthropic(args: ChatCompletionCreateParamsBase): MessageStr
 
 
 // AnthropicのToolをOpenAIのツールに変換する
-function convertAnthropicToolToOpenAI(anthropicTool: Tool): ChatCompletionTool {
+function convertAnthropicToolToOpenAI(anthropicTool: Anthropic.Tool): OpenAI.ChatCompletionTool {
     return {
         type: 'function',
         function: {
@@ -354,13 +353,13 @@ function convertAnthropicToolToOpenAI(anthropicTool: Tool): ChatCompletionTool {
     };
 }
 
-export function reverseRemapAnthropic(args: MessageStreamParams): ChatCompletionCreateParamsBase {
+export function reverseRemapAnthropic(args: Anthropic.MessageStreamParams): OpenAI.ChatCompletionCreateParams {
     // 基本パラメータの抽出
     const { max_tokens, messages, model, metadata, stream, temperature,
         tool_choice, tools, top_p, stop_sequences, system, thinking } = args;
 
     // OpenAIパラメータの初期化
-    const res: ChatCompletionCreateParamsBase = {
+    const res: OpenAI.ChatCompletionCreateParams = {
         messages: [],
         model: model,
         max_tokens,
@@ -381,7 +380,7 @@ export function reverseRemapAnthropic(args: MessageStreamParams): ChatCompletion
 
     // ツールの変換
     if (tools && tools.length > 0) {
-        res.tools = tools.map(tool => convertAnthropicToolToOpenAI(tool as Tool));
+        res.tools = tools.map(tool => convertAnthropicToolToOpenAI(tool as Anthropic.Tool));
 
         // tool_choiceの変換
         if (tool_choice) {
@@ -415,7 +414,7 @@ export function reverseRemapAnthropic(args: MessageStreamParams): ChatCompletion
 
     // システムメッセージの処理
     if (system) {
-        const systemMessage: ChatCompletionSystemMessageParam = {
+        const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
             role: 'system',
             content: typeof system === 'string' ? system :
                 Array.isArray(system) ? convertContentBlocksToString(system) :
@@ -439,16 +438,16 @@ export function reverseRemapAnthropic(args: MessageStreamParams): ChatCompletion
 }
 
 // ContentBlockParamの配列を文字列に変換
-function convertContentBlocksToString(blocks: ContentBlockParam[]): string {
+function convertContentBlocksToString(blocks: Anthropic.ContentBlockParam[]): string {
     if (blocks.every(block => block.type === 'text')) {
-        return blocks.map(block => (block as TextBlockParam).text).join('');
+        return blocks.map(block => (block as Anthropic.TextBlockParam).text).join('');
     }
     return JSON.stringify(blocks);
 }
 
 // AnthropicメッセージをOpenAIメッセージに変換
-function convertAnthropicMessagesToOpenAI(messages: MessageParam[]): ChatCompletionMessageParam[] {
-    const result: ChatCompletionMessageParam[] = [];
+function convertAnthropicMessagesToOpenAI(messages: Anthropic.MessageParam[]): OpenAI.ChatCompletionMessageParam[] {
+    const result: OpenAI.ChatCompletionMessageParam[] = [];
 
     for (const msg of messages) {
         if (msg.role === 'user') {
@@ -465,12 +464,12 @@ function convertAnthropicMessagesToOpenAI(messages: MessageParam[]): ChatComplet
 }
 
 // ユーザーメッセージの処理
-function processUserMessage(msg: MessageParam): {
-    userMessages: ChatCompletionUserMessageParam[],
-    toolMessages: ChatCompletionToolMessageParam[]
+function processUserMessage(msg: Anthropic.MessageParam): {
+    userMessages: OpenAI.ChatCompletionUserMessageParam[],
+    toolMessages: OpenAI.ChatCompletionToolMessageParam[]
 } {
-    const userMessages: ChatCompletionUserMessageParam[] = [];
-    const toolMessages: ChatCompletionToolMessageParam[] = [];
+    const userMessages: OpenAI.ChatCompletionUserMessageParam[] = [];
+    const toolMessages: OpenAI.ChatCompletionToolMessageParam[] = [];
 
     // 文字列コンテンツの場合
     if (typeof msg.content === 'string') {
@@ -485,7 +484,7 @@ function processUserMessage(msg: MessageParam): {
     if (Array.isArray(msg.content)) {
         // ツール結果と通常コンテンツを分離
         const toolResultBlocks: any[] = [];
-        const normalBlocks: ContentBlockParam[] = [];
+        const normalBlocks: Anthropic.ContentBlockParam[] = [];
 
         for (const block of msg.content) {
             if (block.type === 'tool_result') {
@@ -517,8 +516,8 @@ function processUserMessage(msg: MessageParam): {
 }
 
 // アシスタントメッセージの処理
-function processAssistantMessage(msg: MessageParam): ChatCompletionAssistantMessageParam {
-    const assistantMessage: ChatCompletionAssistantMessageParam = {
+function processAssistantMessage(msg: Anthropic.MessageParam): OpenAI.ChatCompletionAssistantMessageParam {
+    const assistantMessage: OpenAI.ChatCompletionAssistantMessageParam = {
         role: 'assistant',
         content: null // ツールのみの応答の場合はnullが必要
     };
@@ -531,13 +530,13 @@ function processAssistantMessage(msg: MessageParam): ChatCompletionAssistantMess
 
     // 配列コンテンツの場合
     if (Array.isArray(msg.content)) {
-        const textBlocks: TextBlockParam[] = [];
+        const textBlocks: Anthropic.TextBlockParam[] = [];
         const toolUseBlocks: any[] = [];
 
         // テキストとツール使用を分離
         for (const block of msg.content) {
             if (block.type === 'text') {
-                textBlocks.push(block as TextBlockParam);
+                textBlocks.push(block as Anthropic.TextBlockParam);
             } else if (block.type === 'tool_use') {
                 toolUseBlocks.push(block);
             }
@@ -565,23 +564,23 @@ function processAssistantMessage(msg: MessageParam): ChatCompletionAssistantMess
 }
 
 // コンテンツブロックをOpenAI形式に変換
-function convertContentToOpenAI(blocks: ContentBlockParam[]): string | ChatCompletionContentPart[] {
+function convertContentToOpenAI(blocks: Anthropic.ContentBlockParam[]): string | OpenAI.ChatCompletionContentPart[] {
     // テキストのみの場合は文字列に変換
     if (blocks.every(block => block.type === 'text')) {
-        return blocks.map(block => (block as TextBlockParam).text).join('');
+        return blocks.map(block => (block as Anthropic.TextBlockParam).text).join('');
     }
 
     // 複合コンテンツの場合は配列に変換
-    const openAIContent: ChatCompletionContentPart[] = [];
+    const openAIContent: OpenAI.ChatCompletionContentPart[] = [];
 
     for (const block of blocks) {
         if (block.type === 'text') {
             openAIContent.push({
                 type: 'text',
-                text: (block as TextBlockParam).text
+                text: (block as Anthropic.TextBlockParam).text
             });
         } else if (block.type === 'image') {
-            const imageBlock = block as ImageBlockParam;
+            const imageBlock = block as Anthropic.ImageBlockParam;
             if (imageBlock.source && imageBlock.source.type === 'base64') {
                 openAIContent.push({
                     type: 'image_url',
@@ -592,7 +591,7 @@ function convertContentToOpenAI(blocks: ContentBlockParam[]): string | ChatCompl
             }
         } else if (block.type === 'document') {
             // OpenAIにはdocumentタイプがないため、PDFをbase64画像として扱う
-            const docBlock = block as DocumentBlockParam;
+            const docBlock = block as Anthropic.DocumentBlockParam;
             if (docBlock.source && docBlock.source.type === 'base64') {
                 openAIContent.push({
                     type: 'image_url',

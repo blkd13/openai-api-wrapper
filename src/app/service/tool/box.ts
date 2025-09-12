@@ -1,18 +1,19 @@
+import { map, toArray } from "rxjs";
 import { promises as fs } from 'fs';
 import { detect } from 'jschardet';
-import { map, toArray } from "rxjs";
 
-import { convertPptxToPdf } from '../../common/media-funcs.js';
-import { MyToolType, OpenAIApiWrapper, plainExtensions, plainMime } from "../../common/openai-api-wrapper.js";
-import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
-import { Utils } from "../../common/utils.js";
-import { boxDownloadCore } from "../api/api-box.js";
+import { genClientByProvider, MyToolType, OpenAIApiWrapper, plainExtensions, plainMime, providerPrediction } from "../../common/openai-api-wrapper.js";
+import { UserRequest } from "../models/info.js";
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
 import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { Utils } from "../../common/utils.js";
 import { ds } from "../db.js";
 import { BoxApiItemCollection, BoxFileBodyEntity } from "../entity/api-box.entity.js";
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { UserRequest } from "../models/info.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
+import { boxDownloadCore } from "../api/api-box.js";
+import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
+import { convertPptxToPdf } from '../../common/media-funcs.js';
+import { MyVertexAiClient } from "../../common/my-vertexai.js";
 
 
 // 1. 関数マッピングの作成

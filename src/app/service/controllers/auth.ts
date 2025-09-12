@@ -38,9 +38,14 @@ export const JWT_STAT_PARAM = { algorithm: 'HS256' as Algorithm, issuer: JWT_ISS
 
 // httpsの証明書検証スキップ用のエージェント。社内だから検証しなくていい。
 // import https from 'https';
+import { exec } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import { promisify } from 'util';
 import { getAxios } from '../../common/http-client.js';
 import { getAccessToken } from '../api/api-proxy.js';
 import { safeWhere } from '../entity/base.js';
+import { ContainerInstanceEntity, ContainerStatus } from '../entity/container.entity.js';
 import { redirectingPage } from './auth/page.js';
 import { genTokenSet, verifyRefresh } from './auth/token.js';
 import { decrypt, encrypt } from './tool-call.js';
@@ -107,6 +112,72 @@ export const userLogin = [
             // console.error(e);
             res.status(500).json({ message: '認証に失敗しました。' });
         });
+    }
+];
+
+
+/**
+ * [認証不要] ゲストログイン
+ * @param req
+ * @param res
+ * @returns
+ */
+export const guestLogin = [
+    authLimiter, // 追加
+    param('orgKey').trim().notEmpty(),
+    validationErrorHandler,
+    async (req: Request, res: Response) => {
+        const { orgKey } = req.params as { orgKey: string };
+        const email = `guest${Date.now()}@example.com`;
+        const ip = req.ip || '0.0.0.0';
+        try {
+            await ds.transaction(async tm => {
+                const organization = await tm.getRepository(OrganizationEntity).findOneOrFail({ where: { orgKey, isActive: true } });
+                // console.log(`userLogin-111 ${orgKey} ${req.body.email}`);
+                const userAndRoleList = await getUserAndRoleList({ orgKey, email }, tm);
+                const user = userAndRoleList.user || new UserEntity();
+
+                // 新規ユーザーの場合は登録する
+                user.name = user.name || 'dummy name';
+                user.name = email.split('@')[0]; // メールアドレス前半
+                // jwtの検証で取得した情報をそのまま登録する
+                user.email = email;
+                // パスワードのハッシュ化
+                // user.passwordHash = await bcrypt.hash(req.body.password, 10);
+                // user.authGeneration = 1;
+                user.orgKey = orgKey; // orgKeyはinviteから取得する
+                user.createdBy = ip; // 作成者はinvite
+                user.createdIp = ip;
+                user.updatedBy = ip; // 更新者はinvite
+                user.updatedIp = ip;
+                userAndRoleList.user = user;
+
+                userAndRoleList.user = await tm.getRepository(UserEntity).save(userAndRoleList.user);
+                userAndRoleList.roleList = (await createUserInitial(ip, userAndRoleList.user, tm)).roleList; // ユーザー初期作成に伴う色々作成
+
+                await authAfter(userAndRoleList.user, userAndRoleList.roleList, tm, 'local', { authGeneration: userAndRoleList.user.authGeneration }, req, res);
+                const roleList = userAndRoleList.roleList.map(obj => ({ scopeInfo: obj.scopeInfo, role: obj.role, priority: obj.priority })); // レスポンス用に整形);
+                const resUser = { id: userAndRoleList.user.id, name: userAndRoleList.user.name, email: userAndRoleList.user.email, roleList: roleList };
+                // ゲストユーザーを発行しました
+                // console.log(`guestLogin: ${JSON.stringify(resUser)}`);
+                res.json({ message: 'Guest user has been created.', user: resUser });
+
+                // // console.log(`userLogin-222 ${orgKey} ${req.body.email} ${user?.id} ${user?.name} ${user?.email} ${user?.status} ${user?.authGeneration} ${bcrypt.compareSync(req.body.password, user?.passwordHash || '')} ${userAndRoleList.roleList.length}`);
+                // // パスワード検証無しで通す
+                // if (user == null || userAndRoleList.roleList.length === 0) {
+                //     // console.error(`認証に失敗しました。${req.body.email} ${user?.id} ${user?.name} ${user?.email} ${user?.status} ${user?.authGeneration} ${user?.passwordHash}`);
+                //     console.error(`認証に失敗しました。ユーザー: ${req.body.email}`);
+                //     res.status(401).json({ message: '認証に失敗しました。' });
+                //     return;
+                // } else {
+                //     await authAfter(user, userAndRoleList.roleList, tm, 'local', { authGeneration: user.authGeneration }, req, res);
+                //     res.json({ user: { id: user.id, name: user.name, email: user.email, roleList: userAndRoleList.roleList } });
+                // }
+            });
+        } catch (e) {
+            // console.error(e);
+            res.status(500).json({ message: '認証に失敗しました。' });
+        }
     }
 ];
 
@@ -223,6 +294,7 @@ export async function verifyApiKey(xRealIp: string, manager: EntityManager, raw:
     // if (!key || key.status !== SessionStatus.Active) return null;
     // if (key.expiresAt && key.expiresAt < new Date()) return null;
     const rec = await manager.getRepository(SessionRefreshEntity).findOneOrFail({ where: { orgKey, jti, } });
+    // console.dir(rec);
     if (!(rec.current && !rec.revoked)) return null;
     if (rec.expiresAt && rec.expiresAt < new Date()) return null;
 
@@ -288,7 +360,7 @@ const genApiTokenCore = async (user: UserTokenPayloadWithRole, label: string, de
 
     const exists = await manager.getRepository(OAuthAccountEntity).findOneBy({ orgKey: user.orgKey, userId: user.id, provider: `local-${label}` });
     if (exists && exists.status === OAuthAccountStatus.ACTIVE) {
-        throw new Error('APIトークンは既に存在します。');
+        throw new Error('API key already exists');
     } else { }
 
     const row = new SessionRefreshEntity();
@@ -348,25 +420,30 @@ export const genApiKey = [
         const user = req.info.user;
         const label = req.body.label;
         let deviceInfo = {};
-        if (req.useragent) {
-            deviceInfo = Utils.jsonOrder(req.useragent, ['browser', 'version', 'os', 'platform', 'isDesktop', 'isMobile', 'isTablet']);
-        } else { }
-
-        const xRealIp = req.ip || '';
-
-        const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
         try {
+            if (req.useragent) {
+                deviceInfo = Utils.jsonOrder(req.useragent, ['browser', 'version', 'os', 'platform', 'isDesktop', 'isMobile', 'isTablet']);
+            } else { }
+
+            const xRealIp = req.ip || '';
+
+            const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
             await ds.transaction(async (manager) => {
                 try {
                     // セッション有効期限を設定
                     const apiKeyObj = await genApiTokenCore(user, label, deviceInfo, xRealIp, manager, expirationTime);
+                    if (!apiKeyObj) {
+                        res.status(400).json({ error: 'APIトークンは既に存在します。' });
+                        return;
+                    } else { }
                     res.json({ apiKey: apiKeyObj.apiKey });
                 } catch (error) {
-                    res.status(400).json({ error: 'APIトークンは既に存在します。' });
+                    res.status(503).json({ error: 'OAuth2 login error' });
                 }
             });
         } catch (error) {
-            res.status(500).json({ error: 'Internal Server Error' });
+            res.status(503).json({ error: 'OAuth2 login error' });
+            return;
         }
     }
 ];
@@ -495,80 +572,85 @@ export const userLoginOAuth2 = [
         // OAuth2認可エンドポイントにリダイレクト
         const { orgKey, provider } = req.params as { orgKey: string, provider: string };
 
-        let payload: UserTokenPayloadWithRole | null = null;
-        if (req.cookies.access_token) {
-            // クッキーが存在する場合の処理
-            try {
-                payload = await verifyAccessToken(req.cookies.access_token);
-            } catch (e) {
-                // アクセストークンの検証に失敗した場合の処理
-            }
-        } else {
-            // アクセストークンが存在しない場合の処理
-        }
-
-        let userId: string | null = null;
-        if (payload) {
-            if (payload.orgKey !== orgKey) {
-                throw new Error('OrgKey mismatch');
-            } else {
-                // アクセストークンが有効な場合の処理
-                userId = payload.id;
-            }
-        } else {
-            userId = null;
-        }
-
-        // console.log(`OAuth2 login request: ${provider} ${JSON.stringify(req.query)}`);
-        const e = {} as ExtApiClient;
         try {
-            Object.assign(e, await getExtApiClient(orgKey, provider));
-        } catch (error) {
-            res.status(401).json({ error: `${provider}は認証されていません。` });
-            return;
-        }
-        if (e.oAuth2Config) {
-        } else {
-            res.status(401).json({ error: 'OAuth2 config not found' });
-            return;
-        }
-        // パスによってリダイレクトURIを振り分ける
-        const redirectUri = e.redirectUri;
-        const xRealIp = req.ip;
-        let state = randomUUID();
-        const maxAge = 5 * 60 * 1000; // 5分
-        await ds.transaction(async tm => {
-            const repo = tm.getRepository(OAuthStateEntity);
-            const existing = await repo.findOneBy({ orgKey, state });
-            if (existing) {
-                // 一応1回はチェックするが、まず衝突しないのでループにはしない
-                state = randomUUID();
+            let payload: UserTokenPayloadWithRole | null = null;
+            if (req.cookies.access_token) {
+                // クッキーが存在する場合の処理
+                try {
+                    payload = await verifyAccessToken(req.cookies.access_token);
+                } catch (e) {
+                    // アクセストークンの検証に失敗した場合の処理
+                }
+            } else {
+                // アクセストークンが存在しない場合の処理
+            }
+
+            let userId: string | null = null;
+            if (payload) {
+                if (payload.orgKey !== orgKey) {
+                    throw new Error('OrgKey mismatch');
+                } else {
+                    // アクセストークンが有効な場合の処理
+                    userId = payload.id;
+                }
+            } else {
+                userId = null;
+            }
+
+            // console.log(`OAuth2 login request: ${provider} ${JSON.stringify(req.query)}`);
+            const e = {} as ExtApiClient;
+            try {
+                Object.assign(e, await getExtApiClient(orgKey, provider));
+            } catch (error) {
+                res.status(401).json({ error: `${provider}は認証されていません。` });
+                return;
+            }
+            if (e.oAuth2Config) {
+            } else {
+                res.status(401).json({ error: 'OAuth2 config not found' });
+                return;
+            }
+            // パスによってリダイレクトURIを振り分ける
+            const redirectUri = e.redirectUri;
+            const xRealIp = req.ip;
+            let state = randomUUID();
+            const maxAge = 5 * 60 * 1000; // 5分
+            await ds.transaction(async tm => {
+                const repo = tm.getRepository(OAuthStateEntity);
                 const existing = await repo.findOneBy({ orgKey, state });
                 if (existing) {
-                    throw new Error('OAuth state already exists');
+                    // 一応1回はチェックするが、まず衝突しないのでループにはしない
+                    state = randomUUID();
+                    const existing = await repo.findOneBy({ orgKey, state });
+                    if (existing) {
+                        throw new Error('OAuth state already exists');
+                    } else { }
                 } else { }
-            } else { }
-            const saved = await repo.save({
-                orgKey, state, userId, meta: {
-                    orgKey,
-                    userId,
+                const saved = await repo.save({
+                    orgKey, state, userId, meta: {
+                        orgKey,
+                        userId,
+                        provider,
+                        redirectUri,
+                        query: req.query
+                    },
                     provider,
-                    redirectUri,
-                    query: req.query
-                },
-                provider,
-                expiresAt: new Date(Date.now() + maxAge),
-                status: OnetimeStatus.Unused,
-                createdBy: userId || xRealIp,
-                createdIp: xRealIp,
-                updatedBy: userId || xRealIp,
-                updatedIp: xRealIp,
+                    expiresAt: new Date(Date.now() + maxAge),
+                    status: OnetimeStatus.Unused,
+                    createdBy: userId || xRealIp,
+                    createdIp: xRealIp,
+                    updatedBy: userId || xRealIp,
+                    updatedIp: xRealIp,
+                });
             });
-        });
 
-        const pathAuthorize = `${e.oAuth2Config.pathAuthorize.startsWith('https://') ? '' : (e.uriBaseAuth || e.uriBase)}${e.oAuth2Config.pathAuthorize}`;
-        const authURL = `${pathAuthorize}?client_id=${e.oAuth2Config.clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${e.oAuth2Config.scope}&state=${state}&access_type=offline&prompt=consent`;
-        res.redirect(authURL);
+            const pathAuthorize = `${e.oAuth2Config.pathAuthorize.startsWith('https://') ? '' : (e.uriBaseAuth || e.uriBase)}${e.oAuth2Config.pathAuthorize}`;
+            const authURL = `${pathAuthorize}?client_id=${e.oAuth2Config.clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${e.oAuth2Config.scope}&state=${state}&access_type=offline&prompt=consent`;
+            res.redirect(authURL);
+        } catch (error) {
+            res.status(503).json({ error: 'OAuth2 login error' });
+            return;
+        }
     }
 ];
 
@@ -668,6 +750,7 @@ export async function tryRefreshCore(tm: EntityManager, xRealIp: string, deviceI
             // userId: roleBinding.userId,
             scopeInfo: roleBinding.scopeInfo,
             role: roleBinding.role,
+            priority: roleBinding.priority,
         } as UserRole;
     });
     if (userRoleList.length === 0) {
@@ -927,9 +1010,8 @@ export const userLoginOAuth2Callback = [
                         console.log(`OAuth2 login success: provider=${existing.provider}, userId=${user.id}`);
                         // res.redirect(`${existing.meta?.query.fromUrl || e.pathTop}`);
                         // // HTMLをクライアントに送信
-                        // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title><meta http-equiv="refresh" content="0; URL=${existing.meta?.query.fromUrl || e.pathTop}"></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
+                        // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title><meta http-equiv="refresh" content="0; URL=${decoded.query.fromUrl || e.pathTop}"></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
                         res.send(redirectingPage(existing.meta?.query.fromUrl || e.pathTop));
-                        // res.send(`<!DOCTYPE html><html><head><title>リダイレクト中...</title></head><body><p>リダイレクト中です。しばらくお待ちください。</p></body></html>`);
                         return;
                     } catch (err) {
                         throw new Error(`OAuth2 flow state verification failed. ${err}`);
@@ -1143,49 +1225,6 @@ function generateSecureRandomNumber(len: number) {
     return String(n).padStart(len, '0');
 }
 
-/**
- * [認証不要] ゲストログイン
- * @param req 
- * @param res 
- * @returns 
- */
-export const guestLogin = [
-    validationErrorHandler,
-    (req: Request, res: Response) => {
-        // return ds.getRepository(UserEntity).findOne({ where: { email: 'guest@example.com' } }).then((user: UserEntity | null) => {
-        //     // ゲストログインはパスワード検証無し。その代わりIPアドレス必須。
-        //     if (user == null) {
-        //         res.status(401).json({ message: '認証に失敗しました。' });
-        //         return;
-        //     }
-        //     // ゲスト
-        //     const deviceInfo = JSON.stringify({
-        //         browser: req.useragent?.browser,
-        //         version: req.useragent?.version,
-        //         os: req.useragent?.os,
-        //         platform: req.useragent?.platform,
-        //         isMobile: req.useragent?.isMobile,
-        //         isTablet: req.useragent?.isTablet,
-        //         isDesktop: req.useragent?.isDesktop,
-        //     });
-
-        //     const loginHistory = new LoginHistoryEntity();
-        //     loginHistory.userId = user.id; // ユーザー認証後に設定
-        //     loginHistory.ipAddress = req.headers['x-real-ip'] as string || req.ip || '';
-        //     loginHistory.deviceInfo = deviceInfo;
-        //     loginHistory.authGeneration = user.authGeneration;
-        //     loginHistory.createdBy = user.id;
-        //     loginHistory.updatedBy = user.id;
-        //     loginHistory.save(); // ログイン履歴登録の成否は見ずにレスポンスを返す
-
-        //     // JWTの生成
-        //     const userToken: UserToken = { type: 'user', id: user.id, authGeneration: user.authGeneration || 0 };
-        //     const token = jwt.sign(userToken, JWT_SECRET, { expiresIn: '20m' , ...JWT_STAT_PARAM });
-        //     res.json({ token, user });
-        //     // return { token };
-        // });
-    }
-];
 export const logout = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
@@ -1428,36 +1467,45 @@ export const refresh = [
             } else { }
 
             const { userTokenPayload, accessToken } = await ds.transaction(async manager => {
-                // リフレッシュトークン検証
-                const coreRes = await tryRefreshCore(manager, xRealIp, deviceInfo, req.cookies.refresh_token, UserRoleType.User);
-                // クッキーをセット
-                res.cookie('access_token', coreRes.accessToken, {
-                    maxAge: Utils.parseTimeStringToMilliseconds(ACCESS_TOKEN_EXPIRES_IN), // ミリ秒単位で指定
-                    httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
-                    secure: true, // HTTPSでのみ送信されるようにする
-                    sameSite: 'strict', // CSRF保護のためのオプション
-                });
+                try {
+                    // リフレッシュトークン検証
+                    const coreRes = await tryRefreshCore(manager, xRealIp, deviceInfo, req.cookies.refresh_token, UserRoleType.User);
+                    // クッキーをセット
+                    res.cookie('access_token', coreRes.accessToken, {
+                        maxAge: Utils.parseTimeStringToMilliseconds(ACCESS_TOKEN_EXPIRES_IN), // ミリ秒単位で指定
+                        httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
+                        secure: true, // HTTPSでのみ送信されるようにする
+                        sameSite: 'strict', // CSRF保護のためのオプション
+                    });
 
-                // Cookieにセット（Pathをリフレッシュ専用にすると攻撃面が狭まる）
-                const baseHref = req.originalUrl.substring(0, req.originalUrl.length - req.url.length);
-                res.cookie('refresh_token', coreRes.refreshToken, {
-                    path: `${baseHref}/auth/refresh`, // トークンリフレッシュのタイミングのみ使う。
-                    maxAge: Utils.parseTimeStringToMilliseconds(REFRESH_TOKEN_EXPIRES_IN),
-                    httpOnly: true,
-                    secure: true,
-                    sameSite: 'strict',
-                });
-                return coreRes;
+                    // Cookieにセット（Pathをリフレッシュ専用にすると攻撃面が狭まる）
+                    const baseHref = req.originalUrl.substring(0, req.originalUrl.length - req.url.length);
+                    res.cookie('refresh_token', coreRes.refreshToken, {
+                        path: `${baseHref}/auth/refresh`, // トークンリフレッシュのタイミングのみ使う。
+                        maxAge: Utils.parseTimeStringToMilliseconds(REFRESH_TOKEN_EXPIRES_IN),
+                        httpOnly: true,
+                        secure: true,
+                        sameSite: 'strict',
+                    });
+                    return coreRes;
+                } catch (err) {
+                    return { userTokenPayload: '', accessToken: '' };
+                }
             });
-
-            // // console.log(`ref:userToken=${JSON.stringify(userTokenPayload, Utils.genJsonSafer())}`);
-            // (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
-            // return { isAuth: true, obj: userTokenPayload };
-            res.json({ message: 'トークンをリフレッシュしました。', user: userTokenPayload, isAuth: true });
+            console.log(`ref:userToken=${JSON.stringify(userTokenPayload, Utils.genJsonSafer())}`);
+            if (userTokenPayload) {
+                // (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
+                // return { isAuth: true, obj: userTokenPayload };
+                res.json({ message: 'トークンをリフレッシュしました。', user: userTokenPayload, isAuth: true });
+            } else {
+                // // リフレッシュトークン無し
+                console.log(`リフレッシュトークンの検証に失敗しました。`);
+                res.status(401).json({ message: 'トークンの検証に失敗しました。再度ログインしてください。' });
+            }
         } catch (err) {
             // // リフレッシュトークン無し
             console.log(`リフレッシュトークンの検証に失敗しました。`);
-            // console.log(err);
+            console.error(err);
             res.status(401).json({ message: 'トークンの検証に失敗しました。再度ログインしてください。' });
         }
     }
@@ -1778,6 +1826,208 @@ export const getOAuthAccount = [
     }
 ];
 
+interface DockerComposeConfig {
+    uuid: string;
+    image?: string;
+    network?: string;
+    outputDir?: string;
+}
+
+export class DockerComposeGenerator {
+    private readonly defaultImage = 'ttyd-filebox:latest';
+    private readonly defaultNetwork = 'ttyd-filebox_ribbon-console';
+
+    /**
+     * Docker Composeファイルのテンプレートを生成
+     */
+    private generateTemplate(config: DockerComposeConfig): string {
+        const { uuid, image = this.defaultImage, network = this.defaultNetwork } = config;
+
+        return `version: "3.9"
+
+services:
+  project-${uuid}:
+    # privileged: true
+    image: ${image}
+    networks: [ribbon-console]
+    environment:
+      - TTYD_BASE_URL=/terminal/${uuid}
+      - FILEBROWSER_BASE_URL=/files/${uuid}
+    expose:
+      - "7681"   # terminal (WebSocket)
+      - "8080"   # files (HTTP API) 
+    labels:
+      - "traefik.enable=true"
+
+      ## ───────── Terminal ─────────
+      - "traefik.http.routers.term-${uuid}.rule=PathPrefix(\`/terminal/${uuid}\`)"
+      - "traefik.http.routers.term-${uuid}.entrypoints=internal"
+      - "traefik.http.routers.term-${uuid}.service=svc_term_${uuid}"
+      - "traefik.http.services.svc_term_${uuid}.loadbalancer.server.port=7681"
+
+      ## ───────── Files ─────────
+      - "traefik.http.routers.files-${uuid}.rule=PathPrefix(\`/files/${uuid}\`)"
+      - "traefik.http.routers.files-${uuid}.entrypoints=internal"
+      - "traefik.http.routers.files-${uuid}.service=svc_files_${uuid}"
+      - "traefik.http.services.svc_files_${uuid}.loadbalancer.server.port=8080"
+
+networks:
+  ribbon-console:
+    external: true
+    name: ${network}
+`;
+    }
+
+    /**
+     * 新しいUUIDでDocker Composeファイルを生成
+     */
+    public generateNewCompose(config: DockerComposeConfig): {
+        uuid: string;
+        content: string;
+        filename: string;
+    } {
+        const uuid = config.uuid;
+        const content = this.generateTemplate({ ...config, uuid });
+        const filename = `docker-compose.${uuid}.yml`;
+
+        return { uuid, content, filename };
+    }
+
+    /**
+     * ファイルに保存
+     */
+    public async saveToFile(
+        config: DockerComposeConfig
+    ): Promise<{ uuid: string; filepath: string }> {
+        const { uuid, content, filename } = this.generateNewCompose(config);
+        const outputDir = config.outputDir || './';
+        const filepath = path.join(outputDir, filename);
+
+        try {
+            await fs.promises.writeFile(filepath, content, 'utf8');
+            return { uuid, filepath };
+        } catch (error) {
+            throw new Error(`Failed to save Docker Compose file: ${error}`);
+        }
+    }
+}
+
+const execAsync = promisify(exec);
+
+export interface ContainerInfo {
+    uuid: string;
+    status: 'created' | 'running' | 'stopped' | 'error';
+    filepath: string;
+    terminalUrl?: string;
+    filesUrl?: string;
+}
+
+export class ContainerManager {
+    private generator = new DockerComposeGenerator();
+    private containers = new Map<string, ContainerInfo>();
+
+    /**
+     * 新しいコンテナを作成
+     */
+    public async createContainer(req: UserRequest, config: {
+        uuid: string;
+        image?: string;
+        network?: string;
+        outputDir?: string;
+    }): Promise<ContainerInfo> {
+        try {
+            const { uuid, filepath } = await this.generator.saveToFile(config);
+
+            const containerInfo: ContainerInfo = {
+                uuid,
+                status: 'created',
+                filepath,
+                terminalUrl: `/terminal/${uuid}`,
+                filesUrl: `/files/${uuid}`
+            };
+
+            const containerInstance = new ContainerInstanceEntity();
+            containerInstance.ports = [];
+            containerInstance.projectId = uuid;
+            containerInstance.status = ContainerStatus.CREATED;
+            containerInstance.orgKey = req.info.user.orgKey;
+            containerInstance.createdBy = req.info.user.id;
+            containerInstance.updatedBy = req.info.user.id;
+            containerInstance.createdIp = req.info.ip;
+            containerInstance.updatedIp = req.info.ip;
+            const saved = await ds.getRepository(ContainerInstanceEntity).save(containerInstance);
+            this.containers.set(uuid, containerInfo);
+            return containerInfo;
+        } catch (error) {
+            throw new Error(`Failed to create container: ${error}`);
+        }
+    }
+
+    /**
+     * コンテナを起動
+     */
+    public async startContainer(req: UserRequest, uuid: string): Promise<void> {
+        const containerEntity = await ds.getRepository(ContainerInstanceEntity).findOneByOrFail(
+            safeWhere({
+                orgKey: req.info.user.orgKey,
+                projectId: uuid,
+            })
+        )
+        const container = this.containers.get(uuid);
+        if (!container) {
+            throw new Error(`Container with UUID ${uuid} not found`);
+        }
+
+        try {
+            await execAsync(`docker-compose -f ${container.filepath} up -d`);
+            container.status = 'running';
+            containerEntity.status = ContainerStatus.RUNNING;
+            this.containers.set(uuid, container);
+        } catch (error) {
+            container.status = 'error';
+            containerEntity.status = ContainerStatus.EXITED;
+            this.containers.set(uuid, container);
+            throw new Error(`Failed to start container: ${error}`);
+        }
+    }
+
+    /**
+     * コンテナを停止
+     */
+    public async stopContainer(uuid: string): Promise<void> {
+        const container = this.containers.get(uuid);
+        if (!container) {
+            throw new Error(`Container with UUID ${uuid} not found`);
+        }
+
+        try {
+            await execAsync(`docker-compose -f ${container.filepath} down`);
+            container.status = 'stopped';
+            this.containers.set(uuid, container);
+        } catch (error) {
+            container.status = 'error';
+            this.containers.set(uuid, container);
+            throw new Error(`Failed to stop container: ${error}`);
+        }
+    }
+
+    /**
+     * コンテナの状態を取得
+     */
+    public getContainer(uuid: string): ContainerInfo | undefined {
+        return this.containers.get(uuid);
+    }
+
+    /**
+     * 全コンテナの一覧を取得
+     */
+    public getAllContainers(): ContainerInfo[] {
+        return Array.from(this.containers.values());
+    }
+}
+
+const containerManager = new ContainerManager();
+
 /**
  * [user認証] ClaudeCode Console用プロジェクト権限チェック（nginx auth用）
  */
@@ -1825,36 +2075,53 @@ export const checkProjectPermission = [
                     deviceInfo = Utils.jsonOrder(req.useragent, ['browser', 'version', 'os', 'platform', 'isDesktop', 'isMobile', 'isTablet']);
                 } else { }
                 await ds.transaction(async (manager) => {
-                    let apiTokenEntity: OAuthAccountEntity | null = null;
-                    const exists = await manager.getRepository(OAuthAccountEntity).findOneBy({ orgKey: user.orgKey, userId: user.id, provider: `local-${label}` });
-                    if (exists && exists.status === OAuthAccountStatus.ACTIVE) {
-                        // 既存のものを消す
-                        apiTokenEntity = exists;
-                        exists.status = OAuthAccountStatus.DISCONNECTED;
-                        await manager.getRepository(OAuthAccountEntity).save(exists); // 非同期で更新
-                    } else {
-                    }
-                    const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_FOR_CONSOLE_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
-                    const ent = await genApiTokenCore(user, label, deviceInfo, req.ip || '', manager, expirationTime);
-                    if (ent) {
-                        apiTokenEntity = ent.entity;
-                    } else {
-                    }
-                    if (!apiTokenEntity) {
-                        res.status(400).json({ error: 'APIトークンは既に存在します。' });
-                        return;
-                    } else { }
-                    function splitString(str: string, chunkSize = 200) {
-                        const chunks = [];
-                        for (let i = 0; i < str.length; i += chunkSize) {
-                            chunks.push(str.slice(i, i + chunkSize));
+                    try {
+                        let apiTokenEntity: OAuthAccountEntity | null = null;
+                        const exists = await manager.getRepository(OAuthAccountEntity).findOneBy({ orgKey: user.orgKey, userId: user.id, provider: `local-${label}` });
+                        if (exists && exists.status === OAuthAccountStatus.ACTIVE) {
+                            // 既存のものを消す
+                            apiTokenEntity = exists;
+                            exists.status = OAuthAccountStatus.DISCONNECTED;
+                            await manager.getRepository(OAuthAccountEntity).save(exists); // 非同期で更新
+                        } else {
+                            const fileName = `docker-compose.${project.id}.yml`;
+                            const filePath = path.join(process.cwd(), fileName);
+                            if (fs.existsSync(filePath)) {
+                                console.log(`${fileName} が存在します。`);
+                                // ここにファイルが存在する場合の処理を書く
+                            } else {
+                                console.log(`${fileName} が存在しません。`);
+                                // ここにファイルが存在しない場合の処理を書く
+                                await containerManager.createContainer(req, { uuid: project.id });
+                                await containerManager.startContainer(req, project.id);
+                                await Utils.sleep(5000);
+                            }
                         }
-                        return chunks;
+                        const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_FOR_CONSOLE_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
+                        const ent = await genApiTokenCore(user, label, deviceInfo, req.ip || '', manager, expirationTime);
+                        if (ent) {
+                            apiTokenEntity = ent.entity;
+                        } else {
+                        }
+                        if (!apiTokenEntity) {
+                            res.status(400).json({ error: 'APIトークンは既に存在します。' });
+                            return;
+                        } else { }
+                        function splitString(str: string, chunkSize = 200) {
+                            const chunks = [];
+                            for (let i = 0; i < str.length; i += chunkSize) {
+                                chunks.push(str.slice(i, i + chunkSize));
+                            }
+                            return chunks;
+                        }
+                        splitString(encodeURIComponent(ent.apiKey)).forEach((chunk, index) => {
+                            res.setHeader(`X-API-Key_${index + 1}`, chunk);
+                        });
+                        res.status(200).json({ message: 'アクセス許可' });
+                    } catch (error) {
+                        console.error('Error checking project permission:', error);
+                        res.status(500).json({ message: 'プロジェクト権限チェック中にエラーが発生しました' });
                     }
-                    splitString(encodeURIComponent(ent.apiKey)).forEach((chunk, index) => {
-                        res.setHeader(`X-API-Key_${index + 1}`, chunk);
-                    });
-                    res.status(200).json({ message: 'アクセス許可' });
                 });
                 // 権限あり
             } else {
@@ -1867,3 +2134,4 @@ export const checkProjectPermission = [
         }
     }
 ];
+

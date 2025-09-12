@@ -662,8 +662,14 @@ export const getProjectList = [
         const req = _req as UserRequest;
         if (req.info && req.info.user) {
             // ログインしている場合
-            ds.getRepository(TeamMemberEntity).find({ where: { orgKey: req.info.user.orgKey, userId: req.info.user.id } }).then((teamMembers) => {
-                return teamMembers.map((teamMember) => teamMember.teamId);
+            ds.getRepository(TeamMemberEntity).find({
+                where: { orgKey: req.info.user.orgKey, userId: req.info.user.id }
+            }).then((teamMembers) => {
+                return teamMembers.map(teamMember => teamMember.teamId);
+            }).then((teamIds) => {
+                return ds.getRepository(TeamEntity).find({ where: { orgKey: req.info.user.orgKey, id: In(teamIds), status: TeamStatus.Normal } })
+            }).then((teams) => {
+                return teams.map(team => team.id);
             }).then((teamIds) => {
                 return ds.getRepository(ProjectEntity).find({
                     where: [

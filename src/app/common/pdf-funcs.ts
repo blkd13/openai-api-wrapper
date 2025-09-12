@@ -1,12 +1,11 @@
-import _ from 'lodash';
 import { promises as fs } from "fs";
 // import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
-import { fromPath } from "pdf2pic";
-import path from 'path';
 import pLimit from 'p-limit';
+import path from 'path';
+import { fromPath } from "pdf2pic";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api.js';
-import { EntityManager, In } from "typeorm/index.js";
+import { EntityManager } from "typeorm";
 
 import { FileBodyEntity } from '../service/entity/file-models.entity.js';
 

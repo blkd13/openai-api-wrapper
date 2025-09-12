@@ -1,10 +1,23 @@
+import { Anthropic } from '@anthropic-ai/sdk';
+import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
+import { FunctionCall, GenerateContentRequest, GenerateContentResponse, SafetyRating } from '@google-cloud/vertexai';
+import { generateContentStream } from '@google-cloud/vertexai/build/src/functions/generate_content.js';
+import * as googleGenerativeAI from '@google/generative-ai';
+import { Cohere, CohereClientV2, CohereEnvironment } from "cohere-ai";
+import { V2ChatStreamRequest } from 'cohere-ai/api';
+import { V2 } from 'cohere-ai/api/resources/v2/client/Client';
 import * as crypto from 'crypto';
+import { socksDispatcher } from 'fetch-socks';
 import * as fs from 'fs';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import sizeOf from 'image-size';
 import { detect } from 'jschardet';
-import { Chat, ChatCompletion, ChatCompletionContentPartText, ChatCompletionMessageToolCall, ChatCompletionTool } from 'openai/resources/index';
+import OpenAI, { APIPromise, AzureOpenAI } from 'openai';
+import { Stream } from 'openai/streaming';
 import { catchError, concat, concatWith, EMPTY, forkJoin, from, map, Observable, of, Subscriber, switchMap, toArray } from 'rxjs';
+import { encoding_for_model, Tiktoken, TiktokenEncoding, TiktokenModel } from 'tiktoken';
+import { ProxyAgent } from 'undici';
+
 
 const { GCP_PROJECT_ID, GCP_REGION, GCP_REGION_ANTHROPIC, GCP_API_BASE_PATH } = process.env as { GCP_PROJECT_ID: string, GCP_REGION: string, GCP_REGION_ANTHROPIC: string, GCP_API_BASE_PATH: string };
 // if (!PROJECT_ID || !LOCATION) {
@@ -15,32 +28,12 @@ const { GCP_PROJECT_ID, GCP_REGION, GCP_REGION_ANTHROPIC, GCP_API_BASE_PATH } = 
 import * as configureGlobalFetch from './configureGlobalFetch.js';
 configureGlobalFetch;
 
-import Anthropic from '@anthropic-ai/sdk';
-import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { FunctionCall, GenerateContentRequest, GenerateContentResponse, SafetyRating } from '@google-cloud/vertexai';
-import { generateContentStream } from '@google-cloud/vertexai/build/src/functions/generate_content.js';
-import OpenAI from 'openai';
-
-// import { EnhancedGenerateContentResponse, GoogleGenerativeAI } from '@google/generative-ai';
-import * as googleGenerativeAI from '@google/generative-ai';
-
-import { AzureOpenAI } from 'openai';
-
-import { Cohere, CohereClientV2, CohereEnvironment } from "cohere-ai";
-import { StreamedChatResponseV2, V2ChatStreamRequest } from 'cohere-ai/api';
-import { V2 } from 'cohere-ai/api/resources/v2/client/Client';
-
-import { APIPromise, RequestOptions } from 'openai/core';
-import { ChatCompletionChunk, ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionCreateParamsStreaming, ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { Stream } from 'openai/streaming';
-import { encoding_for_model, Tiktoken, TiktokenEncoding, TiktokenModel } from 'tiktoken';
-
 import fss from './fss.js';
 import { getMetaDataFromDataURL } from './media-funcs.js';
-import { COST_TABLE, currentRatelimit, GPT4_MODELS, GPTModels, JSON_MODELS, Ratelimit, SHORT_NAME, VISION_MODELS } from './model-definition.js';
+import { COST_TABLE, currentRatelimit, GPT4_MODELS, GPTModels, JSON_MODELS, Ratelimit, SHORT_NAME } from './model-definition.js';
 import { Utils } from "./utils.js";
 
-export type MyChatCompletionCreateParamsStreaming = ChatCompletionCreateParamsStreaming & { providerName: string, isGoogleSearch?: boolean, cachedContent?: CachedContent, safetySettings?: SafetyRating[] };
+export type MyChatCompletionCreateParamsStreaming = OpenAI.ChatCompletionCreateParamsStreaming & { providerName: string, isGoogleSearch?: boolean, cachedContent?: CachedContent, safetySettings?: SafetyRating[] };
 
 const HISTORY_DIRE = `./history`;
 
@@ -65,8 +58,6 @@ export const providerInstances: { [aiProviderId: string]: { client: AIProviderCl
 // export const providerInstances = {} as Record<AIProviderType, AIProviderClient>;
 
 // const apiVersion = '2024-08-01-preview';
-import { ReadableStream } from '@anthropic-ai/sdk/_shims/index.js';
-import { MessageStreamEvent, MessageStreamParams, Usage } from '@anthropic-ai/sdk/resources/index.js';
 import { AIProviderType, AnthropicVertexAIConfig, AzureOpenAIConfig, CohereConfig, OpenAIConfig } from '../service/entity/ai-model-manager.entity.js';
 import { convertAnthropicToOpenAI, remapAnthropic } from './my-anthropic.js';
 import { CachedContent, countChars, GenerateContentRequestExtended, mapForGemini, mapForGeminiExtend, MyVertexAiClient } from './my-vertexai.js';
@@ -77,12 +68,35 @@ const proxyObj: { [key: string]: any } = {
     httpProxy: process.env['http_proxy'] as string || undefined,
     httpsProxy: process.env['https_proxy'] as string || undefined,
 };
-const noProxies = process.env['no_proxy']?.split(',') || [];
-let host = '';
-Object.keys(proxyObj).filter(key => noProxies.includes(host) || !proxyObj[key]).forEach(key => delete proxyObj[key]);
-const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? {
-    httpAgent: new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || ''),
-} : {};
+const noProxies = (process.env['no_proxy']?.split(',') || []).filter(p => !!p);
+function extractDomain(urlString: string | null | undefined): string | null {
+    if (!urlString) {
+        return null;
+    }
+    try {
+        const url = new URL(urlString);
+        return url.hostname;
+    } catch (error) {
+        // URLとして不正な場合はnullを返す
+        return null;
+    }
+}
+function getHttpProxy(urlString: string): HttpsProxyAgent<any> | undefined {
+    const domain = extractDomain(urlString) as string;
+    Object.keys(proxyObj).filter(key => noProxies.includes(domain) || !proxyObj[key]).forEach(key => delete proxyObj[key]);
+    const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? {
+        httpAgent: new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || ''),
+    } : {};
+    return options.httpAgent;
+}
+export function getUndiciHttpProxy(urlString: string): ProxyAgent | undefined {
+    const domain = extractDomain(urlString) as string;
+    Object.keys(proxyObj).filter(key => noProxies.includes(domain) || !proxyObj[key]).forEach(key => delete proxyObj[key]);
+    const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? {
+        httpAgent: new ProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || ''),
+    } : {};
+    return options.httpAgent;
+}
 
 /**
  * tiktokenのEncoderは取得に時間が掛かるので、取得したものはモデル名と紐づけて確保しておく。
@@ -132,11 +146,12 @@ export class MyOpenAI {
             // this.clients.push(new OpenAI({ apiKey: param.apiKey, baseURL: param.baseURL || 'https://api.openai.com/v1', httpAgent: param.httpAgent || options.httpAgent }));
             return (param.endpoints || []).map(endpoint => {
                 return new OpenAI({
-                    apiKey: endpoint.apiKey,
+                    apiKey: endpoint.apiKey || 'dummy',
                     organization: endpoint.organization,
                     project: endpoint.project,
                     baseURL: endpoint.baseURL || 'https://api.openai.com/v1',
-                    httpAgent: endpoint.httpAgent || options.httpAgent,
+                    // httpAgent: endpoint.httpAgent || options.httpAgent,
+                    fetchOptions: { dispatcher: getUndiciHttpProxy(endpoint.baseURL || 'https://api.openai.com/v1') },
                 });
             });
         }).flat();
@@ -174,7 +189,11 @@ export class MyAnthropic {
         //     this.clients.push(new AnthropicVertex({ projectId: param.projectId, region: param.region, baseURL: param.baseURL, httpAgent: param.httpAgent }));
         // });
         // https://api.anthropic.com/v1
-        this.clients = params.map(param => param.endpoints.map(endpoint => new Anthropic({ apiKey: endpoint.apiKey, baseURL: endpoint.baseURL || 'https://api.anthropic.com', httpAgent: options.httpAgent, maxRetries: 3 }))).flat();
+        this.clients = params.map(param => param.endpoints.map(endpoint => {
+            const baseURL = endpoint.baseURL || 'https://api.anthropic.com';
+            const httpAgent = getUndiciHttpProxy(baseURL);
+            return new Anthropic({ apiKey: endpoint.apiKey, baseURL, maxRetries: 3, fetchOptions: { dispatcher: httpAgent } });
+        })).flat();
     }
 
     get client(): Anthropic {
@@ -191,7 +210,18 @@ export class MyAnthropicVertex {
         // params.forEach(param => {
         //     this.clients.push(new AnthropicVertex({ projectId: param.projectId, region: param.region, baseURL: param.baseURL, httpAgent: param.httpAgent }));
         // });
-        this.clients = params.map(param => param.regionList.map(region => new AnthropicVertex({ ...param, httpAgent: param.httpAgent || options.httpAgent, region }))).flat();
+        // console.log(params);
+        // 
+        this.clients = params.map(param => {
+            const _baseURL = param.baseURL || GCP_API_BASE_PATH || 'aiplatform.googleapis.com';
+            return param.regionList.map(region => {
+                const baseURL = region === 'global' ? `https://${_baseURL}` : `https://${region}-${_baseURL}`;
+                const httpAgent = getUndiciHttpProxy(baseURL);
+                return new AnthropicVertex({
+                    baseURL, projectId: param.projectId, region, fetchOptions: { dispatcher: httpAgent }
+                });
+            })
+        }).flat();
     }
 
     get client(): AnthropicVertex {
@@ -201,16 +231,21 @@ export class MyAnthropicVertex {
     }
 }
 
-import { SocksProxyAgent } from 'socks-proxy-agent';
 export function proxyStringToAgentObject(proxyString: string) {
     if (!proxyString) {
         return undefined;
     } else if (proxyString.startsWith('http://')) {
-        return new HttpsProxyAgent(proxyString);
+        return new ProxyAgent(proxyString);
     } else if (proxyString.startsWith('socks5://')) {
-        return new SocksProxyAgent(proxyString);
+        return socksDispatcher({
+            type: 5,
+            host: proxyString.split(':')[1].replace('//', ''),
+            port: parseInt(proxyString.split(':')[2]),
+            // userId, password があればここで認証を設定
+        });
     }
 }
+
 const { AZURE_OPENAI_SOCKS_PROXY } = process.env as { AZURE_OPENAI_SOCKS_PROXY: string };
 const azurePorxyAgent = proxyStringToAgentObject(AZURE_OPENAI_SOCKS_PROXY);
 
@@ -227,8 +262,8 @@ export class MyAzureOpenAI {
                 return new AzureOpenAI({
                     baseURL: resource.baseURL,
                     apiKey: resource.apiKey,
-                    apiVersion: resource.apiVersion || '2024-12-01-preview',
-                    httpAgent: azurePorxyAgent,
+                    apiVersion: resource.apiVersion || '2025-01-01-preview',
+                    fetchOptions: { dispatcher: azurePorxyAgent },
                 });
             });
         }).flat();
@@ -391,7 +426,7 @@ export function genClientByProvider(model: string): AIProviderClient {
                         project: GCP_PROJECT_ID || '',
                         locationList: [GCP_REGION || 'asia-northeast1'],
                         apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
-                        httpAgent: options.httpAgent, // HttpsProxyAgent
+                        httpAgent: new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || ''), // HttpsProxyAgent
                     }]),
                 }; // とりあえずMyVertexAiClientを使う
                 break;
@@ -474,7 +509,7 @@ export function genClientByProvider(model: string): AIProviderClient {
                     name: AIProviderType.ANTHROPIC_VERTEXAI,
                     type: AIProviderType.ANTHROPIC_VERTEXAI,
                     client: new MyAnthropicVertex([
-                        { projectId: GCP_PROJECT_ID || '', regionList: ['us-east5'], baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: options.httpAgent },
+                        { projectId: GCP_PROJECT_ID || '', regionList: ['us-east5'], baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || '') },
                         // { projectId: GCP_PROJECT_ID || '', regionList: ['us-east5', 'europe-west1'], baseURL: `https://${GCP_REGION_ANTHROPIC}-${GCP_API_BASE_PATH}/v1`, httpAgent: options.httpAgent },
                     ]),
                 };
@@ -507,17 +542,94 @@ export function genClientByProvider(model: string): AIProviderClient {
                         project: GCP_PROJECT_ID || '',
                         locationList: [GCP_REGION || 'asia-northeast1'],
                         apiEndpoint: `${GCP_REGION}-${GCP_API_BASE_PATH}`,
-                        httpAgent: options.httpAgent, // HttpsProxyAgent
+                        httpAgent: new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || ''), // HttpsProxyAgent
                     }]),
                 }; // とりあえずMyVertexAiClientを使う
                 break;
             default:
                 throw new Error(`Unknown provider: ${provider}`);
         }
-        console.log(`genClientByProvider:default: ${key} created`, client);
+        // console.log(`genClientByProvider:default: ${key} created`, client);
         providerInstances[key] = { client, updatedAt: new Date() };
         return client;
     }
+}
+
+export async function embeddings(orgKey: string, userId: string, ip: string, model: string, client: AIProviderClient, input: string) {
+    // const provider = providerPrediction(model);
+    // if (provider === 'vertexai') {
+    // } else if (provider === 'azure') {
+    // }
+
+    const options = { label: 'embeddings', orgKey, userId, ip };
+    const toolLabel = '';
+    const provider = 'azure';
+    const stepName = 'fine';
+    const error = '';
+    const message = '';
+    const baseTime = Date.now();
+
+    const args = { input, model };
+
+    // console.log(args);
+    const res = await (client.client as MyAzureOpenAI).client.embeddings.create(args);
+    const tokenCount = { prompt_tokens: res.usage.prompt_tokens, completion_tokens: res.usage.total_tokens, cost: res.usage.total_tokens * 0.13 / 1000 / 1000 };
+
+    // Price per 1M tokens
+    // | Model | Cost |
+    // | text-embedding-3-small | $0.02 |
+    // | text-embedding-3-large | $0.13 |
+    // | text-embedding-ada-002 | $0.10 |
+
+    const _take = Date.now() - baseTime;
+
+    // idempotencyKey の先頭にタイムスタンプをつける。（idempotencyKeyで履歴ファイルを作るので、時系列で履歴ファイルが並ぶようにと、あと単純に）
+    const timestamp = Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS');
+
+    let label = ''; // タイムスタンプをつける前のidempotencyKey。
+    // idempotencyKeyが設定されてい無い場合は入力のhashを使う。
+    const reqOptions: OpenAI.RequestOptions = {};
+    const argsHash = crypto.createHash('MD5').update(JSON.stringify(args)).digest('hex');
+    // const argsHash = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
+    if (options && options.label) {
+        // idempotencyKeyが設定されている場合。
+        label = options.label;
+        reqOptions.idempotencyKey = `${timestamp}-${argsHash}-${Utils.safeFileName(options.label)}${toolLabel}`;
+    } else {
+        label = argsHash;
+        reqOptions.idempotencyKey = `${timestamp}-${argsHash}`;
+    }
+    setTimeout(() => {
+        // TODO ここでDB更新なんてしたくなかったがどうしても外に出せずやむなく、、
+        // 影響を局所化するためimport文もここでローカルで打つ。labelでPredictHistoryWrapperと紐づく
+        try {
+            Promise.all([import('../service/db.js'), import('../service/entity/project-models.entity.js')]).then(mods => {
+                return mods[0].ds.transaction(runInTransaction => {
+                    const entity = new mods[1].PredictHistoryEntity();
+                    entity.idempotencyKey = reqOptions.idempotencyKey || '';
+                    entity.argsHash = argsHash;
+                    entity.label = `${label}${toolLabel}`;
+                    entity.provider = provider;
+                    entity.model = args.model;
+                    entity.take = _take;
+                    entity.reqToken = tokenCount.prompt_tokens;
+                    entity.resToken = tokenCount.completion_tokens;
+                    entity.cost = tokenCount.cost;
+                    entity.status = stepName as any;
+                    entity.message = String(error) || message; // 追加メッセージがあれば書く。
+                    entity.orgKey = options?.orgKey || 'unknown'; // ここでは利用者不明
+                    entity.createdBy = options?.userId || 'batch'; // ここでは利用者不明
+                    entity.updatedBy = options?.userId || 'batch'; // ここでは利用者不明
+                    if (options?.ip) {
+                        entity.createdIp = options.ip; // ここでは利用者不明
+                        entity.updatedIp = options.ip; // ここでは利用者不明
+                    } else { }
+                    return runInTransaction.save(entity);
+                })
+            });
+        } catch (e) { /** 登録失敗してもなんもしない。所詮ログなので */ console.log(e); }
+    }, 1);
+    return res;
 }
 export interface WrapperOptions {
     allowLocalFiles: boolean;
@@ -536,7 +648,7 @@ export interface MyToolInfo {
 }
 export interface MyToolType {
     info: MyToolInfo;
-    definition: ChatCompletionTool;
+    definition: OpenAI.ChatCompletionTool;
     handler: (args: any) => Promise<unknown>,
 }
 export interface MyCompletionOptions {
@@ -558,16 +670,16 @@ class RunBit {
     constructor(
         public logObject: { output: (stepName: string, error?: any, message?: string) => string },
         public tokenCount: TokenCount,
-        public args: ChatCompletionCreateParamsBase,
+        public args: OpenAI.ChatCompletionCreateParams,
         // public provider: AIProviderType,
         public provider: AIProviderClient,
-        public options: RequestOptions,
+        public options: OpenAI.RequestOptions,
         public openApiWrapper: OpenAIApiWrapper,
-        public observer: Subscriber<ChatCompletionChunk>,
+        public observer: Subscriber<OpenAI.ChatCompletionChunk>,
     ) { }
 
     async executeCall(): Promise<void> {
-        const commonArgs = JSON.parse(JSON.stringify(this.args)) as ChatCompletionCreateParamsBase;
+        const commonArgs = JSON.parse(JSON.stringify(this.args)) as OpenAI.ChatCompletionCreateParams;
         const args = commonArgs;
         delete (args as any).providerName; // providerNameは付けちゃダメ
         const options = this.options;
@@ -600,14 +712,19 @@ class RunBit {
                 const args = remapAnthropic(commonArgs);
                 // anthropicの場合はmax_tokensは必須項目
                 args.max_tokens = args.max_tokens === 0 ? ratelimitObj.maxTokens : args.max_tokens;
+                args.max_tokens = args.max_tokens === 409600000 ? 32000 : args.max_tokens;
                 runPromise = new Promise<void>(async (resolve, reject) => {
                     try {
                         // リクエストをファイルに書き出す
-                        fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
-                        const client = this.provider.type === AIProviderType.ANTHROPIC_VERTEXAI ? this.provider.client.client : this.provider.client.client as Anthropic;
-                        const response: ReadableStream = args.model.includes('-thinking')
-                            ? client.beta.messages.stream({ ...args, 'betas': 'output-128k-2025-02-19' } as MessageStreamParams).toReadableStream()
-                            : client.messages.stream(args as MessageStreamParams).toReadableStream();
+                        //  beta: client.beta, betaはcredentialsを含むのでログに出しちゃダメ！
+                        const client = this.provider.type === AIProviderType.ANTHROPIC_VERTEXAI ? this.provider.client.client as AnthropicVertex : this.provider.client.client as Anthropic;
+                        const optionsForLog = { ...options, baseURL: client.baseURL, maxRetries: client.maxRetries, projectId: (client as any).projectId };
+                        delete (optionsForLog as any).httpAgent; // credentialが流出しないように消しておく
+                        fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options: optionsForLog }, Utils.genJsonSafer()), {}, (err) => { });
+                        // console.log(client);
+                        const response = args.model.includes('-thinking')
+                            ? client.beta.messages.stream({ ...args, 'betas': 'output-128k-2025-02-19' } as Anthropic.MessageStreamParams).toReadableStream()
+                            : client.messages.stream(args as Anthropic.MessageStreamParams).toReadableStream();
                         // console.dir(response);
                         // console.log('res');
                         // ratelimitObj.limitRequests = 5; // 適当に5にしておく。
@@ -616,7 +733,7 @@ class RunBit {
                         // ratelimitObj.remainingRequests = 50; // ヘッダーが取得できないときはシングルスレッドで動かす
                         // ratelimitObj.remainingTokens = 100000; // トークン数は適当
 
-                        fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options, response }, Utils.genJsonSafer()), {}, (err) => { });
+                        fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.response.json`, JSON.stringify({ args, options: optionsForLog, response }, Utils.genJsonSafer()), {}, (err) => { });
 
                         // ストリームからデータを読み取るためのリーダーを取得
                         const reader = response.getReader();
@@ -677,11 +794,11 @@ class RunBit {
 
                                     // ファイルに書き出す
                                     fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
-                                    const obj: MessageStreamEvent = JSON.parse(content);
+                                    const obj: Anthropic.MessageStreamEvent = JSON.parse(content);
 
-                                    function remapAnthropic(obj: MessageStreamEvent): ChatCompletionChunk[] {
+                                    function remapAnthropic(obj: Anthropic.MessageStreamEvent): OpenAI.ChatCompletionChunk[] {
                                         const data = obj as any
-                                        let _usage = data.usage ? data.usage as Usage : (data.message && data.message.usage ? data.message.usage : null);
+                                        let _usage = data.usage ? data.usage as Anthropic.Usage : (data.message && data.message.usage ? data.message.usage : null);
                                         if (_usage) {
                                             usageMetadata.input_tokens += _usage.input_tokens || 0;
                                             usageMetadata.output_tokens += _usage.output_tokens || 0;
@@ -696,13 +813,13 @@ class RunBit {
                                             baseMessage.role = obj.message.role;
                                         } else if (obj.type === 'content_block_start') {
                                             index = obj.index;
-                                            const choice: ChatCompletionChunk.Choice = {
+                                            const choice: OpenAI.ChatCompletionChunk.Choice = {
                                                 index: obj.index,
                                                 delta: { role: baseMessage.role, content: null, refusal: null },
                                                 logprobs: null,
                                                 finish_reason: null,
                                             };
-                                            const chunk: ChatCompletionChunk = {
+                                            const chunk: OpenAI.ChatCompletionChunk = {
                                                 id: baseMessage.id,
                                                 object: 'chat.completion.chunk',
                                                 created: baseMessage.created,
@@ -730,13 +847,13 @@ class RunBit {
                                             }
                                             return [chunk];
                                         } else if (obj.type === 'content_block_delta') {
-                                            const choice: ChatCompletionChunk.Choice = {
+                                            const choice: OpenAI.ChatCompletionChunk.Choice = {
                                                 index: obj.index,
                                                 delta: { content: null, refusal: null },
                                                 logprobs: null,
                                                 finish_reason: null,
                                             };
-                                            const chunk: ChatCompletionChunk = {
+                                            const chunk: OpenAI.ChatCompletionChunk = {
                                                 id: baseMessage.id,
                                                 object: 'chat.completion.chunk',
                                                 created: baseMessage.created,
@@ -753,7 +870,7 @@ class RunBit {
                                                 tokenBuilder += obj.delta.text;
                                                 tokenCount.tokenBuilder = tokenBuilder;
                                             } else if (obj.delta.type === 'input_json_delta') {
-                                                const toolCall: ChatCompletionChunk.Choice.Delta.ToolCall = {
+                                                const toolCall: OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall = {
                                                     index: obj.index,
                                                     function: { arguments: obj.delta.partial_json || '', },
                                                     type: 'function',
@@ -770,13 +887,13 @@ class RunBit {
                                             return [chunk];
                                         } else if (obj.type === 'content_block_stop') {
                                             // // finish_reasonだけを飛ばす
-                                            // const choice: ChatCompletionChunk.Choice = {
+                                            // const choice:OpenAI.ChatCompletionChunk.Choice = {
                                             //     index: index,
                                             //     delta: { content: null, refusal: null },
                                             //     logprobs: null,
                                             //     finish_reason: 'stop',
                                             // };
-                                            // const chunk: ChatCompletionChunk = {
+                                            // const chunk:OpenAI.ChatCompletionChunk = {
                                             //     id: baseMessage.id,
                                             //     object: 'chat.completion.chunk',
                                             //     created: baseMessage.created,
@@ -787,13 +904,13 @@ class RunBit {
                                             // };
                                             // return [chunk];
                                         } else if (obj.type === 'message_delta') {
-                                            const choice: ChatCompletionChunk.Choice = {
+                                            const choice: OpenAI.ChatCompletionChunk.Choice = {
                                                 index: index,
                                                 delta: { content: null, refusal: null },
                                                 logprobs: null,
                                                 finish_reason: null,
                                             };
-                                            const chunk: ChatCompletionChunk = {
+                                            const chunk: OpenAI.ChatCompletionChunk = {
                                                 id: baseMessage.id,
                                                 object: 'chat.completion.chunk',
                                                 created: baseMessage.created,
@@ -816,7 +933,7 @@ class RunBit {
                                             return [chunk];
                                         } else if (obj.type === 'message_stop') {
                                             // 何もしない
-                                            const chunk: ChatCompletionChunk = {
+                                            const chunk: OpenAI.ChatCompletionChunk = {
                                                 id: baseMessage.id,
                                                 object: 'chat.completion.chunk',
                                                 created: baseMessage.created,
@@ -870,7 +987,7 @@ class RunBit {
                             } else {
                                 return c;
                             }
-                        }) as ChatCompletionContentPart[];
+                        }) as OpenAI.ChatCompletionContentPart[];
                     } else { }
                 });
 
@@ -878,6 +995,10 @@ class RunBit {
                     args.model = args.model.replace('-high', '');
                     args.reasoning_effort = 'high';
                 } else { }
+                if (args.model === 'o1-preview') {
+                    // o1-previewはシステムプロンプトが使えないので消しておく。
+                    args.messages.forEach(message => { if (message.role === 'system') { (message as any).role = 'user'; } else { } });
+                }
 
                 const client = this.provider.client.client;
                 if (args.model.startsWith('o1') || args.model.startsWith('o3') || args.model.startsWith('o4')) {
@@ -892,7 +1013,7 @@ class RunBit {
                     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options: _options }, Utils.genJsonSafer()), {}, (err) => { });
                     // console.log({ idempotencyKey: options.idempotencyKey, stream: options.stream });
                     // なんでか知らんけどazureClientを通すとargs.modelが消えてしまったり、破壊的なことが起こるのでコピーを送る
-                    runPromise = (client.chat.completions.create({ ...args }, _options) as APIPromise<Stream<ChatCompletionChunk>>)
+                    runPromise = (client.chat.completions.create({ ...args }, _options) as APIPromise<Stream<OpenAI.ChatCompletionChunk> | OpenAI.ChatCompletion>)
                         .withResponse().then(async (response) => {
                             // < x-ratelimit-remaining-requests: 99
                             // < x-ratelimit-remaining-tokens: 99888
@@ -910,7 +1031,7 @@ class RunBit {
                                 headers[key] = value;
                             });
                             // console.log(response.data);
-                            const body = response.data as any as ChatCompletion;
+                            const body = response.data as any as OpenAI.ChatCompletion;
                             const line = JSON.stringify(body);
 
                             this.openApiWrapper.fire();
@@ -948,7 +1069,7 @@ class RunBit {
                                         tool_calls: choice.message.tool_calls,
                                         function_call: choice.message.function_call,
                                     },
-                                }) as ChatCompletionChunk.Choice),
+                                }) as OpenAI.ChatCompletionChunk.Choice),
                                 created: body.created,
                                 model: body.model,
                                 object: 'chat.completion.chunk',
@@ -956,12 +1077,12 @@ class RunBit {
                                 system_fingerprint: body.system_fingerprint,
                                 usage: body.usage,
                             });
-                            // as ChatCompletionChunk
+                            // asOpenAI.ChatCompletionChunk
                             observer.complete();
                         });
                 } else {
                     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options: _options }, Utils.genJsonSafer()), {}, (err) => { });
-                    runPromise = (client.chat.completions.create({ ...args }, _options) as APIPromise<Stream<ChatCompletionChunk>>)
+                    runPromise = (client.chat.completions.create({ ...args }, _options) as APIPromise<Stream<OpenAI.ChatCompletionChunk>>)
                         .withResponse().then(async (response) => {
                             // < x-ratelimit-remaining-requests: 99
                             // < x-ratelimit-remaining-tokens: 99888
@@ -1011,7 +1132,7 @@ class RunBit {
 
                                     // 中身がない場合はスキップ
                                     if (!content) { continue; }
-                                    const obj = JSON.parse(content) as ChatCompletionChunk;
+                                    const obj = JSON.parse(content) as OpenAI.ChatCompletionChunk;
 
                                     // ファイルに書き出す
                                     fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
@@ -1054,7 +1175,7 @@ class RunBit {
                 let isOver128 = false;
                 runPromise = generateContentStream(req.region, req.resourcePath, this.provider.client.getAccessToken(), args, req.apiEndpoint, req.generationConfig, req.safetySettings, req.tools, {}).then(async streamingResp => {
                     // かつてはModelを使って投げていた。
-                    // runPromise = vertex_ai.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
+                    // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
 
                     let tokenBuilder: string = '';
 
@@ -1132,8 +1253,8 @@ class RunBit {
                             } else { }
 
 
-                            function responseRemap(content: GenerateContentResponse): ChatCompletionChunk[] {
-                                const remaped: ChatCompletionChunk[] = [];
+                            function responseRemap(content: GenerateContentResponse): OpenAI.ChatCompletionChunk[] {
+                                const remaped: OpenAI.ChatCompletionChunk[] = [];
                                 if (content.candidates) {
                                     content.candidates.forEach(candidate => {
 
@@ -1144,7 +1265,7 @@ class RunBit {
                                             // // タイプが変わった場合、前のタイプの終了チャンクを挿入
                                             // // console.log(`${lastType} && ${currentType} && ${lastType} !== ${currentType}`);
                                             // if (lastType && currentType && lastType !== currentType) {
-                                            //     const terminationChoice: ChatCompletionChunk.Choice = {
+                                            //     const terminationChoice:OpenAI.ChatCompletionChunk.Choice = {
                                             //         delta: { content: '' },
                                             //         finish_reason: 'stop',
                                             //         index: candidate.index,
@@ -1162,8 +1283,8 @@ class RunBit {
                                             // }
 
                                             // 通常のチャンクを作成
-                                            const choice: ChatCompletionChunk.Choice = {
-                                                delta: {} as ChatCompletionChunk.Choice.Delta,
+                                            const choice: OpenAI.ChatCompletionChunk.Choice = {
+                                                delta: {} as OpenAI.ChatCompletionChunk.Choice.Delta,
                                                 finish_reason: (candidate.finishReason?.toLocaleLowerCase() || null) as any,
                                                 index: candidate.index,
                                                 logprobs: null,
@@ -1172,7 +1293,7 @@ class RunBit {
                                             if (c.text) {
                                                 choice.delta = { content: c.text };
                                             } else if (c.functionCall) {
-                                                const func: ChatCompletionChunk.Choice.Delta.ToolCall = {
+                                                const func: OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall = {
                                                     id: Utils.generateUUID(),
                                                     index,
                                                     type: 'function',
@@ -1281,7 +1402,7 @@ class RunBit {
                 // }
                 runPromise = this.provider.client.client.getGenerativeModel({ model: commonArgs.model }).generateContentStream(reqGemini).then(async streamingResp => {
                     // かつてはModelを使って投げていた。
-                    // runPromise = vertex_ai.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
+                    // runPromise = vertex_ai.preview.getGenerativeModel({ model: args.model, generationConfig: req.generationConfig, safetySettings: req.safetySettings }).generateContentStream(_req);
 
                     let tokenBuilder: string = '';
 
@@ -1359,8 +1480,8 @@ class RunBit {
                             } else { }
 
 
-                            function responseRemap(content: googleGenerativeAI.EnhancedGenerateContentResponse): ChatCompletionChunk[] {
-                                const remaped: ChatCompletionChunk[] = [];
+                            function responseRemap(content: googleGenerativeAI.EnhancedGenerateContentResponse): OpenAI.ChatCompletionChunk[] {
+                                const remaped: OpenAI.ChatCompletionChunk[] = [];
                                 if (content.candidates) {
                                     content.candidates.forEach(candidate => {
 
@@ -1369,8 +1490,8 @@ class RunBit {
                                             const currentType = c.text ? 'text' : c.functionCall ? 'function' : null;
 
                                             // 通常のチャンクを作成
-                                            const choice: ChatCompletionChunk.Choice = {
-                                                delta: {} as ChatCompletionChunk.Choice.Delta,
+                                            const choice: OpenAI.ChatCompletionChunk.Choice = {
+                                                delta: {} as OpenAI.ChatCompletionChunk.Choice.Delta,
                                                 finish_reason: (candidate.finishReason?.toLocaleLowerCase() || null) as any,
                                                 index: candidate.index,
                                                 logprobs: null,
@@ -1379,7 +1500,7 @@ class RunBit {
                                             if (c.text) {
                                                 choice.delta = { content: c.text };
                                             } else if (c.functionCall) {
-                                                const func: ChatCompletionChunk.Choice.Delta.ToolCall = {
+                                                const func: OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall = {
                                                     id: Utils.generateUUID(),
                                                     index,
                                                     type: 'function',
@@ -1490,7 +1611,7 @@ class RunBit {
                             } else { }
                         }
                     });
-                    await (client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
+                    await (client.chat.completions.create(args, options) as APIPromise<Stream<OpenAI.ChatCompletionChunk>>)
                         .withResponse().then(async (response) => {
                             response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
                             response.response.headers.get('x-ratelimit-limit-tokens') && (ratelimitObj.limitTokens = Number(response.response.headers.get('x-ratelimit-limit-tokens')));
@@ -1541,7 +1662,7 @@ class RunBit {
                                     // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
                                     // トークン数をカウント
                                     tokenCount.completion_tokens++;
-                                    const obj = JSON.parse(content) as ChatCompletionChunk;
+                                    const obj = JSON.parse(content) as OpenAI.ChatCompletionChunk;
                                     const text = obj.choices[0].delta.content || '';
 
                                     // <think></think> タグがある場合は、isThinkingをtrueにする。
@@ -1570,7 +1691,7 @@ class RunBit {
             } else if (this.provider.type === AIProviderType.COHERE) {
                 // 元のargsを破壊してしまうとろくなことにならないので、JSON.stringifyしてからparseしている。
                 const args = commonArgs as V2ChatStreamRequest;
-                const _args = args as ChatCompletionCreateParamsBase;
+                const _args = args as OpenAI.ChatCompletionCreateParams;
                 // cohereはstream_optionsとtool_choiceを消しておく必要あり。
                 delete _args.stream_options;
                 delete _args.tool_choice;
@@ -1645,21 +1766,22 @@ class RunBit {
                     let index = 0;
                     let toolCallsMap: Map<number, any> = new Map();
 
-                    function remapCohere(obj: StreamedChatResponseV2): ChatCompletionChunk[] {
+                    // StreamedChatResponseV2
+                    function remapCohere(obj: Cohere.StreamedChatResponseV2): OpenAI.ChatCompletionChunk[] {
                         if (obj.type === 'message-start') {
                             baseMessage.id = obj.id || '';
                             baseMessage.role = 'assistant';
                             baseMessage.created = Math.floor(Date.now() / 1000);
                             baseMessage.model = args.model || '';
 
-                            const choice: ChatCompletionChunk.Choice = {
+                            const choice: OpenAI.ChatCompletionChunk.Choice = {
                                 index: 0,
                                 delta: { role: 'assistant', content: '', refusal: null },
                                 logprobs: null,
                                 finish_reason: null,
                             };
 
-                            const chunk: ChatCompletionChunk = {
+                            const chunk: OpenAI.ChatCompletionChunk = {
                                 id: baseMessage.id,
                                 object: 'chat.completion.chunk',
                                 created: baseMessage.created,
@@ -1673,13 +1795,13 @@ class RunBit {
                         } else if (obj.type === 'content-delta') {
                             const text = obj.delta?.message?.content?.text || '';
                             tokenBuilder += text;
-                            const choice: ChatCompletionChunk.Choice = {
+                            const choice: OpenAI.ChatCompletionChunk.Choice = {
                                 index: 0,
                                 delta: { content: text, refusal: null },
                                 logprobs: null,
                                 finish_reason: null,
                             };
-                            const chunk: ChatCompletionChunk = {
+                            const chunk: OpenAI.ChatCompletionChunk = {
                                 id: baseMessage.id,
                                 object: 'chat.completion.chunk',
                                 created: baseMessage.created,
@@ -1693,13 +1815,13 @@ class RunBit {
                             // ツール計画のデルタは通常のメッセージと同じように扱う
                             const text = obj.delta?.message?.toolPlan || '';
                             tokenBuilder += text;
-                            const choice: ChatCompletionChunk.Choice = {
+                            const choice: OpenAI.ChatCompletionChunk.Choice = {
                                 index: 0,
                                 delta: { content: text, refusal: null },
                                 logprobs: null,
                                 finish_reason: null,
                             };
-                            const chunk: ChatCompletionChunk = {
+                            const chunk: OpenAI.ChatCompletionChunk = {
                                 id: baseMessage.id,
                                 object: 'chat.completion.chunk',
                                 created: baseMessage.created,
@@ -1731,7 +1853,7 @@ class RunBit {
                                 arguments: ''
                             });
 
-                            const choice: ChatCompletionChunk.Choice = {
+                            const choice: OpenAI.ChatCompletionChunk.Choice = {
                                 index: 0,
                                 delta: { content: null, refusal: null },
                                 logprobs: null,
@@ -1748,7 +1870,7 @@ class RunBit {
                                 type: 'function',
                             }];
 
-                            const chunk: ChatCompletionChunk = {
+                            const chunk: OpenAI.ChatCompletionChunk = {
                                 id: baseMessage.id,
                                 object: 'chat.completion.chunk',
                                 created: baseMessage.created,
@@ -1775,7 +1897,7 @@ class RunBit {
                                 toolCallsMap.set(index, toolCall);
                             }
 
-                            const choice: ChatCompletionChunk.Choice = {
+                            const choice: OpenAI.ChatCompletionChunk.Choice = {
                                 index: 0,
                                 delta: { content: null, refusal: null },
                                 logprobs: null,
@@ -1788,7 +1910,7 @@ class RunBit {
                                 type: 'function',
                             }];
 
-                            const chunk: ChatCompletionChunk = {
+                            const chunk: OpenAI.ChatCompletionChunk = {
                                 id: baseMessage.id,
                                 object: 'chat.completion.chunk',
                                 created: baseMessage.created,
@@ -1823,14 +1945,14 @@ class RunBit {
                                 Object.assign(usageMetadata, tokenUsage);
                             }
 
-                            const choice: ChatCompletionChunk.Choice = {
+                            const choice: OpenAI.ChatCompletionChunk.Choice = {
                                 index: 0,
                                 delta: { content: null, refusal: null },
                                 logprobs: null,
                                 finish_reason: finishReason,
                             };
 
-                            const chunk: ChatCompletionChunk = {
+                            const chunk: OpenAI.ChatCompletionChunk = {
                                 id: baseMessage.id,
                                 object: 'chat.completion.chunk',
                                 created: baseMessage.created,
@@ -1940,20 +2062,20 @@ class RunBit {
                     delete (args as any)['max_completion_tokens'];
                     delete args.max_tokens;
                     delete args.temperature;
-                } else { }
-                if (args.model.endsWith('-high')) {
-                    args.model = args.model.replace('-high', '');
-                    args.reasoning_effort = 'high';
+                    if (args.model.endsWith('-high')) {
+                        args.model = args.model.replace('-high', '');
+                        args.reasoning_effort = 'high';
+                    } else { }
                 } else { }
 
                 // TODO無理矢理すぎる。。proxy設定のやり方を再考する。
-                options.httpAgent = client.client.httpAgent;
+                options.fetchOptions = client.client.fetchOptions;
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.request.json`, JSON.stringify({ args, options }, Utils.genJsonSafer()), {}, (err) => { });
 
                 if (args.tools && args.tools.length > 0 && this.provider.type === AIProviderType.LOCAL) {
                     // localのツールコールの場合はstreamをfalseにする。
                     args.stream = false;
-                    runPromise = (client.client.chat.completions.create(args, options) as APIPromise<ChatCompletion>)
+                    runPromise = (client.client.chat.completions.create(args, options) as APIPromise<OpenAI.ChatCompletion>)
                         .withResponse().then((response) => {
                             response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
                             response.response.headers.get('x-ratelimit-limit-tokens') && (ratelimitObj.limitTokens = Number(response.response.headers.get('x-ratelimit-limit-tokens')));
@@ -1988,7 +2110,7 @@ class RunBit {
                                 })),
                                 usage: _obj.usage,
                                 timings: (_obj as any).timings,
-                            } as ChatCompletionChunk;
+                            } as OpenAI.ChatCompletionChunk;
 
                             let tokenBuilder: string = '';
                             let isThinking = false;
@@ -2046,7 +2168,7 @@ class RunBit {
                             fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
                         });
                 } else {
-                    runPromise = (client.client.chat.completions.create(args, options) as APIPromise<Stream<ChatCompletionChunk>>)
+                    runPromise = (client.client.chat.completions.create(args, options) as APIPromise<Stream<OpenAI.ChatCompletionChunk>>)
                         .withResponse().then((response) => {
                             response.response.headers.get('x-ratelimit-limit-requests') && (ratelimitObj.limitRequests = Number(response.response.headers.get('x-ratelimit-limit-requests')));
                             response.response.headers.get('x-ratelimit-limit-tokens') && (ratelimitObj.limitTokens = Number(response.response.headers.get('x-ratelimit-limit-tokens')));
@@ -2097,7 +2219,7 @@ class RunBit {
                                     // ファイルに書き出す
                                     fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, content || '', {}, () => { });
                                     // console.log(`${tokenCount.completion_tokens}: ${data.toString()}`);
-                                    const obj: ChatCompletionChunk = JSON.parse(content);
+                                    const obj: OpenAI.ChatCompletionChunk = JSON.parse(content);
 
                                     // deepseekのreasoning用
                                     obj.choices.forEach(choice => {
@@ -2229,7 +2351,7 @@ class RunBit {
 export class OpenAIApiWrapper {
 
     // proxy設定用オブジェクト
-    options: RequestOptions;
+    options: OpenAI.RequestOptions;
 
     // トークン数をカウントするためのリスト
     tokenCountList: TokenCount[] = [];
@@ -2247,7 +2369,7 @@ export class OpenAIApiWrapper {
     constructor(
         public wrapperOptions: WrapperOptions = { allowLocalFiles: false }
     ) {
-        this.options = options;
+        this.options = (proxyObj.httpsProxy || proxyObj.httpProxy || '') ? { fetchOptions: { dispatcher: new ProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || '') } } : {};
         this.options.stream = true;
 
         // this.options = {};
@@ -2266,11 +2388,11 @@ export class OpenAIApiWrapper {
      * @returns Observable<ChatCompletionChunk>でOpenAI形式のレスポンスをストリーミングする。
      */
     chatCompletionObservableStream(
-        args: ChatCompletionCreateParamsStreaming,
+        args: OpenAI.ChatCompletionCreateParamsStreaming,
         options?: MyCompletionOptions,
         // 面倒な書き方になっているが、要はclientだけオプション化しただけ。
         aiProvider?: AIProviderClient,
-    ): Observable<ChatCompletionChunk> {
+    ): Observable<OpenAI.ChatCompletionChunk> {
         const provider = aiProvider || genClientByProvider(args.model);
 
         // 強制的にストリームモードにする。
@@ -2303,13 +2425,13 @@ export class OpenAIApiWrapper {
         (args as any).cachedContent = (args as any).cachedContent || options?.cachedContent;
 
         let text = ''; // ちゃんとしたオブジェクトにした方がいいかもしれない。。。
-        const responseMessages: ChatCompletionMessageParam[] = [];
-        const toolCallsAll: ChatCompletionChunk.Choice.Delta.ToolCall[] = [];
-        let toolCall: ChatCompletionChunk.Choice.Delta.ToolCall = { index: -1, id: '', function: { name: '', arguments: '' } };
+        const responseMessages: OpenAI.ChatCompletionMessageParam[] = [];
+        const toolCallsAll: OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall[] = [];
+        let toolCall: OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall = { index: -1, id: '', function: { name: '', arguments: '' } };
 
         // 入力を整形しておく。
         return normalizeMessage(args, this.wrapperOptions.allowLocalFiles).pipe(
-            switchMap(obj => new Observable<ChatCompletionChunk>((observer) => {
+            switchMap(obj => new Observable<OpenAI.ChatCompletionChunk>((observer) => {
                 const args = obj.args;
 
                 // idempotencyKey の先頭にタイムスタンプをつける。（idempotencyKeyで履歴ファイルを作るので、時系列で履歴ファイルが並ぶようにと、あと単純に）
@@ -2317,7 +2439,7 @@ export class OpenAIApiWrapper {
 
                 let label = ''; // タイムスタンプをつける前のidempotencyKey。
                 // idempotencyKeyが設定されてい無い場合は入力のhashを使う。
-                const reqOptions: RequestOptions = {};
+                const reqOptions: OpenAI.RequestOptions = {};
                 const argsHash = crypto.createHash('MD5').update(JSON.stringify(args)).digest('hex');
                 // const argsHash = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
                 if (options && options.label) {
@@ -2418,7 +2540,7 @@ export class OpenAIApiWrapper {
                 // toolCallの処理。これはtoolCallを実際呼び出す関数リストに溜めるための処理。(toolCall/toolCallsAllを作る)
                 // ※扱いやすいオブジェクト型に変換してしまって問題ないのでシンプル。
                 // なんか失敗してるなぁ。。もっとシンプルにしたい。。
-                const toolCallsSub: ChatCompletionChunk.Choice.Delta.ToolCall[] = [];
+                const toolCallsSub: OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall[] = [];
                 chunk.choices.forEach(choice => {
                     text += choice.delta?.content || '';
                     const tail = responseMessages[responseMessages.length - 1];
@@ -2451,7 +2573,7 @@ export class OpenAIApiWrapper {
                             console.log(`SKIP: tail.content ${JSON.stringify(tail.content)}`);
                         }
                     } else {
-                        const content = [] as ChatCompletionContentPartText[];
+                        const content = [] as OpenAI.ChatCompletionContentPartText[];
                         responseMessages.push({ role: 'assistant', content, });
                         if (choice.delta.content) {
                             content.push({ type: 'text', text: choice.delta.content, });
@@ -2506,11 +2628,11 @@ export class OpenAIApiWrapper {
                                     tool_call_id: toolCall.id,
                                     role: 'info' as any,
                                     content: JSON.stringify(options.functions[toolCall.function.name].info), // contentのみ空で先に進めるようにしておく。
-                                } as ChatCompletionChunk.Choice.Delta,
+                                } as OpenAI.ChatCompletionChunk.Choice.Delta,
                                 finish_reason: null, // 連続呼び出しは1つのtollCallGroupにしたいのでnullを入れておく
                                 index: toolCall.index,
-                            } as ChatCompletionChunk.Choice;
-                            const _chunk: ChatCompletionChunk = {
+                            } as OpenAI.ChatCompletionChunk.Choice;
+                            const _chunk: OpenAI.ChatCompletionChunk = {
                                 id: chunk.id,
                                 object: chunk.object,
                                 created: chunk.created,
@@ -2526,7 +2648,7 @@ export class OpenAIApiWrapper {
                         } else {
                             return null;
                         }
-                    }).filter(chunk => !!chunk) as Chat.ChatCompletionChunk[];
+                    }).filter(chunk => !!chunk) as OpenAI.Chat.ChatCompletionChunk[];
                     // console.log(`infos ${infos.length}`);
                     toolCallsSub.length = 0; // toolCallsAllを空にしておくと動かなくなるけど、なんでこうしたかったんだっけ？    
                     return concat(...infos.map(info => of(info)), of(chunk));
@@ -2554,10 +2676,10 @@ export class OpenAIApiWrapper {
      * @param toolCalls 
      * @returns 
      */
-    toolCallObservableStream(args: ChatCompletionCreateParamsStreaming, options: MyCompletionOptions, provider: AIProviderClient, toolCalls: ChatCompletionChunk.Choice.Delta.ToolCall[], input?: any): Observable<ChatCompletionChunk> {
+    toolCallObservableStream(args: OpenAI.ChatCompletionCreateParamsStreaming, options: MyCompletionOptions, provider: AIProviderClient, toolCalls: OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall[], input?: any): Observable<OpenAI.ChatCompletionChunk> {
         const functions = options.functions as Record<string, MyToolType>;
 
-        const tool_calls: ChatCompletionMessageToolCall[] = toolCalls.map(toolCall => ({ id: toolCall.id || '', type: 'function', function: { name: toolCall.function?.name || '', arguments: toolCall.function?.arguments || '' } }));
+        const tool_calls: OpenAI.ChatCompletionMessageToolCall[] = toolCalls.map(toolCall => ({ id: toolCall.id || '', type: 'function', function: { name: toolCall.function?.name || '', arguments: toolCall.function?.arguments || '' } }));
         if (args.messages[args.messages.length - 1].role === 'assistant') {
             // 末尾がassistant（ということはツール呼び出しとテキストのレスポンスが混在しているタイプ）の場合は、レスポンスメッセージにtool_callsを追加する。
             (args.messages[args.messages.length - 1] as any).tool_calls = tool_calls;
@@ -2566,7 +2688,7 @@ export class OpenAIApiWrapper {
             args.messages.push({ role: 'assistant', content: [], tool_calls: tool_calls, });
         }
         // console.dir(args.messages, { depth: null });
-        const toolCallArgs: ChatCompletionCreateParamsStreaming = {
+        const toolCallArgs: OpenAI.ChatCompletionCreateParamsStreaming = {
             ...args,
             messages: [...args.messages,], // messagesだけ入れ替える
         };
@@ -2607,11 +2729,11 @@ export class OpenAIApiWrapper {
             const choice = {
                 delta: {
                     tool_call_id: toolCall.id, role: 'tool', content: '', // contentのみ空で先に進めるようにしておく。
-                } as ChatCompletionChunk.Choice.Delta,
+                } as OpenAI.ChatCompletionChunk.Choice.Delta,
                 finish_reason: null, // 連続呼び出しは1つのtollCallGroupにしたいのでnullを入れておく
                 index: toolCall.index,
-            } as ChatCompletionChunk.Choice;
-            const chunk: ChatCompletionChunk = {
+            } as OpenAI.ChatCompletionChunk.Choice;
+            const chunk: OpenAI.ChatCompletionChunk = {
                 id: toolCall.id || '', // toolCall.idが無い場合は空文字列にしておく。
                 object: 'chat.completion.chunk',
                 created: Date.now(),
@@ -2694,12 +2816,12 @@ export class OpenAIApiWrapper {
                     //     // 次の関数呼び出しに渡すためのもの
                     //     return result;
                     // } else {
-                    //     const inputChunk = JSON.parse(JSON.stringify(chunk)) as ChatCompletionChunk;;
+                    //     const inputChunk = JSON.parse(JSON.stringify(chunk)) asOpenAI.ChatCompletionChunk;;
                     //     inputChunk.choices[0].delta.role = 'command' as any;
                     //     inputChunk.choices[0].delta.content = JSON.stringify(input);
                     //     return concat(of(inputChunk), result);
                     // } else {
-                    //     const inputChunk = JSON.parse(JSON.stringify(chunk)) as ChatCompletionChunk;;
+                    //     const inputChunk = JSON.parse(JSON.stringify(chunk)) asOpenAI.ChatCompletionChunk;;
                     //     inputChunk.choices[0].delta.role = 'command' as any;
                     //     inputChunk.choices[0].delta.content = JSON.stringify(input);
                     //     return concat(of(inputChunk), result);
@@ -2724,18 +2846,18 @@ export class OpenAIApiWrapper {
                     options.toolCallCounter = 0;
                 }
                 // 関数グループ打ち終わりのチャンクを返す。
-                const stopChunk: ChatCompletionChunk = {
+                const stopChunk: OpenAI.ChatCompletionChunk = {
                     id: '',
                     object: 'chat.completion.chunk',
                     created: Date.now(),
                     model: args.model,
-                    choices: [{ finish_reason: 'stop' } as ChatCompletionChunk.Choice],
+                    choices: [{ finish_reason: 'stop' } as OpenAI.ChatCompletionChunk.Choice],
                 };
 
                 // キャンセルコマンドが来た場合はキャンセルする。
-                const cancelChunk: ChatCompletionChunk = {
+                const cancelChunk: OpenAI.ChatCompletionChunk = {
                     ...stopChunk,
-                    choices: [{ delta: { content: `キャンセルしました。` }, finish_reason: 'stop' } as ChatCompletionChunk.Choice],
+                    choices: [{ delta: { content: `キャンセルしました。` }, finish_reason: 'stop' } as OpenAI.ChatCompletionChunk.Choice],
                 };
 
                 console.log(`cancellation=${cancellation}, requireUserInput=${requireUserInput}`);
@@ -2776,7 +2898,7 @@ export class OpenAIApiWrapper {
         const inProgressQueue = this.inProgressQueue;
         for (const key of Object.keys(waitQueue)) {
             // 未知モデル名の場合はlimit=1のObjectを追加しておく
-            if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { maxTokens: 4096000000000, limitRequests: 10, limitTokens: 4096000000000, remainingRequests: 10, remainingTokens: 4096000000000, resetRequests: '', resetTokens: '' };
+            if (!this.currentRatelimit[key]) this.currentRatelimit[key] = { maxTokens: 409600000, limitRequests: 10, limitTokens: 200000000, remainingRequests: 1000000000, remainingTokens: 100000000, resetRequests: '5s', resetTokens: '5s' };
             // console.log(`fire ${key} x waitQueue:${waitQueue[key].length} inProgressQueue:${inProgressQueue[key].length} reqlimit:${this.currentRatelimit[key].limitRequests} toklimit:${this.currentRatelimit[key].limitTokens} remainingRequests:${this.currentRatelimit[key].remainingRequests} remaingTokens:${this.currentRatelimit[key].remainingTokens}`);
             const ratelimitObj = this.currentRatelimit[key];
             // console.log(`fire ${key} x waitQueue:${waitQueue[key].length} inProgressQueue:${inProgressQueue[key].length} reqlimit:${ratelimitObj.limitRequests} toklimit:${ratelimitObj.limitTokens} remainingRequests:${ratelimitObj.remainingRequests} remaingTokens:${ratelimitObj.remainingTokens}`);
@@ -2844,7 +2966,7 @@ export class OpenAIApiWrapper {
     }
 }
 
-export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, allowLocalFiles: boolean): Observable<{ args: ChatCompletionCreateParamsStreaming, countObject: { image: number, audio: number, video: number } }> {
+export function normalizeMessage(_args: OpenAI.ChatCompletionCreateParamsStreaming, allowLocalFiles: boolean): Observable<{ args: OpenAI.ChatCompletionCreateParamsStreaming, countObject: { image: number, audio: number, video: number } }> {
     const args = { ..._args };
     // フォーマットがjson指定なのにjsonという文字列が入ってない場合は追加する。
     if (args.response_format?.type == 'json_object' && JSON_MODELS.indexOf(args.model) !== -1) {
@@ -2973,21 +3095,22 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
         }
     })).pipe(toArray(), map(messages => {
         // console.dir(args.messages, { depth: null });
-        if (VISION_MODELS.indexOf(args.model) !== -1) {
-        } else {
-            args.messages.forEach((message, index) => {
-                if (message.content && Array.isArray(message.content)) {
-                    message.content.forEach(content => {
-                        if (content.type === 'image_url') {
-                            const _content = content as any as ChatCompletionContentPartText;
-                            _content.type = 'text';
-                            _content.text = content.image_url.url;
-                            delete (content as any).image_url;
-                        } else { }
-                    });
-                } else { }
-            });
-        }
+        // if (VISION_MODELS.indexOf(args.model) !== -1) {
+        // } else {
+        //     console.log('convert to text ' + args.model);
+        //     args.messages.forEach((message, index) => {
+        //         if (message.content && Array.isArray(message.content)) {
+        //             message.content.forEach(content => {
+        //                 if (content.type === 'image_url') {
+        //                     const _content = content as any as ChatCompletionContentPartText;
+        //                     _content.type = 'text';
+        //                     _content.text = content.image_url.url;
+        //                     delete (content as any).image_url;
+        //                 } else { }
+        //             });
+        //         } else { }
+        //     });
+        // }
         return args;
     })).pipe(map(args => {
         // console.dir(args.messages, { depth: null });
@@ -3004,7 +3127,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                     return true;
                 } else if (Array.isArray(message.content)) {
                     // 配列の場合は、中身の要素が存在するかをチェックする。
-                    message.content = (message.content as Array<ChatCompletionContentPart>).filter(content => {
+                    message.content = (message.content as Array<OpenAI.ChatCompletionContentPart>).filter(content => {
                         // テキストがあるか、画像があるか、どちらかがあればOKとする。
                         if (content.type === 'text') {
                             // テキストの場合は空白文字を削除してから長さが0より大きいかチェックする。
@@ -3025,7 +3148,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                             // それ以外は無視する。
                             return false;
                         }
-                    }) as ChatCompletionContentPart[]; // TODO アップデートしたら型合わなくなったので as を入れる。
+                    }) as OpenAI.ChatCompletionContentPart[]; // TODO アップデートしたら型合わなくなったので as を入れる。
                     return message.content.length > 0; // 中身の要素が無ければfalseで返す
                 } else {
                     console.log(`normalizeMessage skip ${message.content}`);
@@ -3063,7 +3186,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                     // 元々配列なので何もしない
                 }
                 // TODO アップデートしたら型合わなくなったので as を入れる
-                const prevContentArray: ChatCompletionContentPart[] = prev[prev.length - 1].content as ChatCompletionContentPart[];
+                const prevContentArray: OpenAI.ChatCompletionContentPart[] = prev[prev.length - 1].content as OpenAI.ChatCompletionContentPart[];
                 if (Array.isArray(prevContentArray)) {
                     if (typeof curr.content === 'string') {
                         if (curr.content) {
@@ -3093,7 +3216,7 @@ export function normalizeMessage(_args: ChatCompletionCreateParamsStreaming, all
                 }
             }
             return prev;
-        }, [] as ChatCompletionMessageParam[]);
+        }, [] as OpenAI.ChatCompletionMessageParam[]);
     })).pipe(map(() => ({ args, countObject })));
 }
 
@@ -3136,8 +3259,8 @@ export class TokenCount {
 
     calcCost(): number {
         this.cost = (
-            (TokenCount.COST_TABLE[this.modelShort]?.prompt || 0) * this.prompt_tokens +
-            (TokenCount.COST_TABLE[this.modelShort]?.completion || 0) * this.completion_tokens
+            (TokenCount.COST_TABLE[this.model]?.prompt || 0) * this.prompt_tokens +
+            (TokenCount.COST_TABLE[this.model]?.completion || 0) * this.completion_tokens
         ) / 1000_000;
         return this.cost;
     }

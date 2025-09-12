@@ -4,15 +4,13 @@
  * オリジナルのライブラリ無しで動くやつ。
  * プレーンに試したいとき用。
  */
-import { fileURLToPath } from 'url';
 import * as fs from 'fs';
 import sizeOf from 'image-size';
-import { HttpsProxyAgent } from 'https-proxy-agent';
+import { fileURLToPath } from 'url';
 
 import OpenAI from 'openai';
-import { APIPromise, RequestOptions } from 'openai/core';
 import { Stream } from 'openai/streaming';
-import { ChatCompletionChunk } from 'openai/resources';
+import { ProxyAgent } from 'undici';
 
 const openai = new OpenAI({
     apiKey: process.env['OPENAI_API_KEY'],
@@ -48,9 +46,9 @@ async function visRun(imagePathList: string[] = []) {
         ],
         stream: true,
         max_tokens: 4096, // max_tokensを指定しないと凄く短く終わる。
-    }, getProxiedOptions()) as APIPromise<Stream<ChatCompletionChunk>>)
+    } as OpenAI.ChatCompletionCreateParams, getProxiedOptions()))
         .withResponse()
-        .then(response => streamProc(response.data.toReadableStream().getReader(), `${logdir}/company-list-${getFileName(imagePathList[index])}.json`))
+        .then(response => streamProc((response.data as Stream<OpenAI.ChatCompletionChunk>).toReadableStream().getReader(), `${logdir}/company-list-${getFileName(imagePathList[index])}.json`))
     ))
         // ストリームを結合してファイルに出力する。
         .then(imageToTextResponseAll => {
@@ -79,7 +77,7 @@ async function visRun(imagePathList: string[] = []) {
                     ],
                     // response_format: { type: 'json_object' },
                     stream: true,
-                }, getProxiedOptions()) as APIPromise<Stream<ChatCompletionChunk>>)
+                }, getProxiedOptions()))
                     .withResponse()
                     .then(response => streamProc(response.data.toReadableStream().getReader(), `${logdir}/company-report-${safeFileName(targetName)}.md`))
                 ));
@@ -119,7 +117,7 @@ function path2ImageBase64(filePath: string): string {
  * @param baseOptions 
  * @returns 
  */
-function getProxiedOptions(baseOptions: RequestOptions = {}): RequestOptions {
+function getProxiedOptions(baseOptions: OpenAI.RequestOptions = {}): OpenAI.RequestOptions {
     const options = JSON.parse(JSON.stringify(baseOptions));
     // proxy設定判定用オブジェクト
     const proxyObj: { [key: string]: string | undefined } = {
@@ -128,7 +126,10 @@ function getProxiedOptions(baseOptions: RequestOptions = {}): RequestOptions {
     };
     // プロキシが設定されていたらhttAgentを設定する。
     if (Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0) {
-        options.httpAgent = new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || '');
+        // options.httpAgent = new HttpsProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || '');
+        if (proxyObj.httpsProxy || proxyObj.httpProxy) {
+            options.fetchOptions = { dispatcher: new ProxyAgent(proxyObj.httpsProxy || proxyObj.httpProxy || '') };
+        } else { }
     } else {/* 何もしない */ }
     options.stream = true;
     return options;

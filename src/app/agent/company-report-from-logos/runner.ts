@@ -1,6 +1,6 @@
-import * as fs from 'fs';
 import { fileURLToPath } from 'url';
-import { BaseStep, MultiStep, PromptLang, StepOutputFormat } from "../../common/base-step.js";
+import * as  fs from 'fs';
+import { BaseStep, MultiStep, PromptLang, StepOutputFormat, aiApi } from "../../common/base-step.js";
 import { GPTModels } from '../../common/model-definition.js';
 import { Utils } from '../../common/utils.js';
 
@@ -10,7 +10,7 @@ import { Utils } from '../../common/utils.js';
  */
 abstract class BaseStepCompanyReportFromLogos extends BaseStep {
     agentName: string = Utils.basename(Utils.dirname(import.meta.url));
-    model: GPTModels = 'gemini-2.5-flash';
+    model: GPTModels = 'gemini-1.5-flash-002';
     systemMessageJa = 'Experts in AI-related businesses'; // AIビジネスの専門家
     lang: PromptLang = 'ja';
     format = StepOutputFormat.MARKDOWN;

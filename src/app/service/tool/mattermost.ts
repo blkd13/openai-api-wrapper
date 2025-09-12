@@ -1,13 +1,13 @@
 import { In } from 'typeorm';
 
-import { MattermostChannel, MattermostUser } from '../../agent/api-mattermost/api.js';
-import { MyToolType, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
-import { Utils } from '../../common/utils.js';
-import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
-import { ds } from '../db.js';
-import { MmUserEntity } from '../entity/api-mattermost.entity.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../entity/project-models.entity.js';
+import { MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
 import { UserRequest } from '../models/info.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
+import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
+import { Utils } from '../../common/utils.js';
+import { ds } from '../db.js';
+import { GetChannelsPostsResponse, MattermostChannel, MattermostUser } from '../../agent/api-mattermost/api.js';
+import { MmUserEntity } from '../entity/api-mattermost.entity.js';
 import { getOAuthAccountForTool, reform } from './common.js';
 
 
@@ -397,6 +397,206 @@ export async function mattermostFunctionDefinitions(
                 // result.me = reform(userInfo);
                 result.uriBase = e.uriBase;
                 return result;
+            }
+        }, {
+            info: { group: provider, isActive: true, isInteractive: false, label: `チャンネル検索を`, },
+            definition: {
+                type: 'function',
+                function: {
+                    name: `mm_${providerName}_search_channels`,
+                    description: Utils.trimLines(`
+                        [Mattermost] ユーザーの所属する全チャンネルの一覧を取得する。
+                        取得可能な項目が多く、データ量が爆発しやすいので必要な項目のみに絞って取得すること。
+                        取得可能な項目：id,create_at,update_at,delete_at,team_id,type,display_name,name,header,purpose,last_post_at,total_msg_count,extra_update_at,creator_id,scheme_id,props,group_constrained,shared,total_msg_count_root,policy_id,last_root_post_at
+                    `),
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            userPrompt: {
+                                type: 'string',
+                                description: 'AIに質問する内容'
+                            },
+                            columns: {
+                                type: 'array',
+                                items: { type: 'string' },
+                                description: Utils.trimLines(`取得対象の項目名リスト`)
+                            },
+                        },
+                        // required: ['term'],
+                    }
+                }
+            },
+            handler: async (args: {
+                userPrompt: string,
+                columns: string[],
+            }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const userInfo = oAuthAccount.userInfo as MattermostUser;
+
+                // // クエリパラメータの構築
+                // const queryParams = new URLSearchParams();
+                // // if (args.term !== undefined) {
+                // //     queryParams.append('term', args.term);
+                // // }
+                // if (!args.columns || args.columns.length === 0) {
+                //     args.columns = ['id', 'create_at', 'update_at', 'type', 'display_name', 'name', 'last_post_at', 'total_msg_count', 'team_id'];
+                // }
+                // if (!args.columns.includes('team_id')) {
+                //     args.columns.push('team_id');
+                // }
+
+                // let { userPrompt } = args;
+                // const systemPrompt = 'アシスタントAI';
+                // const model = 'gemini-1.5-pro';
+
+                // const inDto = JSON.parse(JSON.stringify(obj.inDto)); // deep copy
+                // inDto.args.model = model || inDto.args.model; // modelが指定されていない場合は元のモデルを使う
+                // inDto.args.messages = [
+                //     { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
+                //     {
+                //         role: 'user', content: [
+                //             { type: 'text', text: userPrompt },
+                //         ],
+                //     },
+                // ];
+                // // toolは使わないので空にしておく
+                // inDto.args.tool_choice = {};
+                // delete inDto.args.tools;
+
+                // const aiProvider = providerPrediction(inDto.args.model);
+
+                // const newLabel = `${label}-call_ai-${model}`;
+                // // レスポンス返した後にゆるりとヒストリーを更新しておく。
+                // const history = new PredictHistoryWrapperEntity();
+                // history.tenantKey = req.info.user.tenantKey;
+                // history.connectionId = connectionId;
+                // history.streamId = streamId;
+                // history.messageId = message.id;
+                // history.label = newLabel;
+                // history.model = inDto.args.model;
+                // history.provider = provider;
+                // history.createdBy = req.info.user.id;
+                // history.updatedBy = req.info.user.id;
+                // history.createdIp = req.info.ip;
+                // history.updatedIp = req.info.ip;
+                // await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+
+                // return new Promise((resolve, reject) => {
+                //     let text = '';
+                //     // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
+                //     aiApi.chatCompletionObservableStream(
+                //         inDto.args, { label: newLabel }, aiProvider,
+                //     ).pipe(
+                //         map(res => res.choices.map(choice => choice.delta.content).join('')),
+                //         toArray(),
+                //         map(res => res.join('')),
+                //     ).subscribe({
+                //         next: next => {
+                //             text += next;
+                //         },
+                //         error: error => {
+                //             reject(error);
+                //         },
+                //         complete: () => {
+                //             resolve(text);
+                //         },
+                //     });;
+                // });
+
+
+                // result.channels = channels;
+                // // ダイレクトチャネルとグループチャネルの個人名を補充する。
+                // const ids = new Set<string>();
+                // const names = new Set<string>();
+                // channels.forEach(mmChannel => {
+                //     let groupMemberIdList = [];
+                //     if (mmChannel.display_name) {
+                //         if (mmChannel.type === 'G') {
+                //             // 空白を削ってカンマで区切ってnameに入れる
+                //             groupMemberIdList = mmChannel.display_name.replaceAll(/ /g, '').split(',');
+                //             groupMemberIdList.forEach(username => names.add(username));
+                //             groupMemberIdList = groupMemberIdList.filter(id => id !== userInfo.username);
+                //         } else {
+                //             // グループ以外は無視
+                //         }
+                //     } else {
+                //         if (mmChannel.type === 'D') {
+                //             // 無名のダイレクトチャネルは名前を取ってくる。
+                //             groupMemberIdList = mmChannel.name.split('__');
+                //             groupMemberIdList.forEach(id => ids.add(id));
+                //             groupMemberIdList = groupMemberIdList.filter(id => id !== userInfo.id);
+                //             if (groupMemberIdList.length === 0 && userInfo) {
+                //                 groupMemberIdList = [userInfo.id];
+                //             } else { }
+                //         } else {
+                //             // ダイレクトチャネル以外は無視
+                //         }
+                //     }
+                // });
+                // const idMas = await ds.getRepository(MmUserEntity).find({
+                //     select: ['id', 'username', 'nickname'],
+                //     where: { id: In(Array.from(ids)) },
+                // }).then(list => {
+                //     const mas = {} as any;
+                //     list.forEach(user => { mas[user.id] = user; });
+                //     return mas;
+                // });
+                // const nameMas = await ds.getRepository(MmUserEntity).find({
+                //     select: ['id', 'username', 'nickname'],
+                //     where: { username: In(Array.from(names)) },
+                // }).then(list => {
+                //     const mas = {} as any;
+                //     list.forEach(user => { mas[user.username] = user; });
+                //     return mas;
+                // });
+
+                // // console.dir(idMas);
+                // // console.dir(nameMas);
+                // channels.forEach(mmChannel => {
+                //     // console.log(`mmChannel.display_name: ${mmChannel.display_name}`);
+                //     if (mmChannel.display_name) {
+                //         if (mmChannel.type === 'G') {
+                //             // 空白を削ってカンマで区切ってnameに入れる
+                //             mmChannel.display_name = 'dummy';
+                //             mmChannel.display_name = mmChannel.display_name.replaceAll(/ /g, '').split(',').filter(username => username !== userInfo.username).map(username => nameMas[username]?.nickname || nameMas[username]?.username || '').filter(name => name.trim()).join(', ');
+                //             // console.log(mmChannel.display_name);
+                //         } else {
+                //             // グループ以外は無視
+                //         }
+                //     } else {
+                //         if (mmChannel.type === 'D') {
+                //             // console.log(`mmChannel.name: ${mmChannel.name}`);
+                //             // 無名のダイレクトチャネルは名前を取ってくる。
+                //             if (mmChannel.name === `${userInfo.id}__${userInfo.id}`) {
+                //                 mmChannel.display_name = userInfo.nickname || userInfo.username || '';
+                //                 // console.log(`mmChannel.display_name type1: ${mmChannel.display_name}`);
+                //             } else {
+                //                 mmChannel.display_name = 'dummy';
+                //                 mmChannel.display_name = mmChannel.name.split('__').filter(id => id !== userInfo.id).map(id => idMas[id].nickname || idMas[id].username || '').filter(name => name.trim()).join(', ');
+                //                 // console.log(`mmChannel.display_name type2: ${mmChannel.display_name}`);
+                //             }
+                //             // console.log(mmChannel.display_name);
+                //         } else {
+                //             // ダイレクトチャネル以外は無視
+                //         }
+                //     }
+                //     Object.keys(mmChannel).forEach(key => {
+                //         if (!args.columns.includes(key)) {
+                //             delete (mmChannel as any)[key];
+                //         } else { }
+                //     });
+                // });
+
+                // reform(result, true);
+                // // result.resultCsvHeader = args.columns.join(',');
+                // // result.resultCsvData = channels.map(channel => {
+                // //     return args.columns.map(col => (channel as any)[col]).join(',');
+                // // }).join('\n');
+                // // delete result.channels;
+
+                // // result.me = reform(userInfo);
+                // result.uriBase = e.uriBase;
+                // return result;
             }
         },
         {
