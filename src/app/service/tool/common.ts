@@ -23,6 +23,8 @@ import { Browser } from 'puppeteer';
 import createDOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 import { uploadFiles } from '../controllers/file-manager.js';
+import { AgentTaskEntity, AgentTaskPriority, AgentTaskStatus } from '../entity/agent-task.entity.js';
+import { In } from 'typeorm';
 
 
 const turndownService = new TurndownService();
@@ -858,6 +860,154 @@ export function commonFunctionDefinitions(
                 return Promise.resolve('dummy2');
             }
         } as MyToolType,
+        {
+            info: { group: 'task', isActive: true, isInteractive: false, label: 'タスク登録', },
+            definition: {
+                type: 'function', function: {
+                    name: 'agent_task_register',
+                    description: 'エージェント用のタスクを登録する（計画を忘れないための記録）。',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            title: { type: 'string', description: 'タスク名（簡潔な要約）' },
+                            description: { type: 'string', description: '詳細な説明', default: '' },
+                            priority: { type: 'string', description: '優先度', enum: [ 'Low', 'Medium', 'High' ], default: 'Medium' },
+                            dueAt: { type: 'string', description: '期日のISO文字列（任意）' },
+                            label: { type: 'string', description: '計画グルーピング用のラベル（任意）' },
+                            metadata: { type: 'object', description: '任意の付加情報（JSON）' },
+                        },
+                        required: ['title']
+                    }
+                }
+            },
+            handler: async (args: { title: string, description?: string, priority?: keyof typeof AgentTaskPriority | 'Low' | 'Medium' | 'High', dueAt?: string, label?: string, metadata?: any }): Promise<{ id: string } & any> => {
+                const { title, description = '', priority = 'Medium', dueAt, label: taskLabel, metadata } = args;
+                const e = new AgentTaskEntity();
+                e.orgKey = req.info.user.orgKey;
+                e.createdBy = req.info.user.id;
+                e.updatedBy = req.info.user.id;
+                e.createdIp = req.info.ip;
+                e.updatedIp = req.info.ip;
+                e.title = title;
+                e.description = description;
+                e.priority = (priority as AgentTaskPriority) || AgentTaskPriority.Medium;
+                e.status = AgentTaskStatus.Pending;
+                e.label = taskLabel || label; // デフォルトで会話ラベルにぶら下げる
+                e.threadId = obj.messageSet.messageGroup.threadId;
+                e.messageId = obj.messageSet.message.id;
+                e.metadata = metadata;
+                if (dueAt) {
+                    const d = new Date(dueAt);
+                    if (!Number.isNaN(d.getTime())) e.dueAt = d; // 無効な日付は無視
+                }
+
+                const saved = await ds.getRepository(AgentTaskEntity).save(e);
+                return {
+                    id: saved.id,
+                    title: saved.title,
+                    description: saved.description,
+                    status: saved.status,
+                    priority: saved.priority,
+                    dueAt: saved.dueAt?.toISOString(),
+                    label: saved.label,
+                    threadId: saved.threadId,
+                    messageId: saved.messageId,
+                    createdAt: saved.createdAt,
+                    updatedAt: saved.updatedAt,
+                };
+            },
+        },
+        {
+            info: { group: 'task', isActive: true, isInteractive: false, label: 'タスク一覧', },
+            definition: {
+                type: 'function', function: {
+                    name: 'agent_task_list',
+                    description: 'エージェント用のタスク一覧を取得する。',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            status: { type: 'string', description: "フィルタ: 'Open'(未完了) / 'All' / 'Pending' / 'InProgress' / 'Completed' / 'Cancelled'", enum: ['Open', 'All', 'Pending', 'InProgress', 'Completed', 'Cancelled'], default: 'Open' },
+                            label: { type: 'string', description: '特定ラベルで絞り込み（任意）' },
+                            limit: { type: 'number', description: '最大件数', default: 50 },
+                            order: { type: 'string', description: "並び順 'asc'|'desc'（作成日時）", enum: ['asc', 'desc'], default: 'asc' },
+                        }
+                    }
+                }
+            },
+            handler: async (args: { status?: 'Open'|'All'|keyof typeof AgentTaskStatus, label?: string, limit?: number, order?: 'asc'|'desc' }): Promise<any[]> => {
+                const { status = 'Open', label: qLabel, limit = 50, order = 'asc' } = args;
+                const repo = ds.getRepository(AgentTaskEntity);
+
+                const where: any = { orgKey: req.info.user.orgKey };
+                if (qLabel) where.label = qLabel;
+
+                if (status === 'Open') {
+                    where.status = In([AgentTaskStatus.Pending, AgentTaskStatus.InProgress]);
+                } else if (status === 'All') {
+                    // no status filter
+                } else {
+                    where.status = status as AgentTaskStatus;
+                }
+
+                const list = await repo.find({
+                    where,
+                    take: Math.max(1, Math.min(200, limit)),
+                    order: { createdAt: order.toLowerCase() === 'desc' ? 'DESC' : 'ASC' },
+                });
+
+                return list.map(m => ({
+                    id: m.id,
+                    title: m.title,
+                    description: m.description,
+                    status: m.status,
+                    priority: m.priority,
+                    dueAt: m.dueAt?.toISOString(),
+                    label: m.label,
+                    threadId: m.threadId,
+                    messageId: m.messageId,
+                    createdAt: m.createdAt,
+                    updatedAt: m.updatedAt,
+                }));
+            },
+        },
+        {
+            info: { group: 'task', isActive: true, isInteractive: false, label: 'タスク完了', },
+            definition: {
+                type: 'function', function: {
+                    name: 'agent_task_complete',
+                    description: '指定タスクを完了にする。',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            id: { type: 'string', description: 'タスクID' },
+                            resultNote: { type: 'string', description: '完了メモ（任意）' },
+                        },
+                        required: ['id']
+                    }
+                }
+            },
+            handler: async (args: { id: string, resultNote?: string }): Promise<any> => {
+                const { id, resultNote } = args;
+                const repo = ds.getRepository(AgentTaskEntity);
+                const task = await repo.findOneOrFail({ where: { id, orgKey: req.info.user.orgKey } });
+
+                task.status = AgentTaskStatus.Completed;
+                task.resultNote = resultNote ?? task.resultNote;
+                task.completedAt = new Date();
+                task.updatedBy = req.info.user.id;
+                task.updatedIp = req.info.ip;
+
+                const saved = await repo.save(task);
+                return {
+                    id: saved.id,
+                    title: saved.title,
+                    status: saved.status,
+                    completedAt: saved.completedAt?.toISOString(),
+                    resultNote: saved.resultNote,
+                    updatedAt: saved.updatedAt,
+                };
+            },
+        },
     ]
 }
 

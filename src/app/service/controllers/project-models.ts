@@ -1,19 +1,19 @@
 import { Request, Response } from 'express';
 
-import { ContentPartEntity, MessageEntity, MessageClusterEntity, MessageGroupEntity, ProjectEntity, TeamEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity, } from '../entity/project-models.entity.js';
+import { body, param, query } from 'express-validator';
+import { EntityManager, EntityNotFoundError, In, Not } from 'typeorm';
+import { Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
-import { body, param, query, validationResult } from 'express-validator';
+import { UserEntity } from '../entity/auth.entity.js';
+import { FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
+import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
+import { ContentPartEntity, MessageClusterEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity, } from '../entity/project-models.entity.js';
+import { ToolCallGroupEntity, ToolCallPartEntity } from '../entity/tool-call.entity.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { UserRequest } from '../models/info.js';
-import { EntityManager, EntityNotFoundError, In, IsNull, Not } from 'typeorm';
-import { ContentPartType, MessageClusterType, MessageGroupType, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamStatus, TeamType, ThreadGroupStatus, ThreadStatus, ThreadGroupVisibility, ThreadGroupType } from '../models/values.js';
-import { FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
-import { UserEntity } from '../entity/auth.entity.js';
-import { Utils } from '../../common/utils.js';
-import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
+import { ContentPartType, MessageClusterType, MessageGroupType, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamStatus, TeamType, ThreadGroupStatus, ThreadGroupType, ThreadGroupVisibility, ThreadStatus } from '../models/values.js';
 import { geminiCountTokensByContentPart } from './chat-by-project-model.js';
 import { isActiveFile } from './file-manager.js';
-import { ToolCallGroupEntity, ToolCallPartEntity } from '../entity/tool-call.entity.js';
 
 /**
  * [user認証] チーム作成
@@ -24,14 +24,14 @@ export const createTeam = [
     body('label').optional().isString().trim().notEmpty(),
     body('description').optional().isString().trim(),
     validationErrorHandler,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
         const userReq = req as UserRequest;
         const { teamType } = userReq.body;
 
         const team = new TeamEntity();
         team.teamType = teamType;
         try {
-            ds.transaction(async (transactionalEntityManager) => {
+            await ds.transaction(async (transactionalEntityManager) => {
                 // Aloneタイプのチームは一人一つまでしか作れない
                 if (teamType === TeamType.Alone) {
                     // ユーザーが所属しているチームのIDを取得
@@ -605,7 +605,7 @@ export const createProject = [
     // body('status').trim().notEmpty(),
     body('label').trim().notEmpty(),
     validationErrorHandler,
-    (_req: Request, res: Response) => {
+    async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const project = new ProjectEntity();
         project.name = req.body.name;
@@ -620,26 +620,33 @@ export const createProject = [
         project.updatedIp = req.info.ip;
 
         // 作成トランザクション
-        function create() {
-            ds.transaction(tx => {
-                return tx.save(ProjectEntity, project);
+        async function create() {
+            await ds.transaction(async tx => {
+                return await tx.save(ProjectEntity, project);
             }).then(savedProject => {
                 res.status(201).json(savedProject);
             });
         }
         // 権限チェック（チームメンバーかつオーナーであること）
-        ds.getRepository(TeamMemberEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, teamId: req.body.teamId, userId: req.info.user.id, role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer]) } }).then((teamMember) => {
+        await ds.getRepository(TeamMemberEntity).findOneOrFail({
+            where: {
+                orgKey: req.info.user.orgKey,
+                teamId: req.body.teamId,
+                userId: req.info.user.id,
+                role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer])
+            }
+        }).then(async (teamMember) => {
             // プロジェクトにチームIDをセット            
             project.teamId = req.body.teamId;
             if (project.visibility === ProjectVisibility.Default) {
                 // Defaultプロジェクトは一人一個限定なので、既存のDefaultプロジェクトがあるか確認する
-                ds.getRepository(ProjectEntity).find({ where: { orgKey: req.info.user.orgKey, teamId: project.teamId, visibility: ProjectVisibility.Default } }).then(projects => {
+                await ds.getRepository(ProjectEntity).find({ where: { orgKey: req.info.user.orgKey, teamId: project.teamId, visibility: ProjectVisibility.Default } }).then(async projects => {
                     if (projects.length > 0) {
                         res.status(400).json({ message: `Default project already exists` });
                         return;
                     } else {
                         // 正常
-                        create();
+                        await create();
                     }
                 });
             } else {
@@ -745,12 +752,20 @@ export const getProject = [
 export const updateProject = [
     param('id').trim().notEmpty().isUUID(),
     validationErrorHandler,
-    (_req: Request, res: Response) => {
+    async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        ds.transaction(tx => {
-            return tx.findOneOrFail(ProjectEntity, { where: { orgKey: req.info.user.orgKey, id: req.params.id } }).then(project => {
+        await ds.transaction(async tx => {
+            return await tx.findOneByOrFail(ProjectEntity, {
+                orgKey: req.info.user.orgKey,
+                id: req.params.id,
+            }).then(async project => {
                 // 権限チェック（チームメンバーかつオーナーであること）
-                return tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id, role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer]) } }).then(() => {
+                return await tx.findOneByOrFail(TeamMemberEntity, {
+                    orgKey: req.info.user.orgKey,
+                    teamId: project.teamId,
+                    userId: req.info.user.id,
+                    role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer]),
+                }).then(async () => {
                     if (req.body.name) {
                         project.name = req.body.name;
                     }
@@ -770,12 +785,17 @@ export const updateProject = [
                     project.updatedIp = req.info.ip;
                     if (req.body.teamId) {
                         // TODO 権限持ってないチームに渡してしまうのを防ぐチェック
-                        return tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: req.body.teamId, userId: req.info.user.id, role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member]) } }).then(() => {
+                        return await tx.findOneByOrFail(TeamMemberEntity, {
+                            orgKey: req.info.user.orgKey,
+                            teamId: req.body.teamId,
+                            userId: req.info.user.id,
+                            role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Member]),
+                        }).then(async () => {
                             project.teamId = req.body.teamId;
-                            return tx.save(ProjectEntity, project);
+                            return await tx.save(ProjectEntity, project);
                         });
                     } else {
-                        return tx.save(ProjectEntity, project);
+                        return await tx.save(ProjectEntity, project);
                     }
                 });
             });
@@ -798,17 +818,25 @@ export const updateProject = [
 export const deleteProject = [
     param('id').trim().notEmpty().isUUID(),
     validationErrorHandler,
-    (_req: Request, res: Response) => {
+    async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
 
-        ds.transaction(tx => {
-            return tx.findOneOrFail(ProjectEntity, { where: { orgKey: req.info.user.orgKey, id: req.params.id } }).then(project => {
+        await ds.transaction(async tx => {
+            return await tx.findOneByOrFail(ProjectEntity, {
+                orgKey: req.info.user.orgKey,
+                id: req.params.id,
+            }).then(async project => {
                 // 権限チェック（チームメンバーかつオーナーであること）
-                tx.findOneOrFail(TeamMemberEntity, { where: { orgKey: req.info.user.orgKey, teamId: project.teamId, userId: req.info.user.id, role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer]) } }).then((teamMember) => {
+                await tx.findOneByOrFail(TeamMemberEntity, {
+                    orgKey: req.info.user.orgKey,
+                    teamId: project.teamId,
+                    userId: req.info.user.id,
+                    role: In([TeamMemberRoleType.Owner, TeamMemberRoleType.Admin, TeamMemberRoleType.Maintainer]),
+                }).then(async (teamMember) => {
                     project.status = ProjectStatus.Deleted;
                     project.updatedBy = req.info.user.id;
                     project.updatedIp = req.info.ip;
-                    return project.save();
+                    return await project.save();
                 }).catch((error) => {
                     console.error(JSON.stringify(error, Utils.genJsonSafer()));
                     res.status(error instanceof EntityNotFoundError ? 404 : 500).json({ message: `Error deleting project ${req.params.id}` });

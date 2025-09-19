@@ -1601,7 +1601,7 @@ export const chatCompletionByProjectModel = [
                     await saveStock();
                     // // DB側の更新を待つ必要は無い。
                     // endResponse(undefined as any, error);
-                    ds.transaction(async transactionalEntityManager => {
+                    await ds.transaction(async transactionalEntityManager => {
                         await Promise.all(stockList.map(async stock => {
                             if (stock.savedMessageId) {
                                 const savedMessage = await transactionalEntityManager.findOne(MessageEntity, {

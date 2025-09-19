@@ -680,8 +680,14 @@ export async function tryRefreshCore(tm: EntityManager, xRealIp: string, deviceI
 
     const [jti0, verifier0] = token.split('.'); // 形式チェックのために分割
     const existing = await repo.findOneOrFail({ where: { jti: jti0 } });
-    if (!existing || existing.revoked || !existing.current || new Date() > existing.expiresAt) {
+    if (!existing) {
         throw new Error("Invalid refresh token");
+    } else if (existing.revoked) {
+        throw new Error("Refresh token is no longer valid");
+    } else if (!existing.current) {
+        throw new Error("Refresh token is not current");
+    } else if (existing.expiresAt < new Date()) {
+        throw new Error("Refresh token has expired");
     } else { }
 
     // 有効なら新しいアクセストークンを発行するなどの処理
@@ -1489,6 +1495,7 @@ export const refresh = [
                     });
                     return coreRes;
                 } catch (err) {
+                    console.error(err);
                     return { userTokenPayload: '', accessToken: '' };
                 }
             });
@@ -1499,12 +1506,12 @@ export const refresh = [
                 res.json({ message: 'トークンをリフレッシュしました。', user: userTokenPayload, isAuth: true });
             } else {
                 // // リフレッシュトークン無し
-                console.log(`リフレッシュトークンの検証に失敗しました。`);
+                console.log(`リフレッシュトークンの検証に失敗しました。1`);
                 res.status(401).json({ message: 'トークンの検証に失敗しました。再度ログインしてください。' });
             }
         } catch (err) {
             // // リフレッシュトークン無し
-            console.log(`リフレッシュトークンの検証に失敗しました。`);
+            console.log(`リフレッシュトークンの検証に失敗しました。2`);
             console.error(err);
             res.status(401).json({ message: 'トークンの検証に失敗しました。再度ログインしてください。' });
         }
