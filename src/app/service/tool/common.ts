@@ -1,30 +1,29 @@
-import os from 'os';
-import fs from 'fs/promises';
-import path from 'path';
 import { exec } from 'child_process';
-import { promisify } from 'util';
 import { randomUUID } from 'crypto';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
+import { promisify } from 'util';
 
 import { map, timeout, toArray } from 'rxjs';
 import TurndownService from 'turndown';
 // import * as cheerio from 'cheerio';
 import { AxiosInstance } from 'axios';
 
-import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
-import { UserRequest } from '../models/info.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
-import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
-import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
-import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
-import { ds } from '../db.js';
-import { OAuthAccountEntity } from '../entity/auth.entity.js';
-import { getAxios, getPuppeteer } from '../../common/http-client.js';
-import { Browser } from 'puppeteer';
 import createDOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
-import { uploadFiles } from '../controllers/file-manager.js';
-import { AgentTaskEntity, AgentTaskPriority, AgentTaskStatus } from '../entity/agent-task.entity.js';
+import { Browser } from 'puppeteer';
 import { In } from 'typeorm';
+import { getAxios, getPuppeteer } from '../../common/http-client.js';
+import { MyToolType, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
+import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
+import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
+import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
+import { ds } from '../db.js';
+import { AgentTaskEntity, AgentTaskPriority, AgentTaskStatus } from '../entity/agent-task.entity.js';
+import { OAuthAccountEntity } from '../entity/auth.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
+import { UserRequest } from '../models/info.js';
 
 
 const turndownService = new TurndownService();
@@ -40,6 +39,124 @@ export function sanitizeHTML(dirty: string): string {
     return DOMPurify.sanitize(dirty, {
         USE_PROFILES: { html: true },
     });
+}
+
+/**
+ * robots.txtの内容を解析してクローリングが許可されているかをチェック
+ */
+export async function isRobotsTxtAllowed(url: string, userAgent: string = '*'): Promise<{ allowed: boolean; reason?: string }> {
+    try {
+        const urlObj = new URL(url);
+        const robotsUrl = `${urlObj.protocol}//${urlObj.host}/robots.txt`;
+
+        console.log(`Checking robots.txt: ${robotsUrl}`);
+
+        try {
+            const response = await (await getAxios(robotsUrl)).get(robotsUrl);
+            const robotsTxt = response.data as string;
+
+            return parseRobotsTxt(robotsTxt, userAgent, urlObj.pathname);
+        } catch (robotsError: any) {
+            // robots.txtが存在しない場合（404など）は許可とみなす
+            if (robotsError.response?.status === 404) {
+                console.log(`robots.txt not found (404), allowing access to: ${url}`);
+                return { allowed: true, reason: 'robots.txt not found' };
+            }
+            // その他のエラーも基本的には許可とみなす
+            console.log(`Error fetching robots.txt, allowing access: ${robotsError.message}`);
+            return { allowed: true, reason: `robots.txt fetch error: ${robotsError.message}` };
+        }
+    } catch (error: any) {
+        console.error('Error checking robots.txt:', error);
+        return { allowed: true, reason: `URL parse error: ${error.message}` };
+    }
+}
+
+/**
+ * robots.txtの内容を解析
+ */
+function parseRobotsTxt(robotsTxt: string, userAgent: string, pathname: string): { allowed: boolean; reason?: string } {
+    const lines = robotsTxt.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+
+    let currentUserAgent = '';
+    let disallowRules: string[] = [];
+    let allowRules: string[] = [];
+    let isRelevantSection = false;
+
+    for (const line of lines) {
+        if (line.toLowerCase().startsWith('user-agent:')) {
+            const agent = line.substring(11).trim();
+            currentUserAgent = agent;
+            isRelevantSection = (agent === '*' || agent.toLowerCase() === userAgent.toLowerCase());
+
+            // 新しいUser-agentセクションに入る際にルールをリセット
+            if (!isRelevantSection) {
+                disallowRules = [];
+                allowRules = [];
+            }
+        } else if (isRelevantSection) {
+            if (line.toLowerCase().startsWith('disallow:')) {
+                const path = line.substring(9).trim();
+                if (path) {
+                    disallowRules.push(path);
+                }
+            } else if (line.toLowerCase().startsWith('allow:')) {
+                const path = line.substring(6).trim();
+                if (path) {
+                    allowRules.push(path);
+                }
+            }
+        }
+    }
+
+    // Allowルールを先にチェック（優先度が高い）
+    for (const allowRule of allowRules) {
+        if (matchesPattern(pathname, allowRule)) {
+            console.log(`robots.txt: ALLOWED by rule "Allow: ${allowRule}" for path: ${pathname}`);
+            return { allowed: true, reason: `Explicitly allowed by rule: Allow: ${allowRule}` };
+        }
+    }
+
+    // Disallowルールをチェック
+    for (const disallowRule of disallowRules) {
+        if (matchesPattern(pathname, disallowRule)) {
+            console.log(`robots.txt: BLOCKED by rule "Disallow: ${disallowRule}" for path: ${pathname}`);
+            return { allowed: false, reason: `Blocked by rule: Disallow: ${disallowRule}` };
+        }
+    }
+
+    // どのルールにもマッチしない場合は許可
+    console.log(`robots.txt: ALLOWED (no matching rules) for path: ${pathname}`);
+    return { allowed: true, reason: 'No matching disallow rules' };
+}
+
+/**
+ * robots.txtのパターンマッチング
+ */
+function matchesPattern(path: string, pattern: string): boolean {
+    // 空のパターンは何にもマッチしない
+    if (!pattern) return false;
+
+    // パターンを正規表現に変換
+    // * は任意の文字列、$ は行末を表す
+    let regexPattern = pattern
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')  // 正規表現の特殊文字をエスケープ
+        .replace(/\*/g, '.*');  // * を .* に変換
+
+    // パターンの末尾が$ でない場合、前方一致として扱う
+    if (!regexPattern.endsWith('$')) {
+        regexPattern = '^' + regexPattern;
+    } else {
+        regexPattern = '^' + regexPattern;
+    }
+
+    try {
+        const regex = new RegExp(regexPattern);
+        return regex.test(path);
+    } catch (error) {
+        console.error(`Invalid regex pattern: ${regexPattern}`, error);
+        return false;
+    }
 }
 
 export async function isPdfUrl(url: string): Promise<boolean> {
@@ -98,6 +215,19 @@ export function bufferToDataUrl(buffer: Buffer, mimeType = 'application/pdf'): s
 async function fetchRenderedText(browser: Browser, url: string, loadContentType: 'TEXT' | 'MARKDOWN' | 'HTML' = 'TEXT'): Promise<{ type: 'TEXT' | 'MARKDOWN' | 'HTML' | 'PDF' | 'ERROR', title: string, favicon: string, body: string }> {
     try {
         console.log(`puppeteer loadContentType=${loadContentType} url=${url}`);
+
+        // robots.txtチェック
+        const robotsCheck = await isRobotsTxtAllowed(url, 'Mozilla/5.0 (compatible; AI Bot)');
+        if (!robotsCheck.allowed) {
+            console.log(`Access blocked by robots.txt: ${robotsCheck.reason}`);
+            return {
+                type: 'ERROR',
+                title: 'Access Blocked',
+                favicon: '',
+                body: `このURLへのアクセスはrobots.txtによって制限されています: ${robotsCheck.reason}`
+            };
+        }
+
         const page = await browser.newPage();
 
         // ユーザーエージェントを設定（より実際のブラウザに近いものを使用）
@@ -446,7 +576,7 @@ export function commonFunctionDefinitions(
                                 aiApi.chatCompletionObservableStream(
                                     inDto.args, { label: newLabel }, aiProvider,
                                 ).pipe(
-                                timeout(30_000), // ← 30秒のタイムアウトを設定（ミリ秒）
+                                    timeout(30_000), // ← 30秒のタイムアウトを設定（ミリ秒）
                                     map(res => res.choices.map(choice => choice.delta.content).join('')),
                                     toArray(),
                                     map(res => res.join('')),
@@ -455,9 +585,9 @@ export function commonFunctionDefinitions(
                                         text += next;
                                     },
                                     error: error => {
-                                    // reject(error);
-                                    // console.log(`WebSearch fineCounter=${fineCounter++} error`);
-                                    resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: 'error' });
+                                        // reject(error);
+                                        // console.log(`WebSearch fineCounter=${fineCounter++} error`);
+                                        resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: 'error' });
                                     },
                                     complete: () => {
                                         resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: text });
@@ -871,7 +1001,7 @@ export function commonFunctionDefinitions(
                         properties: {
                             title: { type: 'string', description: 'タスク名（簡潔な要約）' },
                             description: { type: 'string', description: '詳細な説明', default: '' },
-                            priority: { type: 'string', description: '優先度', enum: [ 'Low', 'Medium', 'High' ], default: 'Medium' },
+                            priority: { type: 'string', description: '優先度', enum: ['Low', 'Medium', 'High'], default: 'Medium' },
                             dueAt: { type: 'string', description: '期日のISO文字列（任意）' },
                             label: { type: 'string', description: '計画グルーピング用のラベル（任意）' },
                             metadata: { type: 'object', description: '任意の付加情報（JSON）' },
@@ -934,7 +1064,7 @@ export function commonFunctionDefinitions(
                     }
                 }
             },
-            handler: async (args: { status?: 'Open'|'All'|keyof typeof AgentTaskStatus, label?: string, limit?: number, order?: 'asc'|'desc' }): Promise<any[]> => {
+            handler: async (args: { status?: 'Open' | 'All' | keyof typeof AgentTaskStatus, label?: string, limit?: number, order?: 'asc' | 'desc' }): Promise<any[]> => {
                 const { status = 'Open', label: qLabel, limit = 50, order = 'asc' } = args;
                 const repo = ds.getRepository(AgentTaskEntity);
 

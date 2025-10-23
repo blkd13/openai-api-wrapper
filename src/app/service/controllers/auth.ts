@@ -46,8 +46,10 @@ import { getAxios } from '../../common/http-client.js';
 import { getAccessToken } from '../api/api-proxy.js';
 import { safeWhere } from '../entity/base.js';
 import { ContainerInstanceEntity, ContainerStatus } from '../entity/container.entity.js';
+import { UserSettingEntity } from '../entity/user.entity.js';
 import { redirectingPage } from './auth/page.js';
 import { genTokenSet, verifyRefresh } from './auth/token.js';
+// import { uploadClickConversion } from './google-ads.js';
 import { decrypt, encrypt } from './tool-call.js';
 
 const loginLimiter = rateLimit({
@@ -69,9 +71,9 @@ export const authLimiter = rateLimit({
         const ip0 = ipKeyGenerator(req.ip || '');
         // 同一ユーザー＋同一IPでまとめて制限
         const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
-        console.log(req.headers['x-forwarded-for']);
-        console.log(req.ip);
-        console.log(ip0);
+        // console.log(req.headers['x-forwarded-for']);
+        // console.log(req.ip);
+        // console.log(ip0);
         return `${orgKey}:${email}:${ip}`;
     },
     skipFailedRequests: false,   // 失敗/成功を区別せずカウント（パスワード変更は両方カウントが無難）
@@ -348,7 +350,7 @@ const genApiTokenCore = async (user: UserTokenPayloadWithRole, label: string, de
     // TODO でもよく考えたらAPIはAuthGenerationは無視したい。revoke管理は別途作り込む。
     // DBのユーザーEntityを持ってきてauthGeneartionを持ってくる
     // const userFromDb = await manager.getRepository(UserEntity).findOneOrFail({ where: { orgKey: req.info.user.orgKey, id: req.info.user.id } });
-    const userFromDb = await getUserAndRoleList({ orgKey: user.orgKey, id: user.id });
+    const userFromDb = await getUserAndRoleList({ orgKey: user.orgKey, id: user.id }, manager);
     if (!userFromDb || !userFromDb.user) {
         throw new Error('ユーザー情報が取得できません。');
     } else { }
@@ -596,6 +598,7 @@ export const userLoginOAuth2 = [
             } else {
                 userId = null;
             }
+            // console.log(`OAuth2 login start: ${provider} ${orgKey} ${userId}`);
 
             // console.log(`OAuth2 login request: ${provider} ${JSON.stringify(req.query)}`);
             const e = {} as ExtApiClient;
@@ -632,7 +635,7 @@ export const userLoginOAuth2 = [
                         userId,
                         provider,
                         redirectUri,
-                        query: req.query
+                        query: req.query,
                     },
                     provider,
                     expiresAt: new Date(Date.now() + maxAge),
@@ -825,8 +828,8 @@ export const userLoginOAuth2Callback = [
 
                 // OAuthステートを検証
                 // TODO 本当はorgKeyを入れて検証したいけどどこから取るのか？pathに入れるべきだった？
-                const existing = await manager.getRepository(OAuthStateEntity).findOneBy({ state });
-                if (existing && existing.status === OnetimeStatus.Unused && existing.expiresAt > new Date()) {
+                const existing = await manager.getRepository(OAuthStateEntity).findOneBy({ state, status: OnetimeStatus.Unused, expiresAt: MoreThan(new Date()) });
+                if (existing) {
                 } else {
                     res.status(401).json({ error: 'Invalid or expired OAuth state' });
                     return;
@@ -902,30 +905,50 @@ export const userLoginOAuth2Callback = [
                     }));
                 }
 
+                // console.log(`Link to existing user:`);
+                // console.dir(existing);
                 if (existing.userId) {
                     const authenticatedUser = await manager.getRepository(UserEntity).findOne({
-                        select: { email: true },
                         where: { orgKey: existing.orgKey, id: existing.userId }
                     });
-                    if (authenticatedUser && authenticatedUser.email !== oAuthUserInfo.email) {
-                        // emailが一致するユーザーじゃないと紐づけさせない。
-                        throw new Error(JSON.stringify({
-                            error: "Invalid email",
-                            message: `ログイン中のユーザーと異なるemailを持つアカウントとは紐づけできません。${e.provider}をログアウトしてから再度試してください。`,
-                            details: {
-                                provider: e.provider,
-                                authenticatedUserEmail: authenticatedUser.email,
-                                targetEmail: oAuthUserInfo.email
-                            }
-                        }));
+                    if (authenticatedUser) {
+                        // console.log('Authenticated user:');
+                        // console.dir(authenticatedUser);
+                        // console.log('OAuth user info:');
+                        // console.dir(oAuthUserInfo);
+                        if (authenticatedUser.email.startsWith(`guest`) && authenticatedUser.email.endsWith(`@example.com`)) {
+                            // ゲストユーザーの場合は既存ユーザーを上書きする
+                            // つまりゲストユーザーをOAuthユーザーに置き換える
+                            authenticatedUser.email = oAuthUserInfo.email;
+                            authenticatedUser.name = oAuthUserInfo.username || oAuthUserInfo.email.split('@')[0];
+                            authenticatedUser.updatedBy = existing.userId;
+                            authenticatedUser.updatedIp = ipAddress;
+                            const savedAuthenticatedUser = await manager.getRepository(UserEntity).save(authenticatedUser);
+                            // console.log('Guest user replaced with OAuth user:');
+                            // console.dir(savedAuthenticatedUser);
+                        } else if (authenticatedUser.email !== oAuthUserInfo.email) {
+                            // emailが一致するユーザーじゃないと紐づけさせない。
+                            throw new Error(JSON.stringify({
+                                error: "Invalid email",
+                                message: `ログイン中のユーザーと異なるemailを持つアカウントとは紐づけできません。${e.provider}をログアウトしてから再度試してください。`,
+                                details: {
+                                    provider: e.provider,
+                                    authenticatedUserEmail: authenticatedUser.email,
+                                    targetEmail: oAuthUserInfo.email
+                                }
+                            }));
+                        } else {
+                            // 既にログインしているユーザーと同じメールアドレスの場合は何もしない。
+                        }
                     } else {
-                        // 既にログインしているユーザーと同じメールアドレスの場合は何もしない。
+                        // そんなユーザーいない
+                        throw new Error('Authenticated user not found');
                     }
                 } else { /** 未ログインのばあいは何もしない */ }
 
                 // console.log(oAuthUserInfo.email);
                 // emailを事実上の鍵として紐づけに行く。
-                let { user, roleList } = await getUserAndRoleList({ orgKey: existing.orgKey, email: oAuthUserInfo.email });
+                let { user, roleList } = await getUserAndRoleList({ orgKey: existing.orgKey, email: oAuthUserInfo.email }, manager);
                 // console.log('LINK::');
                 // console.log(user);
                 if (user) {
@@ -964,6 +987,31 @@ export const userLoginOAuth2Callback = [
                     oAuthAccount.orgKey = existing.orgKey;
                     oAuthAccount.createdBy = user.id;
                     oAuthAccount.createdIp = ipAddress;
+
+
+                    // 流入時の情報を残しておく
+                    const userSetting = new UserSettingEntity();
+                    userSetting.orgKey = user.orgKey;
+                    userSetting.userId = user.id;
+                    userSetting.key = 'trafficSource';
+                    // リファラを保存しておく
+                    userSetting.value = { referrer: req.headers['referer'] || undefined, deviceType: req.useragent ? (req.useragent?.isMobile) ? 'mobile' : ((req.useragent?.isTablet) ? 'tablet' : 'desktop') : undefined };
+                    userSetting.createdBy = user.id;
+                    userSetting.updatedBy = user.id;
+                    userSetting.createdIp = ipAddress;
+                    userSetting.updatedIp = ipAddress;
+                    if (existing.meta?.query?.gclid) {
+                        // gclidがついていたら保存しておく
+                        userSetting.value.gclid = existing.meta.query.gclid;
+                        // try {
+                        //     // gclidがついていたらコンバージョン飛ばす
+                        //     // async functionだが完了待つ必要ないので敢えて待たない
+                        //     uploadClickConversion(existing.meta.query.gclid, process.env.GOOGLE_ADS_CONVERSION_ACTION_SIGN_UP!, new Date(), 1);
+                        //     console.log(`GCLID conversion uploaded: ${existing.meta.query.gclid}`);
+                        // } catch (err) { }
+                    } else { }
+
+                    await userSetting.save();
                 }
 
                 // console.dir(token);
@@ -1084,6 +1132,7 @@ export const userLoginOAuth2Callback = [
 const getUserAndRoleList = async (_where: { orgKey: string, id: string } | { orgKey: string, email: string }, manager?: EntityManager): Promise<{ user: UserEntity | null, roleList: UserRole[] }> => {
     // const user = await (manager || ds).getRepository(UserEntity).findOne({ where, relations: ['roleBindings'] });
     const where = { ..._where, status: UserStatus.Active }; // activeユーザーじゃないと使えない
+    // console.log(where);
     const user = await (manager || ds).getRepository(UserEntity).findOne({ where });
     if (!user) {
         return { user, roleList: [] };

@@ -1,6 +1,6 @@
-import e, { Request, Response } from "express";
 import axios, { AxiosResponse } from 'axios';
 import * as crypto from 'crypto';
+import { Request, Response } from "express";
 import * as fs from 'fs';
 
 import { validationErrorHandler } from "../middleware/validation.js";
@@ -9,19 +9,19 @@ import { UserRequest } from "../models/info.js";
 import { HttpsProxyAgent } from 'https-proxy-agent';
 const { GCP_PROJECT_ID, GCP_REGION, GCP_REGION_ANTHROPIC, GCP_API_BASE_PATH } = process.env;
 
+import { body } from "express-validator/lib/index.js";
 import { MyVertexAiClient } from '../../common/my-vertexai.js';
-import { body, param } from "express-validator/lib/index.js";
 
 // ファイルシステム関連のimport
+import { Usage } from "@anthropic-ai/sdk/resources.js";
 import fss from '../../common/fss.js';
+import { GPTModels } from "../../common/model-definition.js";
+import { TokenCount } from "../../common/openai-api-wrapper.js";
 import { Utils } from "../../common/utils.js";
-import { Message, Usage } from "@anthropic-ai/sdk/resources.js";
-import { PredictHistoryEntity } from "../entity/project-models.entity.js";
 import { ds } from "../db.js";
+import { PredictHistoryEntity } from "../entity/project-models.entity.js";
 import { PredictHistoryStatus } from "../models/values.js";
 import { getAIProviderAndModel } from "./chat-by-project-model.js";
-import { TokenCount } from "../../common/openai-api-wrapper.js";
-import { GPTModels } from "../../common/model-definition.js";
 
 import { Stream } from "stream";
 
@@ -83,7 +83,8 @@ try { fs.mkdirSync(`${HISTORY_DIRE}`, { recursive: true }); } catch (e) { }
  * Vertex AI の URL を生成
  */
 function buildVertexUrl(project: string, location: string, model: string, method: 'predict' | 'streamRawPredict'): string {
-    return `https://${location}-${GCP_API_BASE_PATH}/v1/projects/${project}/locations/${location}/publishers/anthropic/models/${model}:${method}`;
+    const baseUrl = location === 'global' ? GCP_API_BASE_PATH : `${location}-${GCP_API_BASE_PATH}`;
+    return `https://${baseUrl}/v1/projects/${project}/locations/${location}/publishers/anthropic/models/${model}:${method}`;
 }
 
 /**
@@ -361,8 +362,6 @@ export const vertexAIByAnthropicAPI = [
                 JSON.stringify({ instance, url: vertexUrl, headers: vertexResponse.headers, response: vertexResponse.data }, Utils.genJsonSafer()), {}, () => { });
             fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.result.md`, tokenCount.tokenBuilder || '', {}, () => { });
 
-            console.log(logObject.output('fine', '', JSON.stringify(vertexResponse.data.usage)));
-
             const entity = new PredictHistoryEntity();
             entity.idempotencyKey = idempotencyKey;
             entity.argsHash = idempotencyKey.split('-')[1];
@@ -382,6 +381,7 @@ export const vertexAIByAnthropicAPI = [
                 entity.createdIp = req.info.ip; // ここでは利用者不明
                 entity.updatedIp = req.info.ip; // ここでは利用者不明
             } else { }
+            console.log(logObject.output('fine', '', JSON.stringify(vertexResponse.data.usage)));
             await ds.getRepository(PredictHistoryEntity).save(entity);
 
             res.status(vertexResponse.status).json(vertexResponse.data);
@@ -576,10 +576,6 @@ export const vertexAIByAnthropicAPIStream = [
 
                 tokenCount.tokenBuilder = tokenBuilder;
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.result.md`, tokenBuilder || '', {}, () => { });
-                console.log(logObject.output('fine', '', JSON.stringify({
-                    prompt_tokens: tokenCount.prompt_tokens,
-                    completion_tokens: tokenCount.completion_tokens
-                })));
 
                 const entity = new PredictHistoryEntity();
                 entity.idempotencyKey = idempotencyKey;
@@ -600,6 +596,11 @@ export const vertexAIByAnthropicAPIStream = [
                     entity.createdIp = req.info.ip; // ここでは利用者不明
                     entity.updatedIp = req.info.ip; // ここでは利用者不明
                 } else { }
+
+                console.log(logObject.output('fine', '', JSON.stringify({
+                    prompt_tokens: tokenCount.prompt_tokens,
+                    completion_tokens: tokenCount.completion_tokens
+                })));
                 await ds.getRepository(PredictHistoryEntity).save(entity);
             });
 

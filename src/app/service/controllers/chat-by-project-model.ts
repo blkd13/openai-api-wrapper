@@ -21,6 +21,7 @@ import { FileBodyEntity, FileEntity } from '../entity/file-models.entity.js';
 import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
 import { ToolCallGroupEntity, ToolCallPart, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartEntity, ToolCallPartInfo, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
+import { UserSettingEntity } from '../entity/user.entity.js';
 import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
@@ -708,6 +709,75 @@ export async function getAIProviderAndModel(user: UserTokenPayloadWithRole, mode
     };
 }
 
+/**
+ * 共通のバジェットチェック関数
+ * @param user - ユーザー情報
+ * @returns バジェット情報とステータス
+ */
+async function checkUserBudget(user: UserTokenPayloadWithRole): Promise<{
+    status: 'ok' | 'error';
+    budget: {
+        monthlyLimit: number | null;
+        currentUsage: number | null;
+        remainingCredit: number | null;
+    };
+    error?: string;
+    message?: string;
+}> {
+    if (!process.env.USER_MONTHLY_CREDIT) {
+        // 月次クレジット制限が設定されていない場合
+        return {
+            status: 'ok',
+            budget: {
+                monthlyLimit: null,
+                currentUsage: null,
+                remainingCredit: null
+            }
+        };
+    }
+
+    const queryRunner = ds.createQueryRunner();
+    try {
+        await queryRunner.connect();
+        const result = await queryRunner.query(
+            "SELECT COALESCE(SUM(cost),0) AS sum FROM predict_history_view WHERE org_key = $1 AND user_id = $2 AND created_at BETWEEN $3 AND $4",
+            [user.orgKey, user.id, new Date(new Date().getFullYear(), new Date().getMonth(), 1), new Date()]
+        );
+
+        const monthlyLimit = parseFloat(process.env.USER_MONTHLY_CREDIT || '1');
+        const currentUsage = result.length > 0 && result[0].sum !== null ? parseFloat(result[0].sum) : 0;
+        const remainingCredit = monthlyLimit - currentUsage;
+
+        console.log(`User ${user.id} budget check: monthlyLimit=${monthlyLimit}, currentUsage=${currentUsage}, remainingCredit=${remainingCredit}`);
+        
+        if (remainingCredit < 0) {
+            return {
+                status: 'error',
+                error: 'BUDGET_EXCEEDED',
+                message: '今月の利用可能クレジットを超過しています。管理者にお問い合わせください。',
+                budget: {
+                    monthlyLimit,
+                    currentUsage,
+                    remainingCredit
+                }
+            };
+        }
+
+        return {
+            status: 'ok',
+            budget: {
+                monthlyLimit,
+                currentUsage,
+                remainingCredit
+            }
+        };
+    } catch (error) {
+        throw error;
+    } finally {
+        await queryRunner.release();
+    }
+}
+
 export async function getAIProvider(user: UserTokenPayloadWithRole, modelName: string): Promise<AIProviderClient> {
     const { aiProvider, aiModel } = await getAIProviderAndModel(user, modelName);
 
@@ -782,6 +852,40 @@ export async function getAIProvider(user: UserTokenPayloadWithRole, modelName: s
     return aiProviderClient;
 }
 
+export const budgetCheck = [
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const user = req.info.user;
+        
+        try {
+            const budgetResult = await checkUserBudget(user);
+            
+            if (budgetResult.status === 'error') {
+                return res.status(200).json({
+                    status: 'error',
+                    error: budgetResult.error,
+                    message: budgetResult.message,
+                    budget: budgetResult.budget
+                });
+            }
+
+            return res.status(200).json({
+                status: 'ok',
+                budget: budgetResult.budget
+            });
+        } catch (error) {
+            console.error(error);
+            res.status(500).json({
+                status: 'error',
+                error: 'INTERNAL_ERROR',
+                message: (error as Error).message
+            });
+            return;
+        }
+    }
+];
+
 /**
  * [user認証] チャットの送信
  */
@@ -808,19 +912,29 @@ export const chatCompletionByProjectModel = [
         }[] = [];
         try {
 
-            if (process.env.USER_MONTHLY_CREDIT) {
-                // 月次クレジット制限がある場合は今月の使用量を確認する
-                const queryRunner = ds.createQueryRunner();
-                await queryRunner.connect();
-                const result = await queryRunner.query("SELECT COALESCE(SUM(cost),0) AS sum FROM predict_history_view WHERE org_key = $1 AND user_id = $2 AND created_at BETWEEN $3 AND $4", [req.info.user.orgKey, req.info.user.id, new Date(new Date().getFullYear(), new Date().getMonth(), 1), new Date()]);
-                // console.log(result[0].sum);
-                if (result.length > 0 && result[0].sum !== null) {
-                    const balance = parseFloat(process.env.USER_MONTHLY_CREDIT || '2') - parseFloat(result[0].sum);
-                    if (balance < -10) {
-                        throw new Error(`今月の利用可能クレジットを超過しています。管理者にお問い合わせください。（残り${balance}USD）`);
-                    } else { }
-                } else { }
-            } else { }
+            // budget check
+            const budgetResult = await checkUserBudget(req.info.user);
+            if (budgetResult.status === 'error') {
+                const balance = budgetResult.budget.remainingCredit;
+                if (balance !== null && balance < -10) {
+                    throw new Error(`今月の利用可能クレジットを超過しています。管理者にお問い合わせください。（残り${balance}USD）`);
+                }
+            }
+
+            // コンバージョンアップロード
+            try {
+                const existing = await ds.getRepository(UserSettingEntity).findOne({ where: { orgKey: req.info.user.orgKey, userId: req.info.user.id, key: 'trafficSource' } });
+                // if (existing) {
+                //     if (existing.value?.gclid) {
+                //         // gclidがついていたらコンバージョン飛ばす
+                //         // async functionだが完了待つ必要ないので敢えて待たない
+                //         uploadClickConversion(existing.value.gclid, process.env.GOOGLE_ADS_CONVERSION_ACTION_AI_QUERY!, new Date(), 1);
+                //         console.log(`GCLID conversion uploaded: ${existing.value.gclid}`);
+                //     } else { /** 無ければ無いでおかしいことではない */ }
+                // } else { /** 無ければ無いでおかしいことではない */ }
+            } catch (error) {
+                console.error('Failed to save user setting:', error);
+            }
 
             const my_vertexai = ((await getAIProvider(req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient);
             const client = my_vertexai.client;

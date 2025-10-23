@@ -43,7 +43,7 @@ import * as gitlab from './api/api-gitlab.js';
 import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
 import { getOAuthApiProxy } from './api/api-proxy.js';
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
-import { chatCompletionByProjectModel, embeddingsApi, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
+import { budgetCheck, chatCompletionByProjectModel, embeddingsApi, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
 import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPICountTokens, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
 import { deleteDivision, getDivisionList, getDivisionMembers, removeDivisionMember, upsertDivision, upsertDivisionMember } from './controllers/division.js';
 import { downloadFile, fileActivate, getFileGroup, getFileList, updateFileAccess, uploadFiles } from './controllers/file-manager.js';
@@ -121,6 +121,7 @@ authUserRouter.post('/v1/chat/completions', chatCompletionStream);
 authUserRouter.post('/v1/embeddings', embeddingsApi);
 authUserRouter.post('/codegen/completions', codegenCompletion);
 authUserRouter.post('/create-cache', geminiCreateContextCache);
+authUserRouter.get('/budget-check', budgetCheck);
 authUserRouter.post('/v2/chat-completion', chatCompletionByProjectModel);
 authUserRouter.post('/v2/cache', geminiCreateContextCacheByProjectModel);
 authUserRouter.patch('/v2/cache', geminiUpdateContextCacheByProjectModel);
@@ -324,8 +325,8 @@ authUserRouter.get('/scope-labels', getScopeLabels);
 
 // Claude Code用プロキシ
 authUserRouter.post('/vertexai-claude-proxy/v1/messages', vertexAIByAnthropicAPIStream);
-authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/count-tokens\\:rawPredict', vertexAIByAnthropicAPICountTokens);
 authUserRouter.post('/vertexai-claude-proxy/v1/messages/count_tokens', vertexAIByAnthropicAPICountTokens);
+authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/count-tokens\\:rawPredict', vertexAIByAnthropicAPICountTokens);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:rawPredict', vertexAIByAnthropicAPI);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:streamRawPredict', vertexAIByAnthropicAPIStream);
 
