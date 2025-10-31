@@ -9,7 +9,7 @@ import { concatMap, from } from 'rxjs';
 import { EntityManager, In, IsNull, Not } from 'typeorm';
 
 import { CachedContent, countChars, GenerateContentRequestForCache, mapForGemini, MyVertexAiClient, TokenCharCount } from '../../common/my-vertexai.js';
-import { aiApi, AIProviderClient, calculateTokenCost, embeddings, getTiktokenEncoder, invalidMimeList, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, normalizeMessage, providerInstances, providerPrediction, TokenCount } from '../../common/openai-api-wrapper.js';
+import { aiApi, AIProviderClient, calculateTokenCost, embeddings, invalidMimeList, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, normalizeMessage, providerInstances, providerPrediction, TokenCount } from '../../common/openai-api-wrapper.js';
 import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
 import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
 import { ScopedEntityService } from '../common/scoped-entity-service.js';
@@ -27,6 +27,7 @@ import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ContentPartStatus, ContentPartType, MessageGroupType, TeamMemberRoleType, ThreadGroupStatus, ThreadStatus } from '../models/values.js';
 import { functionDefinitions } from '../tool/_index.js';
+import { tokenCounterPool } from '../worker/token-counter-service.js';
 import { clients } from './chat.js';
 import { appendToolCallPart } from './tool-call.js';
 
@@ -190,17 +191,20 @@ async function buildArgs(
         return convertKeysToCamelCase(activeGroups.filter(group => !previousIds.has(group.id)));
     };
     const getActiveMessageGroupsByMessageGroupIds = async (ids: string[]): Promise<MessageGroupEntity[]> => {
-        return ds.getRepository(MessageGroupEntity).find({
+        if (ids.length === 0) return [];
+        return await ds.getRepository(MessageGroupEntity).find({
             where: { orgKey: user.orgKey, id: In(ids) }
         });
     };
     const getActiveThreadsByThreadIds = async (ids: string[]): Promise<ThreadEntity[]> => {
-        return ds.getRepository(ThreadEntity).find({
+        if (ids.length === 0) return [];
+        return await ds.getRepository(ThreadEntity).find({
             where: { orgKey: user.orgKey, id: In(ids), status: Not(ThreadStatus.Deleted) }
         });
     };
     const getActiveThreadGroupsByThreadGroupIds = async (ids: string[]): Promise<ThreadGroupEntity[]> => {
-        return ds.getRepository(ThreadGroupEntity).find({
+        if (ids.length === 0) return [];
+        return await ds.getRepository(ThreadGroupEntity).find({
             where: { orgKey: user.orgKey, id: In(ids), status: Not(ThreadGroupStatus.Deleted) }
         });
     };
@@ -233,7 +237,7 @@ async function buildArgs(
                 where: { orgKey: user.orgKey, id: In(idList), status: Not(ContentPartStatus.Deleted) },
             })
             // console.log(contentpartList);
-            tailMessageList = await ds.getRepository(MessageEntity).find({
+            tailMessageList = contentpartList.length === 0 ? [] : await ds.getRepository(MessageEntity).find({
                 where: { orgKey: user.orgKey, id: In(contentpartList.map(cp => cp.messageId)) },
             });
             messageGroupList = await getActiveMessageGroupsByMessageGroupIds(tailMessageList.map(m => m.messageGroupId));
@@ -265,7 +269,7 @@ async function buildArgs(
             // console.log(threadGroupList);
         } else if (type === 'threadGroup') {
             threadGroupList = await getActiveThreadGroupsByThreadGroupIds(idList);
-            threadList = await ds.getRepository(ThreadEntity).find({
+            threadList = threadGroupList.length === 0 ? [] : await ds.getRepository(ThreadEntity).find({
                 where: { orgKey: user.orgKey, threadGroupId: In(threadGroupList.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
             });
             messageGroupList = await getLatestMessageGroupsByThreadIds(threadList.map(t => t.id));
@@ -749,7 +753,7 @@ async function checkUserBudget(user: UserTokenPayloadWithRole): Promise<{
         const remainingCredit = monthlyLimit - currentUsage;
 
         console.log(`User ${user.id} budget check: monthlyLimit=${monthlyLimit}, currentUsage=${currentUsage}, remainingCredit=${remainingCredit}`);
-        
+
         if (remainingCredit < 0) {
             return {
                 status: 'error',
@@ -857,10 +861,10 @@ export const budgetCheck = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         const user = req.info.user;
-        
+
         try {
             const budgetResult = await checkUserBudget(user);
-            
+
             if (budgetResult.status === 'error') {
                 return res.status(200).json({
                     status: 'error',
@@ -1407,7 +1411,7 @@ export const chatCompletionByProjectModel = [
 
                                 toolCallEntity.tokenCount = toolCallEntity.tokenCount || {};
 
-                                const openaiTokenCount = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(contentParts.contents[0].parts[0].text).length };
+                                const openaiTokenCount = { totalTokens: await tokenCounterPool.countTokens(contentParts.contents[0].parts[0].text, COUNT_TOKEN_OPENAI_MODEL) };
                                 toolCallEntity.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiTokenCount;
 
                                 toolCallEntity.tokenCount[COUNT_TOKEN_MODEL] = await tokenResPromise;
@@ -1937,7 +1941,7 @@ export const geminiCountTokensByProjectModel = [
                                 safetySettings: [],
                             });
                             // console.dir(req, { depth: null });
-                            generativeModel.countTokens(req).then(tokenObject => {
+                            generativeModel.countTokens(req).then(async tokenObject => {
                                 // // console.dir(req, { depth: null });
                                 // // console.dir(tokenObject, { depth: null });
                                 // tokenObject = tokenObject || { totalTokens: 0, totalBillableCharacters: 0 };
@@ -1946,7 +1950,8 @@ export const geminiCountTokensByProjectModel = [
                                 // countCharsObj.text = (countCharsObj.text || 0) + tokenObject.totalBillableCharacters || 0;
 
                                 const prompt = `${args.messages.map(message => ((message.content || []) as OpenAI.ChatCompletionContentPart[]).map(content => content.type === 'text' ? content.text : '').join('\n')).join('\n')}`;
-                                const openaiTokenCount = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(prompt).length, totalBillableCharacters: 0 };
+
+                                const openaiTokenCount = { totalTokens: await tokenCounterPool.countTokens(prompt, COUNT_TOKEN_OPENAI_MODEL), totalBillableCharacters: 0 };
 
                                 const tokenObjMap = {
                                     [COUNT_TOKEN_MODEL]: {
@@ -2069,7 +2074,7 @@ export async function geminiCountTokensByContentPart(transactionalEntityManager:
                         // GPT-4oでのトークン数を計算する
                         // const prompt = `<im_start>user\n${content.text}<im_end>`;
                         const prompt = `${content.text}`;
-                        content.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(prompt).length };
+                        content.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = { totalTokens: await tokenCounterPool.countTokens(prompt, COUNT_TOKEN_OPENAI_MODEL) };
 
                         const tokenRes = await tokenResPromise;
                         // console.log(`index=${index} : ${new Date().getTime() - time}ms : countTokens: ${content.text.substring(0, 10).replace(/\n/g, '')} : ${tokenRes.totalTokens}`);
@@ -2180,7 +2185,7 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
             const imageTokens = calculateTokenCost(metaJson.width || 0, metaJson.height || 0);
             openaiTokenCount.totalTokens = imageTokens;
         } else if (file.buffer !== undefined) {
-            openaiTokenCount.totalTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(file.buffer.toString()).length;
+            openaiTokenCount.totalTokens = await tokenCounterPool.countTokens(file.buffer.toString(), COUNT_TOKEN_OPENAI_MODEL);
         } else if ([...convertToPdfMimeList, 'application/pdf'].includes(file.fileBodyEntity.fileType)) {
             const pdfPath = file.fileBodyEntity.innerPath;
             const basePath = pdfPath.substring(0, pdfPath.lastIndexOf('.'));
@@ -2202,7 +2207,8 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
                 if (pdfMetaData.outline) {
                     metaText += `## Outline\n\n ${JSON.stringify(pdfMetaData.outline)}\n`;
                 } else { }
-                const textTokens = getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(metaText + pdfMetaData.textPages.join('')).length;
+
+                const textTokens = await tokenCounterPool.countTokens(metaText + pdfMetaData.textPages.join(''), COUNT_TOKEN_OPENAI_MODEL);
 
                 // https://platform.openai.com/docs/guides/images-vision?api-mode=chat#calculating-costs
                 // OpenAIのトークン数計算式 

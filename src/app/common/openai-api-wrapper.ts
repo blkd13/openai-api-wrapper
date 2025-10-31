@@ -30,7 +30,7 @@ configureGlobalFetch;
 
 import fss from './fss.js';
 import { getMetaDataFromDataURL } from './media-funcs.js';
-import { COST_TABLE, currentRatelimit, GPT4_MODELS, GPTModels, JSON_MODELS, Ratelimit, SHORT_NAME } from './model-definition.js';
+import { COST_TABLE, currentRatelimit, GPTModels, JSON_MODELS, Ratelimit, SHORT_NAME } from './model-definition.js';
 import { Utils } from "./utils.js";
 
 export type MyChatCompletionCreateParamsStreaming = OpenAI.ChatCompletionCreateParamsStreaming & { providerName: string, isGoogleSearch?: boolean, cachedContent?: CachedContent, safetySettings?: SafetyRating[] };

@@ -16,6 +16,7 @@ import { v4Router } from '../../v4/index.js';
 import { getAccessToken } from './api/api-proxy.js';
 import { authenticateUserTokenWsMiddleGenerator } from './middleware/authenticate.js';
 import { authAdminRouter, authAIIntegrationAdminRouter, authAuditorRouter, authInviteRouter, authMemberManagerRouter, authNoneRouter, authSuperAdminRouter, authSystemIntegrationAdminRouter, authUserRouter } from './routes.js';
+import { automationJobRunner } from './automation/job-runner.js';
 
 const app = express();
 
@@ -75,6 +76,7 @@ const server = app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
 });
 server.setMaxListeners(20); // 最大リスナー数を20に設定
+automationJobRunner.start();
 
 const { OAUTH2_MATTERMOST_URI_BASE } = process.env;
 
@@ -129,3 +131,18 @@ server.on('upgrade', (req, res, header) => {
     };
     wsmw(req as any, res, header, next);
 });
+const shutdown = async () => {
+    try {
+        automationJobRunner.stop();
+        server.close(() => {
+            process.exit(0);
+        });
+    } catch (error) {
+        console.error('Error during shutdown', error);
+        process.exit(1);
+    }
+};
+
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);
+

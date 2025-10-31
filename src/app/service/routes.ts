@@ -43,6 +43,7 @@ import * as gitlab from './api/api-gitlab.js';
 import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
 import { getOAuthApiProxy } from './api/api-proxy.js';
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
+import { createAutomationJob, getAutomationJob, getAutomationJobTasks, getAutomationJobs, getAutomationJobsSummary, postAutomationJobAction } from './controllers/automation.js';
 import { budgetCheck, chatCompletionByProjectModel, embeddingsApi, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
 import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPICountTokens, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
 import { deleteDivision, getDivisionList, getDivisionMembers, removeDivisionMember, upsertDivision, upsertDivisionMember } from './controllers/division.js';
@@ -313,6 +314,12 @@ authUserRouter.get('/tags', getAllTags);
 authAdminRouter.post('/tag', upsertTag);
 authAdminRouter.put('/tag/:tagId', upsertTag);
 authAdminRouter.delete('/tag/:tagId', deleteTag);
+authUserRouter.get('/automation/jobs/summary', getAutomationJobsSummary);
+authUserRouter.get('/automation/jobs', getAutomationJobs);
+authUserRouter.get('/automation/jobs/:jobId', getAutomationJob);
+authUserRouter.get('/automation/jobs/:jobId/tasks', getAutomationJobTasks);
+authUserRouter.post('/automation/jobs', createAutomationJob);
+authUserRouter.post('/automation/jobs/:jobId/actions', postAutomationJobAction);
 
 authAdminRouter.get('/organizations/users', getOrganizationUsers); // 組織一覧取得
 

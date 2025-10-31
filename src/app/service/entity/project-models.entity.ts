@@ -1,9 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable, OneToOne, JoinColumn, BaseEntity, Generated, UpdateDateColumn, PrimaryColumn, Index, ViewEntity, ViewColumn, EntityManager } from 'typeorm';
+import { Column, Entity, Generated, Index, UpdateDateColumn } from 'typeorm';
 
-import { MyBaseEntity } from './base.js';
-import { ContentPartType, MessageGroupType, MessageClusterType, PredictHistoryStatus, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamStatus, TeamType, ThreadStatus, ThreadGroupVisibility, ThreadGroupStatus, ThreadGroupType, ContentPartStatus } from '../models/values.js';
 import { CountTokensResponse } from '@google-cloud/vertexai/build/src/index.js';
 import { ChatCompletionCreateParams } from 'openai/resources.js';
+import { ContentPartStatus, ContentPartType, MessageClusterType, MessageGroupType, PredictHistoryStatus, ProjectStatus, ProjectVisibility, TeamMemberRoleType, TeamStatus, TeamType, ThreadGroupStatus, ThreadGroupType, ThreadGroupVisibility, ThreadStatus } from '../models/values.js';
+import { MyBaseEntity } from './base.js';
 
 @Entity()
 export class TeamEntity extends MyBaseEntity {
