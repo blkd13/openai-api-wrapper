@@ -30,6 +30,8 @@ export enum ThreadGroupType {
     Normal = 'Normal', // 通常スレッド
     Default = 'Default', // デフォルト設定用（各ユーザー1個しか作らない）
     Template = 'Template', // テンプレートスレッド
+    AutomationTaskTemplate = 'AutomationTaskTemplate', // 自動化タスクのテンプレート
+    AutomationExecution = 'AutomationExecution', // 自動化実行のインスタンス
     // Announcement = 'Announcement', // お知らせスレッド
     // Temporary = 'Temporary', // 一時的なスレッド
 }
@@ -65,6 +67,7 @@ export enum ContentPartStatus {
 }
 
 export enum FileGroupType {
+    AI = 'ai', // AIが生成したファイル
     UPLOAD = 'upload', // アップロードの単位
     MERGED = 'merged', // 色々くっつけて自作するやつ
     GIT = 'git', // git

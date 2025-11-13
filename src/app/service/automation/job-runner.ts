@@ -1,15 +1,24 @@
 import { randomUUID } from 'crypto';
 import { Repository } from 'typeorm';
 
+import { chatCompletionByProjectModel } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
-import { UserEntity } from '../entity/auth.entity.js';
+import { UserEntity, UserRole, UserRoleEntity } from '../entity/auth.entity.js';
 import {
     AutomationJobEntity,
     AutomationJobStatus,
     AutomationJobTrigger,
     AutomationTaskEntity,
     AutomationTaskStatus,
+    AutomationTaskType,
 } from '../entity/automation.entity.js';
+import {
+    MessageEntity,
+    MessageGroupEntity,
+    ThreadEntity,
+    ThreadGroupEntity,
+} from '../entity/project-models.entity.js';
+import { cloneTaskForExecution } from './job-manager.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_BATCH_SIZE = 5;
@@ -31,6 +40,7 @@ type UserExecutionContext = {
     email: string;
     role: string;
     status: string;
+    roleList: UserRole[];
 };
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -180,13 +190,72 @@ export class AutomationJobRunner {
             job.updatedBy = systemUser;
         }
 
-        let tasks = await taskRepo.find({
-            where: { orgKey: job.orgKey, jobId: job.id },
-            order: { createdAt: 'ASC' },
+        // テンプレートタスクを取得
+        const templateTasks = await taskRepo.find({
+            where: { orgKey: job.orgKey, jobId: job.id, taskType: AutomationTaskType.Template },
+            order: { seq: 'ASC' },
         });
 
-        if (tasks.length === 0) {
-            tasks = await this.createDefaultTasks(job, taskRepo, systemUser, systemIp);
+        let tasks: AutomationTaskEntity[];
+
+        if (templateTasks.length > 0) {
+            // 既に実行インスタンスが存在するかチェック
+            const existingExecutionTasks = await taskRepo.find({
+                where: { orgKey: job.orgKey, jobId: job.id, taskType: AutomationTaskType.Execution },
+                order: { seq: 'ASC' },
+            });
+
+            if (existingExecutionTasks.length > 0) {
+                // 既に実行インスタンスが存在する場合はそれを使用
+                tasks = existingExecutionTasks;
+            } else {
+                // テンプレートから実行インスタンスを作成
+                const executionTasks = await ds.transaction(async (manager) => {
+                    const userContext = {
+                        userId: systemUser,
+                        orgKey: job.orgKey,
+                        ip: systemIp,
+                    };
+
+                    const createdTasks: AutomationTaskEntity[] = [];
+                    for (const templateTask of templateTasks) {
+                        const threadGroup = await manager.findOne(ThreadGroupEntity, {
+                            where: { orgKey: job.orgKey, id: templateTask.threadGroupId },
+                        });
+
+                        if (!threadGroup) {
+                            console.error('[AutomationJobRunner] ThreadGroup not found for template task', {
+                                jobId: job.id,
+                                templateTaskId: templateTask.id,
+                                threadGroupId: templateTask.threadGroupId,
+                            });
+                            continue;
+                        }
+
+                        const { task } = await cloneTaskForExecution(
+                            templateTask,
+                            threadGroup,
+                            job.lastRunId || `run_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+                            userContext,
+                            manager,
+                        );
+                        createdTasks.push(task);
+                    }
+                    return createdTasks;
+                });
+
+                tasks = executionTasks;
+            }
+        } else {
+            // テンプレートがない場合は、従来通りデフォルトタスクを作成
+            tasks = await taskRepo.find({
+                where: { orgKey: job.orgKey, jobId: job.id },
+                order: { createdAt: 'ASC' },
+            });
+
+            if (tasks.length === 0) {
+                tasks = await this.createDefaultTasks(job, taskRepo, systemUser, systemIp);
+            }
         }
 
         for (const task of tasks) {
@@ -200,11 +269,16 @@ export class AutomationJobRunner {
             await this.runTask(job, task, taskRepo, systemUser, systemIp, leaseId);
         }
 
-        tasks = await taskRepo.find({
-            where: { orgKey: job.orgKey, jobId: job.id },
-        });
+        // 実行インスタンスのタスクのみを再取得してチェック（テンプレートは除外）
+        const executionTasks = templateTasks.length > 0
+            ? await taskRepo.find({
+                where: { orgKey: job.orgKey, jobId: job.id, taskType: AutomationTaskType.Execution },
+            })
+            : await taskRepo.find({
+                where: { orgKey: job.orgKey, jobId: job.id },
+            });
 
-        const hasPending = tasks.some((task) =>
+        const hasPending = executionTasks.some((task) =>
             [AutomationTaskStatus.Pending, AutomationTaskStatus.Running].includes(task.status)
         );
         if (hasPending) {
@@ -225,8 +299,8 @@ export class AutomationJobRunner {
             return;
         }
 
-        const hasErrors = tasks.some((task) => task.status === AutomationTaskStatus.Error);
-        const hasStops = tasks.some((task) => task.status === AutomationTaskStatus.Stopped);
+        const hasErrors = executionTasks.some((task) => task.status === AutomationTaskStatus.Error);
+        const hasStops = executionTasks.some((task) => task.status === AutomationTaskStatus.Stopped);
         const now = new Date();
         const durationSeconds = job.startedAt
             ? Math.max(0, Math.round((now.getTime() - job.startedAt.getTime()) / 1000))
@@ -245,7 +319,7 @@ export class AutomationJobRunner {
                 status,
                 updatedBy: systemUser,
                 updatedIp: systemIp,
-                estimatedCostUsd: this.calculateEstimatedCost(tasks),
+                estimatedCostUsd: this.calculateEstimatedCost(executionTasks),
                 leaseId: null,
                 leaseExpiresAt: null,
             })
@@ -528,6 +602,10 @@ export class AutomationJobRunner {
                 return null;
             }
 
+            const roles = await ds.getRepository(UserRoleEntity).find({
+                where: { orgKey, userId: user.id },
+            });
+
             return {
                 userId: user.id,
                 orgKey: user.orgKey,
@@ -535,6 +613,7 @@ export class AutomationJobRunner {
                 email: user.email,
                 role: user.role,
                 status: user.status,
+                roleList: roles,
             };
         } catch (error) {
             console.error('[AutomationJobRunner] Failed to load user context', { orgKey, userId, error });
@@ -547,38 +626,170 @@ export class AutomationJobRunner {
         task: AutomationTaskEntity,
         userContext: UserExecutionContext,
     ): Promise<TaskExecutionResult> {
-        // TODO: Implement actual API calls or business logic here
-        // This is where you would:
-        // 1. Use userContext.userId for authentication
-        // 2. Apply user's permissions and rate limits
-        // 3. Call OpenAI API or other services with user's credentials
-        // 4. Log activities under the user's context
+        try {
+            const startTime = Date.now();
 
-        const promptSource = job.promptTemplate || job.snapshotPrompt || job.name;
-        const simulatedWorkloadMs = 400 + Math.min(1600, (promptSource?.length ?? 0) * 2);
-        await sleep(simulatedWorkloadMs);
+            // 1. ThreadGroupからThread、MessageGroup、Messageを取得
+            const threadGroup = await ds.getRepository(ThreadGroupEntity).findOne({
+                where: { orgKey: userContext.orgKey, id: task.threadGroupId },
+            });
 
-        const outputPreview = promptSource
-            ? `Processed by ${userContext.name ?? userContext.email} (${userContext.userId}): ${promptSource.slice(0, 120)}`
-            : `Job ${job.name} processed by ${userContext.name ?? userContext.email}`;
+            if (!threadGroup) {
+                throw new Error(`ThreadGroup not found: ${task.threadGroupId}`);
+            }
 
-        const tokens = promptSource ? Math.min(4096, promptSource.length * 4) : 256;
-        const durationSeconds = Math.max(1, Math.round(simulatedWorkloadMs / 500));
+            const threads = await ds.getRepository(ThreadEntity).find({
+                where: { orgKey: userContext.orgKey, threadGroupId: threadGroup.id },
+                order: { seq: 'ASC' },
+            });
 
-        console.log('[AutomationJobRunner] Task executed with user context', {
-            jobId: job.id,
-            taskId: task.id,
-            userId: userContext.userId,
-            userEmail: userContext.email,
-            role: userContext.role,
-        });
+            if (threads.length === 0) {
+                throw new Error(`No threads found for ThreadGroup: ${threadGroup.id}`);
+            }
 
-        return {
-            status: AutomationTaskStatus.Completed,
-            outputPreview,
-            tokens,
-            durationSeconds,
-        };
+            const thread = threads[0];
+
+            const messageGroups = await ds.getRepository(MessageGroupEntity).find({
+                where: { orgKey: userContext.orgKey, threadId: thread.id },
+                order: { seq: 'ASC' },
+            });
+
+            if (messageGroups.length === 0) {
+                throw new Error(`No message groups found for Thread: ${thread.id}`);
+            }
+
+            const lastMessageGroup = messageGroups[messageGroups.length - 1];
+            const messages = await ds.getRepository(MessageEntity).find({
+                where: { orgKey: userContext.orgKey, messageGroupId: lastMessageGroup.id },
+                order: { seq: 'DESC' },
+            });
+
+            if (messages.length === 0) {
+                throw new Error('No messages found in last message group');
+            }
+
+            const lastMessage = messages[0];
+
+            // 2. chatCompletionByProjectModel配列の最後のハンドラーを取得
+            const handler = chatCompletionByProjectModel[chatCompletionByProjectModel.length - 1] as (req: any, res: any) => Promise<void>;
+
+            // 3. モックのreq/resオブジェクトを作成
+            const connectionId = task.id;
+            const streamId = randomUUID();
+
+            const mockReq = {
+                query: {
+                    connectionId,
+                    streamId,
+                    type: 'message',
+                    id: lastMessage.id,
+                },
+                body: {
+                    toolCallPartCommandList: [],
+                    options: { labelPrefix: `task` },
+                },
+                info: {
+                    user: {
+                        id: userContext.userId,
+                        orgKey: userContext.orgKey,
+                        email: userContext.email,
+                        role: userContext.role,
+                        status: userContext.status,
+                        roleList: userContext.roleList,
+                    },
+                    ip: DEFAULT_SYSTEM_IP,
+                },
+            };
+
+            let capturedResponse = '';
+            let capturedTokens = 0;
+
+            const mockRes = {
+                writeHead: (_statusCode: number, _headers?: any) => {
+                    // ストリーミングヘッダーを無視
+                },
+                write: (chunk: any) => {
+                    // ストリーミングデータを蓄積
+                    if (typeof chunk === 'string') {
+                        capturedResponse += chunk;
+                    } else if (Buffer.isBuffer(chunk)) {
+                        capturedResponse += chunk.toString('utf-8');
+                    }
+                },
+                end: (data?: any) => {
+                    if (data) {
+                        if (typeof data === 'string') {
+                            capturedResponse += data;
+                        } else if (Buffer.isBuffer(data)) {
+                            capturedResponse += data.toString('utf-8');
+                        }
+                    }
+                },
+                setHeader: (_name: string, _value: string) => {
+                    // ヘッダーを無視
+                },
+                status: (_code: number) => mockRes,
+                json: (_data: any) => mockRes,
+                set: (_field: any, _value: any) => mockRes,
+            };
+
+            // 4. ハンドラーを呼び出し
+            await handler(mockReq, mockRes);
+
+            // 5. レスポンスからデータを抽出
+            // ストリーミングレスポンスを行ごとにパース
+            const lines = capturedResponse.split('\n').filter(line => line.trim());
+            let fullText = '';
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const jsonStr = line.substring(6);
+                    if (jsonStr === '[DONE]') {
+                        break;
+                    }
+                    try {
+                        const chunk = JSON.parse(jsonStr);
+                        if (chunk.choices?.[0]?.delta?.content) {
+                            fullText += chunk.choices[0].delta.content;
+                        }
+                        if (chunk.usage?.total_tokens) {
+                            capturedTokens = chunk.usage.total_tokens;
+                        }
+                    } catch (e) {
+                        // JSON parse error - skip
+                    }
+                }
+            }
+
+            const durationSeconds = (Date.now() - startTime) / 1000;
+
+            console.log('[AutomationJobRunner] Task executed successfully', {
+                jobId: job.id,
+                taskId: task.id,
+                userId: userContext.userId,
+                tokens: capturedTokens,
+                outputLength: fullText.length,
+            });
+
+            return {
+                status: AutomationTaskStatus.Completed,
+                outputPreview: fullText.slice(0, 500),
+                tokens: capturedTokens,
+                durationSeconds,
+            };
+        } catch (error) {
+            console.error('[AutomationJobRunner] Task execution failed', {
+                jobId: job.id,
+                taskId: task.id,
+                error,
+            });
+
+            return {
+                status: AutomationTaskStatus.Error,
+                errorMessage: error instanceof Error ? error.message : 'Unknown error',
+                durationSeconds: 0,
+            };
+        }
     }
 
     private calculateEstimatedCost(tasks: AutomationTaskEntity[]): string | null {

@@ -25,10 +25,11 @@ import { UserSettingEntity } from '../entity/user.entity.js';
 import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
-import { ContentPartStatus, ContentPartType, MessageGroupType, TeamMemberRoleType, ThreadGroupStatus, ThreadStatus } from '../models/values.js';
+import { ContentPartStatus, ContentPartType, FileGroupType, MessageGroupType, TeamMemberRoleType, ThreadGroupStatus, ThreadStatus } from '../models/values.js';
 import { functionDefinitions } from '../tool/_index.js';
 import { tokenCounterPool } from '../worker/token-counter-service.js';
 import { clients } from './chat.js';
+import { uploadFileFunction } from './file-manager.js';
 import { appendToolCallPart } from './tool-call.js';
 
 
@@ -142,10 +143,10 @@ async function buildFileGroupBodyMap(
  * @param messageId 
  * @returns 
  */
-export type ArgsBuildType = 'threadGroup' | 'thread' | 'messageGroup' | 'message' | 'contentPart';
+export type ArgsBuildType = 'threadGroup' | 'thread' | 'messageGroup' | 'message' | 'contentPart' | 'error';
 export type MessageSet = { threadGroup: ThreadGroupEntity, thread: ThreadEntity, messageGroup: MessageGroupEntity, message: MessageEntity, contentPartList: ContentPartEntity[] };
 export type MessageArgsSet = MessageSet & { args: MyChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, } & { totalTokens?: number, totalBillableCharacters?: number } & { aiProviderClient: AIProviderClient };
-async function buildArgs(
+export async function buildArgs(
     user: UserTokenPayloadWithRole,
     type: ArgsBuildType,
     idList: string[],
@@ -904,9 +905,12 @@ export const chatCompletionByProjectModel = [
         const req = _req as UserRequest;
         const { connectionId, streamId, type, id } = req.query as { connectionId: string, streamId: string, type: ArgsBuildType, id: string };
         // const { args } = req.body as { args: MyChatCompletionCreateParamsStreaming };
-        const { toolCallPartCommandList } = req.body as { toolCallPartCommandList: ToolCallPartCommand[] };
+        const { user, ip } = req.info;
+        const { toolCallPartCommandList, options } = req.body as { toolCallPartCommandList: ToolCallPartCommand[]; options?: { idempotencyKey?: string, labelPrefix?: string } };
         // connectionIdはクライアントで発番しているので、万が一にも混ざらないようにユーザーIDを付与。
-        const clientId = `${req.info.user.id}-${connectionId}` as string;
+        const clientId = `${user.id}-${connectionId}` as string;
+        const label = options?.idempotencyKey || `${options?.labelPrefix || 'chat'}-${clientId}-${streamId}-${id}`;
+
         const stockList: {
             text: string,
             savedMessageId: string,
@@ -917,7 +921,7 @@ export const chatCompletionByProjectModel = [
         try {
 
             // budget check
-            const budgetResult = await checkUserBudget(req.info.user);
+            const budgetResult = await checkUserBudget(user);
             if (budgetResult.status === 'error') {
                 const balance = budgetResult.budget.remainingCredit;
                 if (balance !== null && balance < -10) {
@@ -927,7 +931,7 @@ export const chatCompletionByProjectModel = [
 
             // コンバージョンアップロード
             try {
-                const existing = await ds.getRepository(UserSettingEntity).findOne({ where: { orgKey: req.info.user.orgKey, userId: req.info.user.id, key: 'trafficSource' } });
+                const existing = await ds.getRepository(UserSettingEntity).findOne({ where: { orgKey: user.orgKey, userId: user.id, key: 'trafficSource' } });
                 // if (existing) {
                 //     if (existing.value?.gclid) {
                 //         // gclidがついていたらコンバージョン飛ばす
@@ -940,12 +944,12 @@ export const chatCompletionByProjectModel = [
                 console.error('Failed to save user setting:', error);
             }
 
-            const my_vertexai = ((await getAIProvider(req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient);
+            const my_vertexai = ((await getAIProvider(user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient);
             const client = my_vertexai.client;
             const generativeModel = client.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
             const idList = id.split('|');
-            const { messageArgsSetList } = await buildArgs(req.info.user, type, idList);
+            const { messageArgsSetList } = await buildArgs(user, type, idList);
             // 取得できるメッセージが無い場合は早期に応答（ハング防止）
             if (!messageArgsSetList || messageArgsSetList.length === 0) {
                 res.status(404).set('Content-Type', 'text/plain; charset=utf-8').end('Not found or inaccessible');
@@ -1012,11 +1016,11 @@ export const chatCompletionByProjectModel = [
                         newContentPart.type = ContentPartType.TEXT;
                         newContentPart.text = '';
                         newContentPart.seq = 0;
-                        newContentPart.orgKey = req.info.user.orgKey;
-                        newContentPart.createdBy = req.info.user.id;
-                        newContentPart.updatedBy = req.info.user.id;
-                        newContentPart.createdIp = req.info.ip;
-                        newContentPart.updatedIp = req.info.ip;
+                        newContentPart.orgKey = user.orgKey;
+                        newContentPart.createdBy = user.id;
+                        newContentPart.updatedBy = user.id;
+                        newContentPart.createdIp = ip;
+                        newContentPart.updatedIp = ip;
                         const savedContentPart = await transactionalEntityManager.save(ContentPartEntity, newContentPart);
                         // ガラを構築して返却
                         const resObj: ResponseObject = { messageGroup: inDto.messageGroup, message: inDto.message, contentParts: [...inDto.contentPartList, savedContentPart], status: 'ok' };
@@ -1034,11 +1038,11 @@ export const chatCompletionByProjectModel = [
                         newMessageGroup.type = MessageGroupType.Single;
                         newMessageGroup.role = 'assistant';
                         newMessageGroup.source = messageArgsSetList.find(inDto => inDto.messageGroup.id === messageGroupId)?.args.model;
-                        newMessageGroup.orgKey = req.info.user.orgKey;
-                        newMessageGroup.createdBy = req.info.user.id;
-                        newMessageGroup.createdIp = req.info.ip;
-                        newMessageGroup.updatedBy = req.info.user.id;
-                        newMessageGroup.updatedIp = req.info.ip;
+                        newMessageGroup.orgKey = user.orgKey;
+                        newMessageGroup.createdBy = user.id;
+                        newMessageGroup.createdIp = ip;
+                        newMessageGroup.updatedBy = user.id;
+                        newMessageGroup.updatedIp = ip;
                         newMessageGroup.previousMessageGroupId = messageGroupId;
 
                         const savedMessageGroup = await transactionalEntityManager.save(MessageGroupEntity, newMessageGroup);
@@ -1062,8 +1066,8 @@ export const chatCompletionByProjectModel = [
                         // // 課金用にプロジェクト振り分ける。当たらなかったら当たらなかったでよい。
                         // const departmentMember = await transactionalEntityManager.getRepository(DepartmentMemberEntity).findOne({
                         //     where: safeWhere({
-                        //         orgKey: req.info.user.orgKey,
-                        //         name: req.info.user.name || '',
+                        //         orgKey: user.orgKey,
+                        //         name: user.name || '',
                         //         departmentRole: DepartmentRoleType.Member
                         //     })
                         // });
@@ -1071,7 +1075,7 @@ export const chatCompletionByProjectModel = [
                         // if (departmentMember) {
                         //     const department = await transactionalEntityManager.getRepository(DepartmentEntity).findOne({
                         //         where: safeWhere({
-                        //             orgKey: req.info.user.orgKey,
+                        //             orgKey: user.orgKey,
                         //             id: departmentMember.departmentId
                         //         })
                         //     });
@@ -1108,11 +1112,11 @@ export const chatCompletionByProjectModel = [
                                 newMessage.cacheId = undefined;
                                 newMessage.label = '';
                                 newMessage.subSeq = message.subSeq; // 先行メッセージのサブシーケンスと同じにする
-                                newMessage.orgKey = req.info.user.orgKey;
-                                newMessage.createdBy = req.info.user.id;
-                                newMessage.updatedBy = req.info.user.id;
-                                newMessage.createdIp = req.info.ip;
-                                newMessage.updatedIp = req.info.ip;
+                                newMessage.orgKey = user.orgKey;
+                                newMessage.createdBy = user.id;
+                                newMessage.updatedBy = user.id;
+                                newMessage.createdIp = ip;
+                                newMessage.updatedIp = ip;
                                 newMessage.messageGroupId = savedMessageGroup.id;
                                 // 実行単位がmessageの場合はメッセージでバージョン管理する
                                 if (type === 'message' && messageGroup.role === 'assistant') {
@@ -1141,11 +1145,11 @@ export const chatCompletionByProjectModel = [
                                 newContentPart.type = ContentPartType.TEXT;
                                 newContentPart.text = '';
                                 newContentPart.seq = 0;
-                                newContentPart.orgKey = req.info.user.orgKey;
-                                newContentPart.createdBy = req.info.user.id;
-                                newContentPart.updatedBy = req.info.user.id;
-                                newContentPart.createdIp = req.info.ip;
-                                newContentPart.updatedIp = req.info.ip;
+                                newContentPart.orgKey = user.orgKey;
+                                newContentPart.createdBy = user.id;
+                                newContentPart.updatedBy = user.id;
+                                newContentPart.createdIp = ip;
+                                newContentPart.updatedIp = ip;
                                 const savedContentPart = await transactionalEntityManager.save(ContentPartEntity, newContentPart);
                                 // ガラを構築して返却
                                 const resObj: ResponseObject = { messageGroup: savedMessageGroup, message: savedMessage, contentParts: [savedContentPart], status: 'ok' };
@@ -1154,13 +1158,13 @@ export const chatCompletionByProjectModel = [
                                 if (cachedContent) {
                                     // console.log(`cachedContent=${cachedContent.id}`, JSON.stringify(cachedContent));
                                     const chacedEntity = await transactionalEntityManager.getRepository(VertexCachedContentEntity).findOne({
-                                        where: safeWhere({ orgKey: req.info.user.orgKey, id: cachedContent.id })
+                                        where: safeWhere({ orgKey: user.orgKey, id: cachedContent.id })
                                     })
                                     if (chacedEntity) {
                                         // カウント回数は登り電文を信用しない。
                                         chacedEntity.usage += 1;
-                                        chacedEntity.updatedBy = req.info.user.id;
-                                        chacedEntity.updatedIp = req.info.ip;
+                                        chacedEntity.updatedBy = user.id;
+                                        chacedEntity.updatedIp = ip;
                                         await transactionalEntityManager.save(VertexCachedContentEntity, chacedEntity);
                                     } else {
                                     }
@@ -1188,7 +1192,6 @@ export const chatCompletionByProjectModel = [
                     const messageSet = obj.messageSet;
                     const message = messageSet.message;
                     const stock = stockList[index];
-                    const label = req.body.options?.idempotencyKey || `chat-${clientId}-${streamId}-${id}`;
                     // const aiApi = new OpenAIApiWrapper();
                     // console.dir(inDto.args, { depth: null });
 
@@ -1200,11 +1203,11 @@ export const chatCompletionByProjectModel = [
                     history.label = label;
                     history.model = inDto.args.model;
                     history.provider = obj.inDto.aiProviderClient.type;
-                    history.orgKey = req.info.user.orgKey;
-                    history.createdBy = req.info.user.id;
-                    history.updatedBy = req.info.user.id;
-                    history.createdIp = req.info.ip;
-                    history.updatedIp = req.info.ip;
+                    history.orgKey = user.orgKey;
+                    history.createdBy = user.id;
+                    history.updatedBy = user.id;
+                    history.createdIp = ip;
+                    history.updatedIp = ip;
                     await transactionalEntityManager.save(PredictHistoryWrapperEntity, history);
 
                     // 入力でtoolCallCommandがある場合はツール実行指示からなので、末尾のメッセージID内の全コンテンツのfunctionを実行する
@@ -1235,8 +1238,8 @@ export const chatCompletionByProjectModel = [
                             contentPart.text = JSON.stringify(appendToolCallPart(ary, toolCall));
                         });
 
-                        contentPart.updatedBy = req.info.user.id;
-                        contentPart.updatedIp = req.info.ip;
+                        contentPart.updatedBy = user.id;
+                        contentPart.updatedIp = ip;
                         await transactionalEntityManager.save(ContentPartEntity, contentPart);
 
                         // commandの処理。
@@ -1255,11 +1258,11 @@ export const chatCompletionByProjectModel = [
                                 toolCallCommandEntity.toolCallId = toolCall.toolCallId;
                                 toolCallCommandEntity.type = ToolCallPartType.COMMAND;
                                 toolCallCommandEntity.body = toolCallPartCommandList[index].body || {};
-                                toolCallCommandEntity.orgKey = req.info.user.orgKey;
-                                toolCallCommandEntity.createdBy = req.info.user.id;
-                                toolCallCommandEntity.updatedBy = req.info.user.id;
-                                toolCallCommandEntity.createdIp = req.info.ip;
-                                toolCallCommandEntity.updatedIp = req.info.ip;
+                                toolCallCommandEntity.orgKey = user.orgKey;
+                                toolCallCommandEntity.createdBy = user.id;
+                                toolCallCommandEntity.updatedBy = user.id;
+                                toolCallCommandEntity.createdIp = ip;
+                                toolCallCommandEntity.updatedIp = ip;
                                 return await transactionalEntityManager.save(ToolCallPartEntity, toolCallCommandEntity);
                             })
                         );
@@ -1273,7 +1276,6 @@ export const chatCompletionByProjectModel = [
                 const inDto = obj.inDto;
                 const messageSet = obj.messageSet;
                 const message = messageSet.message;
-                const label = req.body.options?.idempotencyKey || `chat-${clientId}-${streamId}-${id}`;
                 const functions = (await functionDefinitions(
                     obj, req, aiApi, connectionId, streamId, message, label
                 )).reduce((prev, curr) => {
@@ -1290,7 +1292,6 @@ export const chatCompletionByProjectModel = [
                 const messageSet = obj.messageSet;
                 const message = messageSet.message;
                 const stock = stockList[index];
-                const label = req.body.options?.idempotencyKey || `chat-${clientId}-${streamId}-${id}`;
                 const provider = providerAndToolCallCallListAry[index].provider;
 
                 const functions = toolCallFunctions[index].functions;
@@ -1304,8 +1305,8 @@ export const chatCompletionByProjectModel = [
                     inDto.args.tools.map(tool => (tool as OpenAI.ChatCompletionFunctionTool).function.name).forEach(functionName => providerSet.add(functions[functionName].info.group));
                     const savedToolCallGroup = await ds.getRepository(OAuthAccountEntity).find({
                         where: {
-                            orgKey: req.info.user.orgKey,
-                            userId: req.info.user.id,
+                            orgKey: user.orgKey,
+                            userId: user.id,
                             provider: In(Array.from(providerSet)),
                             status: OAuthAccountStatus.ACTIVE,
                         }
@@ -1338,7 +1339,7 @@ export const chatCompletionByProjectModel = [
                     } else { }
                     // 変数を代入しておく
                     if (message.role === 'system' && typeof message.content === 'string') {
-                        message.content = message.content.replaceAll(/\$\{user_name\}/g, JSON.stringify(req.info.user));
+                        message.content = message.content.replaceAll(/\$\{user_name\}/g, JSON.stringify(user));
                         message.content = message.content.replaceAll(/\$\{current_date\}/g, new Date().toLocaleDateString());
                         message.content = message.content.replaceAll(/\$\{current_datetime\}/g, new Date().toISOString());
                     } else { }
@@ -1367,11 +1368,11 @@ export const chatCompletionByProjectModel = [
                             // console.log(`SAVE_BLOCK:INFO:toolCallGroupId=${info.toolCallId}`);
                             const toolCallGroup = new ToolCallGroupEntity();
                             toolCallGroup.projectId = messageArgsSetList[index].threadGroup.projectId;
-                            toolCallGroup.orgKey = req.info.user.orgKey;
-                            toolCallGroup.createdBy = req.info.user.id;
-                            toolCallGroup.updatedBy = req.info.user.id;
-                            toolCallGroup.createdIp = req.info.ip;
-                            toolCallGroup.updatedIp = req.info.ip;
+                            toolCallGroup.orgKey = user.orgKey;
+                            toolCallGroup.createdBy = user.id;
+                            toolCallGroup.updatedBy = user.id;
+                            toolCallGroup.createdIp = ip;
+                            toolCallGroup.updatedIp = ip;
                             const savedToolCallGroup = await transactionalEntityManager.save(ToolCallGroupEntity, toolCallGroup);
                             stock.toolMaster[info.toolCallId].toolCallGroupId = savedToolCallGroup.id;
 
@@ -1386,11 +1387,11 @@ export const chatCompletionByProjectModel = [
                             toolCallEntity.toolCallId = toolTransaction.toolCallId;
                             toolCallEntity.type = toolTransaction.type;
                             toolCallEntity.body = toolTransaction.body;
-                            toolCallEntity.orgKey = req.info.user.orgKey;
-                            toolCallEntity.createdBy = req.info.user.id;
-                            toolCallEntity.updatedBy = req.info.user.id;
-                            toolCallEntity.createdIp = req.info.ip;
-                            toolCallEntity.updatedIp = req.info.ip;
+                            toolCallEntity.orgKey = user.orgKey;
+                            toolCallEntity.createdBy = user.id;
+                            toolCallEntity.updatedBy = user.id;
+                            toolCallEntity.createdIp = ip;
+                            toolCallEntity.updatedIp = ip;
                             if ([ToolCallPartType.CALL, ToolCallPartType.COMMAND, ToolCallPartType.RESULT].includes(toolTransaction.type)) {
                                 const contentParts = { contents: [{ role: 'model', parts: [{ text: '' }] }] };
                                 if (toolTransaction.type === ToolCallPartType.CALL) {
@@ -1424,10 +1425,42 @@ export const chatCompletionByProjectModel = [
                             // console.log(`${savedMessageId} ${transaction.type} ${transaction.text.substring(0, 50).replaceAll('\n', '')}`);
                             const targetContentPart = messageSet.contentParts[messageSet.contentParts.length - 1];
                             targetContentPart.type = transaction.type;
-                            targetContentPart.text = transaction.text;
-                            if (transaction.type === ContentPartType.TOOL) {
-                                targetContentPart.linkId = stock.toolMaster[transaction.body.tool_call_id].toolCallGroupId;
-                            } else { }
+                            if (transaction.type === ContentPartType.FILE) {
+                                const threadId = messageGroupMas[Object.keys(messageGroupMas)[0]].threadId;
+                                const thread = await transactionalEntityManager.findOneOrFail(ThreadEntity, {
+                                    where: safeWhere({
+                                        orgKey: user.orgKey,
+                                        id: threadId,
+                                    })
+                                }) as ThreadEntity;
+                                const threadGroup = await transactionalEntityManager.findOneOrFail(ThreadGroupEntity, {
+                                    where: safeWhere({
+                                        orgKey: user.orgKey,
+                                        id: thread.threadGroupId,
+                                    })
+                                }) as ThreadGroupEntity;
+
+
+                                // mimeTypeから拡張子を決定
+                                const trgType = transaction.body.mimeType.split(';')[0].split('/')[1] || 'png';
+
+                                const filePath = `${obj.inDto.args.model}_${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}.${trgType}`;
+                                // アップロード実行
+                                const uploadedFile = await uploadFileFunction(user.id, threadGroup.projectId, [{
+                                    filePath,
+                                    base64Data: transaction.text,
+                                }], FileGroupType.AI, user.orgKey, ip, user);
+                                targetContentPart.linkId = uploadedFile[0].id;
+                                // ファイル以外は普通にtextを入れる
+                                targetContentPart.text = filePath;
+                            } else {
+                                // ファイル以外は普通にtextを入れる
+                                targetContentPart.text = transaction.text;
+                                if (transaction.type === ContentPartType.TOOL) {
+                                    // toolCallの場合はlinkIdにtoolCallGroupIdを入れておく
+                                    targetContentPart.linkId = stock.toolMaster[transaction.body.tool_call_id].toolCallGroupId;
+                                } else { }
+                            }
                             const contentPart = await transactionalEntityManager.save(ContentPartEntity, targetContentPart);
                             messageSet.contentParts[messageSet.contentParts.indexOf(targetContentPart)] = contentPart;
                             // chunk.contentPart = contentPart; // クライアント側にContentPartのIDを返すためにDB保存後のオブジェクトを取る必要がある
@@ -1438,11 +1471,11 @@ export const chatCompletionByProjectModel = [
                             newContentPart.type = ContentPartType.TEXT;
                             newContentPart.text = '';
                             newContentPart.seq = 0;
-                            newContentPart.orgKey = req.info.user.orgKey;
-                            newContentPart.createdBy = req.info.user.id;
-                            newContentPart.updatedBy = req.info.user.id;
-                            newContentPart.createdIp = req.info.ip;
-                            newContentPart.updatedIp = req.info.ip;
+                            newContentPart.orgKey = user.orgKey;
+                            newContentPart.createdBy = user.id;
+                            newContentPart.updatedBy = user.id;
+                            newContentPart.createdIp = ip;
+                            newContentPart.updatedIp = ip;
                             messageSet.contentParts.push(newContentPart); // pushだけして保存はしない。finish_reasonを検知したタイミングで保存する。
                         }
                     });
@@ -1476,12 +1509,24 @@ export const chatCompletionByProjectModel = [
                                     if (choice.delta.content && !['info', 'command', 'tool'].includes(choice.delta.role || '')) {
                                         // console.log(`content=${JSON.stringify(choice)}`);
                                         const content = stock.transaction.at(-1);
-                                        if (content && content.type === ContentPartType.TEXT) {
-                                            // 末尾がtextだったら積み上げ
-                                            content.text += choice.delta.content;
+                                        const isImageCurr = !!(choice.delta as any).mimeType;
+                                        const isImagePrev = content ? content.type === ContentPartType.FILE : false;
+                                        if (isImageCurr) {
+                                            // 画像系のときは前がなんであろうと新規作成する。
+                                            stock.transaction.push({ type: ContentPartType.FILE, text: choice.delta.content, body: choice.delta });
                                         } else {
-                                            // 末尾がテキストじゃない場合は場合は新規作成
-                                            stock.transaction.push({ type: ContentPartType.TEXT, text: choice.delta.content, body: choice.delta });
+                                            if (isImagePrev) {
+                                                // 直前が画像系のときはテキストを新規作成する。
+                                                stock.transaction.push({ type: ContentPartType.TEXT, text: choice.delta.content, body: choice.delta });
+                                            } else {
+                                                // 直前もテキスト系のときは積み上げる。
+                                                if (content && content.type === ContentPartType.TEXT) {
+                                                    content.text += choice.delta.content;
+                                                } else {
+                                                    // 末尾がテキストじゃない場合は場合は新規作成
+                                                    stock.transaction.push({ type: ContentPartType.TEXT, text: choice.delta.content, body: choice.delta });
+                                                }
+                                            }
                                         }
                                     } else { }
 
@@ -1610,7 +1655,7 @@ export const chatCompletionByProjectModel = [
 
                             // console.log(`${stock.savedMessageId},${clientId},${text.replaceAll('\n', '')}`);
                             const resObj = {
-                                data: { streamId: `${req.query.streamId}|${stock.savedMessageId}`, messageId: stock.savedMessageId, content: chunk },
+                                data: { streamId: `${streamId}|${stock.savedMessageId}`, messageId: stock.savedMessageId, content: chunk },
                                 event: 'message',
                             };
                             // console.dir(resObj, { depth: null });
@@ -1619,16 +1664,16 @@ export const chatCompletionByProjectModel = [
                     ).subscribe({
                         // next: ,
                         error: error => {
-                            console.log(`stream error: ${req.query.streamId}|${JSON.stringify(stock)} ${error}--------------------------------------`);
+                            console.log(`stream error: ${streamId}|${JSON.stringify(stock)} ${error}--------------------------------------`);
                             console.error(error);
                             reject(error);
                             // コネクションは切らない（クライアント側で切るはずなので）
-                            clients[clientId]?.response.write(`error: ${req.query.streamId}|${stock.savedMessageId} ${error}\n\n`);
+                            clients[clientId]?.response.write(`error: ${streamId}|${stock.savedMessageId} ${error}\n\n`);
                         },
                         complete: () => {
-                            // console.log(`stream complete: ${req.query.streamId}|${stock.savedMessageId}--------------------------------------`);
+                            // console.log(`stream complete: ${streamId}|${stock.savedMessageId}--------------------------------------`);
                             // 通常モードは素直に終了
-                            clients[clientId]?.response.write(`data: [DONE] ${req.query.streamId}|${stock.savedMessageId}\n\n`);
+                            clients[clientId]?.response.write(`data: [DONE] ${streamId}|${stock.savedMessageId}\n\n`);
                             resolve({ messageSet });
                         },
                     });
@@ -1664,15 +1709,15 @@ export const chatCompletionByProjectModel = [
                                         newContentPart.type = ContentPartType.ERROR;
                                         newContentPart.text = Utils.errorFormat(error, false);
                                         newContentPart.seq = 1;
-                                        newContentPart.orgKey = req.info.user.orgKey;
-                                        newContentPart.createdBy = req.info.user.id;
-                                        newContentPart.updatedBy = req.info.user.id;
-                                        newContentPart.createdIp = req.info.ip;
-                                        newContentPart.updatedIp = req.info.ip;
+                                        newContentPart.orgKey = user.orgKey;
+                                        newContentPart.createdBy = user.id;
+                                        newContentPart.updatedBy = user.id;
+                                        newContentPart.createdIp = ip;
+                                        newContentPart.updatedIp = ip;
                                         const savedContentPart = await transactionalEntityManager.save(ContentPartEntity, newContentPart);
 
                                         // トークンカウントを更新
-                                        await geminiCountTokensByContentPart(transactionalEntityManager, [savedContentPart], req.info.user);
+                                        await geminiCountTokensByContentPart(transactionalEntityManager, [savedContentPart], user);
                                     } else { }
                                 }
                             } else { }
@@ -1713,7 +1758,7 @@ export const chatCompletionByProjectModel = [
                         // コンテンツ内容が無いものは保存する意味ないので削除しておかないと geminiCountTokensByContentPart の中で保存されてしまう。
                         res.messageSet.contentParts = res.messageSet.contentParts.filter(contentPart => contentPart.text && contentPart.text.length > 0);
                         // トークンカウントを更新
-                        await geminiCountTokensByContentPart(transactionalEntityManager, res.messageSet.contentParts, req.info.user);
+                        await geminiCountTokensByContentPart(transactionalEntityManager, res.messageSet.contentParts, user);
                     });
                 }).catch(async error => {
                     await saveStock();
@@ -1747,24 +1792,22 @@ export const chatCompletionByProjectModel = [
                                         newContentPart.type = ContentPartType.ERROR;
                                         newContentPart.text = Utils.errorFormat(error, false);
                                         newContentPart.seq = 1;
-                                        newContentPart.orgKey = req.info.user.orgKey;
-                                        newContentPart.createdBy = req.info.user.id;
-                                        newContentPart.updatedBy = req.info.user.id;
-                                        newContentPart.createdIp = req.info.ip;
-                                        newContentPart.updatedIp = req.info.ip;
+                                        newContentPart.orgKey = user.orgKey;
+                                        newContentPart.createdBy = user.id;
+                                        newContentPart.updatedBy = user.id;
+                                        newContentPart.createdIp = ip;
+                                        newContentPart.updatedIp = ip;
                                         const savedContentPart = await transactionalEntityManager.save(ContentPartEntity, newContentPart);
 
                                         // トークンカウントを更新
-                                        await geminiCountTokensByContentPart(transactionalEntityManager, [savedContentPart], req.info.user);
+                                        await geminiCountTokensByContentPart(transactionalEntityManager, [savedContentPart], user);
                                     } else { }
                                 }
                             } else { }
                         }));
                     });
                 });
-            }))
-            //     }));
-            // })
+            }));
         } catch (error) {
             // Avoid sending headers after response already ended
             if (!res.headersSent && !res.writableEnded) {

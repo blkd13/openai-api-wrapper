@@ -14,6 +14,7 @@ import { ProjectEntity, TeamMemberEntity } from '../entity/project-models.entity
 import { validationErrorHandler } from '../middleware/validation.js';
 import { UserRequest } from '../models/info.js';
 import { ProjectStatus, ProjectVisibility } from '../models/values.js';
+import { createTaskTemplate } from '../automation/job-manager.js';
 
 const MAX_PAGE_SIZE = 100;
 
@@ -609,6 +610,35 @@ export const createAutomationJob = [
         });
 
         const savedJob = await jobRepo.save(newJob);
+
+        // タスクテンプレートを作成
+        const userContext = {
+            userId,
+            orgKey,
+            ip: req.info.ip,
+        };
+
+        try {
+            await ds.transaction(async (manager) => {
+                // promptTemplateからタスクテンプレートを作成
+                // 現在は単一タスクのみサポート（将来的には複数タスクに対応可能）
+                await createTaskTemplate(
+                    savedJob,
+                    {
+                        name: savedJob.name,
+                        description: savedJob.description,
+                        prompt: savedJob.promptTemplate || '',
+                        model: savedJob.model || undefined,
+                    },
+                    0, // 最初のタスクはseq=0
+                    userContext,
+                    manager,
+                );
+            });
+        } catch (error) {
+            console.error('[AutomationJob] Failed to create task template', { jobId: savedJob.id, error });
+            // テンプレート作成に失敗してもジョブ自体は作成済みなので、エラーログのみ
+        }
 
         res.status(201).json({
             jobId: savedJob.id,

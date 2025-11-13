@@ -1,4 +1,4 @@
-import { Column, Entity, Index } from 'typeorm';
+import { Column, Entity, Index, Generated } from 'typeorm';
 import { MyBaseEntity } from './base.js';
 
 export enum AutomationJobStatus {
@@ -34,6 +34,11 @@ export enum AutomationTaskStatus {
     Completed = 'completed',
     Error = 'error',
     Stopped = 'stopped',
+}
+
+export enum AutomationTaskType {
+    Template = 'template',      // タスクテンプレート
+    Execution = 'execution',    // 実行インスタンス
 }
 
 @Entity()
@@ -114,12 +119,30 @@ export class AutomationJobEntity extends MyBaseEntity {
 @Index(['orgKey', 'projectId', 'status'])
 @Index(['orgKey', 'jobId'])
 @Index(['orgKey', 'jobId', 'status'])
+@Index(['orgKey', 'jobId', 'seq'])
+@Index(['orgKey', 'jobId', 'taskType'])
+@Index(['orgKey', 'projectId', 'taskType'])
+@Index(['orgKey', 'jobId', 'threadGroupId'])
+@Index(['orgKey', 'jobId', 'templateTaskId'])
 export class AutomationTaskEntity extends MyBaseEntity {
     @Column({ type: 'uuid' })
     jobId!: string;
 
     @Column({ type: 'uuid' })
     projectId!: string;
+
+    @Column({ type: 'uuid' })
+    threadGroupId!: string;
+
+    @Column({ type: 'enum', enum: AutomationTaskType, default: AutomationTaskType.Template })
+    taskType!: AutomationTaskType;
+
+    @Column({ type: 'integer' })
+    @Generated('increment')
+    seq!: number;
+
+    @Column({ type: 'uuid', nullable: true })
+    templateTaskId?: string | null;
 
     @Column({ type: 'enum', enum: AutomationTaskStatus, default: AutomationTaskStatus.Pending })
     status!: AutomationTaskStatus;
@@ -142,6 +165,6 @@ export class AutomationTaskEntity extends MyBaseEntity {
     @Column({ type: 'jsonb', nullable: true })
     metadata?: Record<string, any>;
 
-    @Column({ type: 'uuid', nullable: true })
-    runId?: string;
+    @Column({ type: 'varchar', length: 128, nullable: true })
+    runId?: string | null;
 }

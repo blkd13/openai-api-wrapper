@@ -1,7 +1,7 @@
-import { ScopeType, OrganizationEntity, DivisionEntity, UserRoleType, UserRoleEntity, UserRole } from '../entity/auth.entity.js';
-import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
-import { safeWhere } from '../entity/base.js';
 import { ds } from '../db.js';
+import { OrganizationEntity, ScopeType, UserRole, UserRoleType } from '../entity/auth.entity.js';
+import { safeWhere } from '../entity/base.js';
+import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
 
 // 共通インターフェース
 export interface ScopedEntity {

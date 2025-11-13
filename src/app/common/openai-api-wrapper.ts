@@ -1290,7 +1290,12 @@ class RunBit {
                                                 logprobs: null,
                                             };
 
-                                            if (c.text) {
+                                            if (c.inlineData) {
+                                                // 画像とかファイルデータの場合
+                                                const dataUri = `data:${c.inlineData.mimeType};base64,${c.inlineData.data}`;
+                                                choice.delta = { content: dataUri };
+                                                (choice.delta as any).mimeType = `${c.inlineData.mimeType}`;
+                                            } else if (c.text) {
                                                 choice.delta = { content: c.text };
                                             } else if (c.functionCall) {
                                                 const func: OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall = {

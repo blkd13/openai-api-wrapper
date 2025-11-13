@@ -1,4 +1,4 @@
-import { BaseEntity, UpdateDateColumn, CreateDateColumn, Column, BeforeInsert, BeforeUpdate, PrimaryGeneratedColumn, Index, PrimaryColumn, FindOptionsWhere } from 'typeorm';
+import { BaseEntity, Column, CreateDateColumn, FindOptionsWhere, PrimaryColumn, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 // sqlite3の場合、timestamp型はサポートされていないので、text型で代用する
 // const timestamp = 'datetime' || 'timestamp';
 // const timestamp = 'timestamp';
@@ -81,7 +81,11 @@ export class MyBaseEntityNoUpdateTimestamp extends BaseEntity {
     // }
 }
 
-
+/**
+ * FindOptionsWhereの中身をチェックして、undefinedが含まれていたら例外を投げる
+ * @param conditions 
+ * @returns 
+ */
 export function safeWhere<T>(conditions: FindOptionsWhere<T>): FindOptionsWhere<T> {
     for (const [key, value] of Object.entries(conditions)) {
         if (value === undefined) {

@@ -483,7 +483,7 @@ export async function uploadFileFunction(userId: string, projectId: string, cont
         // console.log(`Uploading ${contents.length} files to ${projectId} by ${userId} (${uploadType})`);
 
         let savedFileGroupGroup: FileGroupEntity | undefined;
-        if (['Group', 'git', 'gitlab', 'gitea'].includes(uploadType)) {
+        if (['Group', FileGroupType.GIT, FileGroupType.GITLAB, FileGroupType.GITEA, FileGroupType.AI].includes(uploadType)) {
             // シングルモードと通常モードがある。通常モードは1グループに複数ファイル。
             const fileGroup = new FileGroupEntity();
             fileGroup.type = ('Group' === uploadType || 'Single' === uploadType) ? FileGroupType.UPLOAD : uploadType;
@@ -558,7 +558,7 @@ export async function uploadFileFunction(userId: string, projectId: string, cont
             }
         }));
 
-        if (['Group', 'git', 'gitlab', 'gitea'].includes(uploadType)) {
+        if (['Group', FileGroupType.GIT, FileGroupType.GITLAB, FileGroupType.GITEA, FileGroupType.AI].includes(uploadType)) {
             (savedFileGroupGroup as FileGroupEntityForView).files = savedFileList;
         } else { }
         return savedFileGroupGroup as FileGroupEntityForView;
