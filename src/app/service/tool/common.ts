@@ -15,14 +15,16 @@ import { JSDOM } from 'jsdom';
 import { Browser } from 'puppeteer';
 import { In } from 'typeorm';
 import { getAxios, getPuppeteer } from '../../common/http-client.js';
-import { MyToolType, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
+import { MyToolType } from '../../common/openai-api-wrapper.js';
 import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
+import { AIClientLike } from '../common/ai-client.js';
+import { getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
 import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
 import { AgentTaskEntity, AgentTaskPriority, AgentTaskStatus } from '../entity/agent-task.entity.js';
 import { OAuthAccountEntity } from '../entity/auth.entity.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../entity/project-models.entity.js';
 import { UserRequest } from '../models/info.js';
 
 
@@ -380,10 +382,14 @@ const aiModels = [
     { 'model': 'claude-3-7-sonnet-20250219', 'description': '推論、コーディング、コンテンツ作成など多様なタスクに対応。安全性と倫理的な配慮が重視されており、企業での利用に適している。バランスの取れた性能も評価されている。ツール利用が得意', },
 ];
 
+// ツール定義のキャッシュ（メモリリーク防止のため WeakMap を使用）
+const toolDefinitionsCache = new WeakMap<UserRequest, MyToolType[]>();
+
 export function commonFunctionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
-    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+    req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): MyToolType[] {
+    const wrapperLogger = getPredictHistoryWrapperLoggerForRequest(req);
     return [
         {
             info: { group: 'web', isActive: true, isInteractive: false, label: 'Web検索', },
@@ -487,7 +493,7 @@ export function commonFunctionDefinitions(
 
                 const systemPrompt = 'アシスタントAI';
                 const model = 'gemini-2.5-flash';
-                const aiProvider = (await getAIProvider(req.info.user, model));
+                const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, model);
 
                 // 10件ずつ分割してリクエストするための処理
                 const maxResultsPerRequest = 10; // Google APIの制限
@@ -557,24 +563,27 @@ export function commonFunctionDefinitions(
                             const newLabel = `${label}-call_ai`;
 
                             // ヒストリー保存
-                            const history = new PredictHistoryWrapperEntity();
-                            history.orgKey = req.info.user.orgKey;
-                            history.connectionId = connectionId;
-                            history.streamId = streamId;
-                            history.messageId = message.id;
-                            history.label = newLabel;
-                            history.model = inDto.args.model;
-                            history.provider = aiProvider.type;
-                            history.createdBy = req.info.user.id;
-                            history.updatedBy = req.info.user.id;
-                            history.createdIp = req.info.ip;
-                            history.updatedIp = req.info.ip;
-                            await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+                            await wrapperLogger.log({
+                                connectionId,
+                                streamId,
+                                messageId: message.id,
+                                label: newLabel,
+                                model: inDto.args.model,
+                                provider: aiProviderClient.type,
+                            });
+                            const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
+                            // await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
+                            //     idempotencyKey,
+                            //     argsHash: idempotencyKey,
+                            //     label: newLabel,
+                            //     provider: aiProviderClient.type,
+                            //     model: inDto.args.model,
+                            // }, PredictHistoryStatus.Fine).catch((err) => console.error('Failed to log predict history', err));
 
                             return new Promise((resolve, reject) => {
                                 let text = '';
                                 aiApi.chatCompletionObservableStream(
-                                    inDto.args, { label: newLabel }, aiProvider,
+                                    inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
                                 ).pipe(
                                     timeout(30_000), // ← 30秒のタイムアウトを設定（ミリ秒）
                                     map(res => res.choices.map(choice => choice.delta.content).join('')),
@@ -584,12 +593,35 @@ export function commonFunctionDefinitions(
                                     next: next => {
                                         text += next;
                                     },
-                                    error: error => {
-                                        // reject(error);
-                                        // console.log(`WebSearch fineCounter=${fineCounter++} error`);
+                                    error: async error => {
+                                        const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
+                                        // try {
+                                        //     await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
+                                        //         idempotencyKey,
+                                        //         argsHash: idempotencyKey,
+                                        //         label: newLabel,
+                                        //         provider: aiProviderClient.type,
+                                        //         model: inDto.args.model,
+                                        //         message: error?.message || String(error),
+                                        //     }, PredictHistoryStatus.Error);
+                                        // } catch (logErr) {
+                                        //     console.error('Failed to log predict history', logErr);
+                                        // }
                                         resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: 'error' });
                                     },
-                                    complete: () => {
+                                    complete: async () => {
+                                        const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
+                                        // try {
+                                        //     await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
+                                        //         idempotencyKey,
+                                        //         argsHash: idempotencyKey,
+                                        //         label: newLabel,
+                                        //         provider: aiProviderClient.type,
+                                        //         model: inDto.args.model,
+                                        //     }, PredictHistoryStatus.Fine);
+                                        // } catch (logErr) {
+                                        //     console.error('Failed to log predict history', logErr);
+                                        // }
                                         resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: text });
                                     },
                                 });
@@ -888,29 +920,32 @@ export function commonFunctionDefinitions(
                 delete inDto.args.tool_choice;
                 delete inDto.args.tools;
 
-                const aiProvider = await getAIProvider(req.info.user, inDto.args.model);
+                const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, inDto.args.model);
 
                 const newLabel = `${label}-call_ai-${model}`;
                 // レスポンス返した後にゆるりとヒストリーを更新しておく。
-                const history = new PredictHistoryWrapperEntity();
-                history.orgKey = req.info.user.orgKey;
-                history.connectionId = connectionId;
-                history.streamId = streamId;
-                history.messageId = message.id;
-                history.label = newLabel;
-                history.model = inDto.args.model;
-                history.provider = aiProvider.type;
-                history.createdBy = req.info.user.id;
-                history.updatedBy = req.info.user.id;
-                history.createdIp = req.info.ip;
-                history.updatedIp = req.info.ip;
-                await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+                await wrapperLogger.log({
+                    connectionId,
+                    streamId,
+                    messageId: message.id,
+                    label: newLabel,
+                    model: inDto.args.model,
+                    provider: aiProviderClient.type,
+                });
+                const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
+                // await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
+                //     idempotencyKey,
+                //     argsHash: idempotencyKey,
+                //     label: newLabel,
+                //     provider: aiProviderClient.type,
+                //     model: inDto.args.model,
+                // }, PredictHistoryStatus.Fine).catch((err) => console.error('Failed to log predict history', err));
 
                 return new Promise((resolve, reject) => {
                     let text = '';
                     // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
                     aiApi.chatCompletionObservableStream(
-                        inDto.args, { label: newLabel }, aiProvider,
+                        inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
                     ).pipe(
                         map(res => res.choices.map(choice => choice.delta.content).join('')),
                         toArray(),
@@ -919,10 +954,35 @@ export function commonFunctionDefinitions(
                         next: next => {
                             text += next;
                         },
-                        error: error => {
+                        error: async error => {
+                            const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
+                            // try {
+                            //     await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
+                            //         idempotencyKey,
+                            //         argsHash: idempotencyKey,
+                            //         label: newLabel,
+                            //         provider: aiProviderClient.type,
+                            //         model: inDto.args.model,
+                            //         message: error?.message || String(error),
+                            //     }, PredictHistoryStatus.Error);
+                            // } catch (logErr) {
+                            //     console.error('Failed to log predict history', logErr);
+                            // }
                             reject(error);
                         },
-                        complete: () => {
+                        complete: async () => {
+                            const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
+                            // try {
+                            //     await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
+                            //         idempotencyKey,
+                            //         argsHash: idempotencyKey,
+                            //         label: newLabel,
+                            //         provider: aiProviderClient.type,
+                            //         model: inDto.args.model,
+                            //     }, PredictHistoryStatus.Fine);
+                            // } catch (logErr) {
+                            //     console.error('Failed to log predict history', logErr);
+                            // }
                             resolve(text);
                         },
                     });;

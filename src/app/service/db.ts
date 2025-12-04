@@ -1,7 +1,7 @@
 // db.ts
-import { DataSource } from "typeorm"
-import { fileURLToPath } from 'url';
 import path from 'path';
+import { DataSource } from "typeorm";
+import { fileURLToPath } from 'url';
 import { CustomNamingStrategy } from "../../config/naming-strategy.js";
 
 const { TZ, TYPEORM_TYPE, TYPEORM_DATABASE, TYPEORM_HOST, TYPEORM_PORT, TYPEORM_USERNAME, TYPEORM_PASSWORD, TYPEORM_SCHEMA } = process.env;
@@ -10,18 +10,18 @@ const { TZ, TYPEORM_TYPE, TYPEORM_DATABASE, TYPEORM_HOST, TYPEORM_PORT, TYPEORM_
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 console.log(`currentDir=${currentDir}`);
 
-const sqlite = new DataSource({
-    type: 'sqlite',
-    database: './data/database.sqlite',
-    entities: [path.join(currentDir, 'entity', '**', '*.entity.js'),],
-    synchronize: true,
-    logging: true,
-    // extra: {
-    //     pragma: {
-    //         journal_mode: "wal"
-    //     }
-    // }
-});
+// const sqlite = new DataSource({
+//     type: 'sqlite',
+//     database: './data/database.sqlite',
+//     entities: [path.join(currentDir, 'entity', '**', '*.entity.js'),],
+//     synchronize: true,
+//     logging: true,
+//     // extra: {
+//     //     pragma: {
+//     //         journal_mode: "wal"
+//     //     }
+//     // }
+// });
 
 const postgres = new DataSource({
     type: TYPEORM_TYPE as 'postgres',

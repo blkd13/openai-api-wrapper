@@ -1,13 +1,17 @@
 import axios from 'axios';
+import * as crypto from 'crypto';
 import { Request, Response } from "express";
 import { body, query } from "express-validator";
 import * as http from 'http';
 
 import { GenerateContentRequest, VertexAI } from '@google-cloud/vertexai';
 import { ChatCompletion, ChatCompletionChunk, ChatCompletionCreateParamsStreaming } from "openai/resources/index.js";
-import { aiApi, normalizeMessage, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
+import { normalizeMessage } from '../../common/openai-api-wrapper.js';
+import { getServiceAIClient } from '../common/ai-client.js';
+import { getPredictHistoryLoggerForRequest, logPredictHistoryWithContext } from '../common/predict-history-logger.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
+import { PredictHistoryStatus } from '../models/values.js';
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
 const { GCP_PROJECT_ID, GCP_CONTEXT_CACHE_LOCATION, GCP_API_BASE_PATH } = process.env;
@@ -22,9 +26,17 @@ if (proxyObj.httpsProxy || proxyObj.httpProxy) {
 } else { }
 
 import { Observer } from 'rxjs/dist/types/index.js';
-import { countChars, GenerateContentRequestForCache, mapForGemini, MyVertexAiClient } from '../../common/my-vertexai.js';
+import { GenerateContentRequestForCache, mapForGemini, MyVertexAiClient } from '../../common/ai/providers/vertexai.js';
 import { Utils } from '../../common/utils.js';
 import { COUNT_TOKEN_MODEL, getAIProvider } from './chat-by-project-model.js';
+
+const aiApi = getServiceAIClient();
+
+function buildPredictHistoryContext(req: UserRequest, label: string, model: string) {
+    const argsHash = crypto.createHash('MD5').update(JSON.stringify(req.body)).digest('hex');
+    const idempotencyKey = req.body.options?.idempotencyKey || `${Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS')}-${argsHash}`;
+    return { argsHash, idempotencyKey, label, model };
+}
 
 // Eventクライアントリスト
 export const clients: Record<string, { id: string; response: http.ServerResponse; }> = {};
@@ -85,6 +97,7 @@ export const chatCompletionStream = [
 
         try {
             const req = _req as UserRequest;
+            const predictLogger = getPredictHistoryLoggerForRequest(req);
             const inDto = {
                 args: {
                     model: req.body.model,
@@ -112,8 +125,10 @@ export const chatCompletionStream = [
             const clientId = `${req.info.user.id}-${connectionId}` as string;
 
             const label = inDto.options?.idempotencyKey || `api-${clientId}`;
+            const historyContext = buildPredictHistoryContext(req, label, inDto.args.model);
 
-            const provider = await getAIProvider(req.info.user, inDto.args.model);
+            const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, inDto.args.model);
+            const provider = aiProviderClient;
 
             let subscriber: Partial<Observer<ChatCompletionChunk>> | ((value: ChatCompletionChunk) => void) | undefined;
 
@@ -153,6 +168,11 @@ export const chatCompletionStream = [
                         clients[clientId]?.response.write(`data: ${JSON.stringify(resObj)}\n\n`);
                         clients[clientId]?.response.write(`data: [DONE]\n`);
                         clients[clientId]?.response.end();
+                        logPredictHistoryWithContext(predictLogger, {
+                            ...historyContext,
+                            provider: provider?.name || provider?.type || 'openai',
+                            model: inDto.args.model,
+                        }, PredictHistoryStatus.Fine).catch((err) => console.error('Failed to log predict history', err));
                     },
                 };
             } else {
@@ -179,15 +199,33 @@ export const chatCompletionStream = [
                         // console.dir(resObj, { depth: null });
                         res.json(resObj);
                         res.end();
+                        logPredictHistoryWithContext(predictLogger, {
+                            ...historyContext,
+                            provider: provider?.name || provider?.type || 'openai',
+                            model: inDto.args.model,
+                        }, PredictHistoryStatus.Fine).catch((err) => console.error('Failed to log predict history', err));
                     },
                 };
             }
 
             aiApi.chatCompletionObservableStream(
-                inDto.args, { label, userId: req.info.user.id, ip: req.info.ip, authType: 'api' }, provider
+                inDto.args, { label, userId: req.info.user.id, ip: req.info.ip, authType: 'api' }, provider, aiModel, aiPrice
             ).subscribe(subscriber);
         } catch (error: any) {
             console.error(`ERROR::${error}`);
+            try {
+                const req = _req as UserRequest;
+                const predictLogger = getPredictHistoryLoggerForRequest(req);
+                const historyContext = buildPredictHistoryContext(req, req.body.options?.idempotencyKey || 'api-chat', req.body.model);
+                logPredictHistoryWithContext(predictLogger, {
+                    ...historyContext,
+                    provider: 'unknown',
+                    model: req.body.model,
+                    message: error?.message || String(error),
+                }, PredictHistoryStatus.Error).catch((err) => console.error('Failed to log predict history', err));
+            } catch (logError) {
+                console.error('predict history logging failed', logError);
+            }
             res.status(503).end(Utils.errorFormat(error));
         }
     }
@@ -219,11 +257,13 @@ export const codegenCompletion = [
 
         let text = '';
         const label = req.body.options?.idempotencyKey || `chat-${req.info.user.id}`;
-        const aiApi = new OpenAIApiWrapper();
-        const provider = await getAIProvider(req.info.user, inDto.args.model);
+        const aiClient = getServiceAIClient();
 
-        aiApi.chatCompletionObservableStream(
-            inDto.args, { label }, provider
+        const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, inDto.args.model);
+        const provider = aiProviderClient;
+
+        aiClient.chatCompletionObservableStream(
+            inDto.args, { label }, provider, aiModel, aiPrice
         ).subscribe({
             next: next => {
                 const _text = next.choices[0]?.delta?.content || '';
@@ -282,12 +322,10 @@ export const chatCompletion = [
 
         const label = req.body.options?.idempotencyKey || `chat-${clientId}-${req.query.streamId}`;
         try {
-            // const aiApi = new OpenAIApiWrapper();
-            const provider = await getAIProvider(req.info.user, inDto.args.model);
-
+            const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, inDto.args.model);
             // console.log(aiApi.wrapperOptions.provider);
             aiApi.chatCompletionObservableStream(
-                inDto.args, { label }, provider
+                inDto.args, { label }, aiProviderClient, aiModel, aiPrice,
             ).subscribe({
                 next: next => {
                     const resObj = {
@@ -325,7 +363,9 @@ export const geminiCountTokens = [
         const inDto = _req.body as { args: ChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, };
         const args = inDto.args;
         try {
-            const my_vertexai = (await getAIProvider(req.info.user, args.model)).client as MyVertexAiClient;
+            const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, inDto.args.model);
+            const my_vertexai = aiProviderClient.client as MyVertexAiClient;
+
             const client = my_vertexai.client as VertexAI;
             const generativeModel = client.getGenerativeModel({
                 model: 'gemini-2.5-flash',
@@ -341,11 +381,11 @@ export const geminiCountTokens = [
                 next: next => {
                     const args = next.args;
                     const req: GenerateContentRequest = mapForGemini(args);
-                    const countCharsObj = countChars(args);
+                    // const countCharsObj = countChars(args);
                     // console.log(countCharsObj);
                     // console.dir(req, { depth: null });
                     generativeModel.countTokens(req).then(tokenObject => {
-                        res.end(JSON.stringify(Object.assign(tokenObject, countCharsObj)));
+                        res.end(JSON.stringify(Object.assign(tokenObject, {})));
                     });
                 },
                 // complete: () => {
@@ -392,7 +432,8 @@ export const geminiCreateContextCache = [
         const modelId: 'gemini-2.5-flash-001' | 'gemini-2.5-pro-001' = 'gemini-2.5-flash-001';
         const url = `${CONTEXT_CACHE_API_ENDPOINT}/projects/${projectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`;
         try {
-            const my_vertexai = (await getAIProvider(req.info.user, args.model)).client as MyVertexAiClient;
+            const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, args.model);
+            const my_vertexai = aiProviderClient.client as MyVertexAiClient;
             normalizeMessage(args, false).subscribe({
                 next: next => {
                     const args = next.args;
@@ -448,7 +489,8 @@ export const geminiUpdateContextCache = [
     async (_req: UserRequest, res: Response) => {
         const inDto = _req.body as { expire_time: string, cache_name: string };
         // myVertex取るために仕方なくCOUNT_TOKEN_MODELを使う
-        const my_vertexai = (await getAIProvider(_req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient;
+        const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(_req.info.user, COUNT_TOKEN_MODEL);
+        const my_vertexai = aiProviderClient.client as MyVertexAiClient;
         my_vertexai.getAuthorizedHeaders().then(headers =>
             axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${inDto.cache_name}`, { expire_time: inDto.expire_time }, headers)
         ).then(response => {
@@ -469,7 +511,8 @@ export const geminiDeleteContextCache = [
     async (_req: UserRequest, res: Response) => {
         const inDto = _req.body as { cache_name: string };
         // myVertex取るために仕方なくCOUNT_TOKEN_MODELを使う
-        const my_vertexai = (await getAIProvider(_req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient;
+        const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(_req.info.user, COUNT_TOKEN_MODEL);
+        const my_vertexai = aiProviderClient.client as MyVertexAiClient;
         my_vertexai.getAuthorizedHeaders().then(headers =>
             axios.delete(`${CONTEXT_CACHE_API_ENDPOINT}/${inDto.cache_name}`, headers)
         ).then(response => {
@@ -487,7 +530,8 @@ export const geminiGetContextCache = [
     validationErrorHandler,
     async (_req: UserRequest, res: Response) => {
         // myVertex取るために仕方なくCOUNT_TOKEN_MODELを使う
-        const my_vertexai = (await getAIProvider(_req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient;
+        const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(_req.info.user, COUNT_TOKEN_MODEL);
+        const my_vertexai = aiProviderClient.client as MyVertexAiClient;
         my_vertexai.getAuthorizedHeaders().then(headers =>
             axios.get(`${CONTEXT_CACHE_API_ENDPOINT}/projects/${GCP_PROJECT_ID}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`, headers)
         ).then(response => {

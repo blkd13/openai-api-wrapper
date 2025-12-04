@@ -1,13 +1,14 @@
 import { In } from 'typeorm';
 
-import { MyToolType, OpenAIApiWrapper, providerPrediction } from '../../common/openai-api-wrapper.js';
-import { UserRequest } from '../models/info.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
-import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
+import { MattermostChannel, MattermostUser } from '../../agent/api-mattermost/api.js';
+import { MyToolType } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
+import { AIClientLike } from '../common/ai-client.js';
+import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
-import { GetChannelsPostsResponse, MattermostChannel, MattermostUser } from '../../agent/api-mattermost/api.js';
 import { MmUserEntity } from '../entity/api-mattermost.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../entity/project-models.entity.js';
+import { UserRequest } from '../models/info.js';
 import { getOAuthAccountForTool, reform } from './common.js';
 
 
@@ -15,7 +16,7 @@ import { getOAuthAccountForTool, reform } from './common.js';
 export async function mattermostFunctionDefinitions(
     providerName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
-    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+    req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
     const provider = `mattermost-${providerName}`;
     return [
@@ -467,25 +468,20 @@ export async function mattermostFunctionDefinitions(
 
                 // const newLabel = `${label}-call_ai-${model}`;
                 // // レスポンス返した後にゆるりとヒストリーを更新しておく。
-                // const history = new PredictHistoryWrapperEntity();
-                // history.tenantKey = req.info.user.tenantKey;
-                // history.connectionId = connectionId;
-                // history.streamId = streamId;
-                // history.messageId = message.id;
-                // history.label = newLabel;
-                // history.model = inDto.args.model;
-                // history.provider = provider;
-                // history.createdBy = req.info.user.id;
-                // history.updatedBy = req.info.user.id;
-                // history.createdIp = req.info.ip;
-                // history.updatedIp = req.info.ip;
-                // await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+                // await getPredictHistoryWrapperLoggerForRequest(req).log({
+                //     connectionId,
+                //     streamId,
+                //     messageId: message.id,
+                //     label: newLabel,
+                //     model: inDto.args.model,
+                //     provider,
+                // });
 
                 // return new Promise((resolve, reject) => {
                 //     let text = '';
                 //     // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
                 //     aiApi.chatCompletionObservableStream(
-                //         inDto.args, { label: newLabel }, aiProvider,
+                //         inDto.args, { label: newLabel }, aiProvider, aiModel, aiPrice
                 //     ).pipe(
                 //         map(res => res.choices.map(choice => choice.delta.content).join('')),
                 //         toArray(),

@@ -1,17 +1,54 @@
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+import { aiApi, BaseStepContext, setBaseStepDefaultContext } from '../common/base-step.js';
 import { Utils } from '../common/utils.js';
 
 const start = Date.now();
 console.log(`${Utils.formatDate()} start`);
 
-import { fileURLToPath } from 'url';
+const envContext: BaseStepContext = {
+    orgKey: process.env['OAW_DEFAULT_ORG_KEY'],
+    userId: process.env['OAW_DEFAULT_USER_ID'],
+    ip: process.env['OAW_DEFAULT_IP'],
+};
 
-import { aiApi } from '../common/base-step.js';
+setBaseStepDefaultContext(envContext);
+
+function loadContextFromFile(contextFile?: string): BaseStepContext {
+    if (!contextFile) {
+        return {};
+    }
+    if (!fs.existsSync(contextFile)) {
+        console.log(`Context file not found: ${contextFile}`);
+        return {};
+    }
+    try {
+        const parsed = JSON.parse(fs.readFileSync(contextFile, 'utf-8')) as BaseStepContext;
+        return parsed ?? {};
+    } catch (error) {
+        console.log(`Failed to read context file ${contextFile}:`, error);
+        return {};
+    }
+}
+
+function applyBatchContext(overrides?: BaseStepContext & { contextFile?: string }): void {
+    const { contextFile, ...directContext } = overrides || {};
+    const fileContext = loadContextFromFile(contextFile);
+    const merged: BaseStepContext = {
+        ...envContext,
+        ...fileContext,
+        ...directContext,
+    };
+    setBaseStepDefaultContext(merged);
+}
 
 /**
  * 引数で指定されたエージェントを動かす。
  */
-export async function main(agentName: string = 'null') {
+export async function main(agentName: string = 'null', context?: BaseStepContext & { contextFile?: string }) {
     try {
+        applyBatchContext(context);
         // バッチ用はローカルファイルアクセスを許可する。
         aiApi.wrapperOptions.allowLocalFiles = true;
         // エージェントを動かす。

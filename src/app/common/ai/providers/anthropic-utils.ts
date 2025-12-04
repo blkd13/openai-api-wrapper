@@ -6,7 +6,7 @@ import OpenAI from "openai";
 // Anthropic 形式から OpenAI 形式へ変換する関数
 export function convertAnthropicToOpenAI(anthropic: Anthropic.Usage): OpenAI.CompletionUsage {
     // ここでは input_tokens を prompt_tokens、output_tokens を completion_tokens として扱う例です。
-    const prompt_tokens = anthropic.input_tokens;
+    const prompt_tokens = anthropic.input_tokens + (anthropic.cache_read_input_tokens || 0) + (anthropic.cache_creation_input_tokens || 0);
     const completion_tokens = anthropic.output_tokens;
     const total_tokens = prompt_tokens + completion_tokens;
 
@@ -14,6 +14,7 @@ export function convertAnthropicToOpenAI(anthropic: Anthropic.Usage): OpenAI.Com
     const prompt_tokens_details: OpenAI.CompletionUsage.PromptTokensDetails = {
         cached_tokens: anthropic.cache_read_input_tokens === null ? undefined : anthropic.cache_read_input_tokens,
         audio_tokens: 0,
+
     };
 
     // completion_tokens_details はすべて 0 としています

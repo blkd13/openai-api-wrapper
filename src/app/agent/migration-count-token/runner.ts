@@ -6,9 +6,9 @@ import _ from 'lodash';
 import * as path from 'path';
 import { In, Not } from 'typeorm';
 import { fileURLToPath } from 'url';
+import { MyVertexAiClient } from '../../common/ai/providers/vertexai.js';
 import { convertPptxToPdf } from '../../common/media-funcs.js';
-import { MyVertexAiClient } from '../../common/my-vertexai.js';
-import { genClientByProvider, getTiktokenEncoder, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
+import { genClientByProvider, invalidMimeList, plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
 import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
 import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL, geminiCountTokensByFile } from '../../service/controllers/chat-by-project-model.js';
 import { ds } from '../../service/db.js';
@@ -150,7 +150,7 @@ export async function main() {
                     content.tokenCount[COUNT_TOKEN_MODEL] = { totalTokens: 0, totalBillableCharacters: 0 };
                     content.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = { totalTokens: 0 };
                 } else {
-                    content.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(prompt).length };
+                    // content.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(prompt).length };
                 }
                 // console.log(`content.id: ${content.id} tokenCount: ${JSON.stringify(content.tokenCount)}`);
             });
@@ -315,8 +315,8 @@ export async function main() {
             // console.log(typeof contentParts.contents[0].parts[0].text);
 
             console.log(`toolTransaction.id: ${toolTransaction.id} text.length: ${contentParts.contents[0].parts[0].text.length}`);
-            const openaiTokenCount = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(contentParts.contents[0].parts[0].text).length, totalBillableCharacters: 0 };
-            toolCallEntity.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiTokenCount;
+            // const openaiTokenCount = { totalTokens: getTiktokenEncoder(COUNT_TOKEN_OPENAI_MODEL).encode(contentParts.contents[0].parts[0].text).length, totalBillableCharacters: 0 };
+            // toolCallEntity.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiTokenCount;
 
             const vertexTokenCount = await tokenResPromise;
             toolCallEntity.tokenCount[COUNT_TOKEN_MODEL] = vertexTokenCount;

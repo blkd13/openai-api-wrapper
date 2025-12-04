@@ -9,14 +9,12 @@ import { UserRequest } from '../models/info.js';
 import { UsageMetadata } from '@google-cloud/vertexai';
 import { body } from 'express-validator/lib/index.js';
 import { HttpsProxyAgent } from 'https-proxy-agent';
-import { MyVertexAiClient } from '../../common/my-vertexai.js';
+import { MyVertexAiClient } from '../../common/ai/providers/vertexai.js';
 
+import { TokenCount } from '../../common/ai/token-cost.js';
 import fss from '../../common/fss.js';
-import { GPTModels } from '../../common/model-definition.js';
-import { TokenCount } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
-import { ds } from '../db.js';
-import { PredictHistoryEntity } from '../entity/project-models.entity.js';
+import { getPredictHistoryLoggerForRequest, logPredictHistoryWithContext, PredictHistoryLogContext, ServicePredictHistoryLogger } from '../common/predict-history-logger.js';
 import { PredictHistoryStatus } from '../models/values.js';
 import { getAIProviderAndModel } from './chat-by-project-model.js';
 
@@ -58,17 +56,19 @@ const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? 
  * ログ出力用クラス
  */
 class LogObject {
+    lastTakeMs: number = 0;
     constructor(public baseTime: number, public tokenCount: TokenCount, public idempotencyKey: string, public label: string) { }
 
     output(stepName: string, error: any = '', message: string = ''): string {
         const _take = Date.now() - this.baseTime;
+        this.lastTakeMs = _take;
         const take = _take.toLocaleString().padStart(10, ' ');
         this.baseTime = Date.now();
 
         const prompt_tokens = this.tokenCount.prompt_tokens.toLocaleString().padStart(6, ' ');
         const completion_tokens = this.tokenCount.completion_tokens.toLocaleString().padStart(6, ' ');
 
-        const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} 0 ${take} ${prompt_tokens} ${completion_tokens} ${this.tokenCount.modelShort} ${this.label} ${error}`;
+        const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} 0 ${take} ${prompt_tokens} ${completion_tokens} ${this.tokenCount.model} ${this.label} ${error}`;
 
         fss.appendFile('history.log', `${logString} ${message}\n`, {}, () => { });
         return logString;
@@ -95,34 +95,78 @@ async function initializeRequest(req: UserRequest, modelName: string, suffix: st
     const timestamp = Utils.formatDate(new Date(), 'yyyyMMddHHmmssSSS');
     const argsHash = crypto.createHash('MD5').update(JSON.stringify(req.body)).digest('hex');
     const idempotencyKey = `${timestamp}-${argsHash}-${suffix}`;
-    const label = argsHash;
 
     const { aiProvider, aiModel } = await getAIProviderAndModel(req.info.user, modelName);
 
-    const tokenCount = new TokenCount(modelName as GPTModels, 0, 0);
-    const logObject = new LogObject(Date.now(), tokenCount, idempotencyKey, label);
+    const tokenCount = new TokenCount(modelName, 0, 0);
+    const logObject = new LogObject(Date.now(), tokenCount, idempotencyKey, argsHash);
 
-    return { idempotencyKey, label, tokenCount, aiProvider, aiModel, logObject };
+    return { idempotencyKey, argsHash, tokenCount, aiProvider, aiModel, logObject, modelName };
+}
+
+function buildHistoryContext(method: GeminiMethod, params: {
+    idempotencyKey: string;
+    argsHash: string;
+    aiProvider?: { name?: string } | null;
+    aiModel?: { name?: string } | null;
+    modelName: string;
+    tokenCount: TokenCount;
+}): PredictHistoryLogContext {
+    return {
+        idempotencyKey: params.idempotencyKey,
+        argsHash: params.argsHash,
+        label: `vertexai-gemini-proxy-${method}`,
+        provider: params.aiProvider?.name || 'gemini_vertex',
+        model: params.aiModel?.name || params.modelName,
+        tokenCount: params.tokenCount,
+    };
 }
 
 /**
  * 共通エラーハンドリング
  */
-async function handleError(error: any, logObject: LogObject, idempotencyKey: string, res: Response) {
+async function handleError(
+    error: any,
+    logObject: LogObject,
+    idempotencyKey: string,
+    res: Response,
+    predictLogger?: ServicePredictHistoryLogger,
+    historyContext?: PredictHistoryLogContext,
+    status: PredictHistoryStatus = PredictHistoryStatus.Error,
+) {
     console.log(logObject.output('error', error.response?.data || error.message));
 
     fss.writeFile(`${HISTORY_DIR}/${idempotencyKey}.error.json`, JSON.stringify({
         error: error.message,
     }, Utils.genJsonSafer()), {}, () => { });
 
-    const status = error.response?.status || 500;
+    const httpStatus = error.response?.status || 500;
     const data = error.response?.data || { error: error.message };
 
     if (data && typeof data.on === 'function') {
         const body = await readBodyFromUnzip(data);
-        console.error('status:', status, 'body:', body);
+        console.error('status:', httpStatus, 'body:', body);
     } else {
-        console.error('status:', status, 'data:', data);
+        console.error('status:', httpStatus, 'data:', data);
+    }
+
+    if (predictLogger && historyContext) {
+        const serialized = typeof data === 'string' ? data : JSON.stringify(data, Utils.genJsonSafer());
+        try {
+            historyContext.tokenCount?.prompt
+            await logPredictHistoryWithContext(predictLogger, {
+                ...historyContext,
+                takeMs: logObject.lastTakeMs,
+                tokenCount: {
+                    prompt: historyContext.tokenCount?.prompt,
+                    completion: historyContext.tokenCount?.completion,
+                    cost: historyContext.tokenCount?.cost,
+                },
+                message: serialized,
+            }, status);
+        } catch (logError) {
+            console.error('Failed to persist predict history', logError);
+        }
     }
 }
 
@@ -165,7 +209,7 @@ function applyUsageMetadata(tokenCount: TokenCount, usage?: UsageMetadata | null
     }
     tokenCount.prompt_tokens = usage.promptTokenCount ?? tokenCount.prompt_tokens;
     tokenCount.completion_tokens = usage.candidatesTokenCount ?? tokenCount.completion_tokens;
-    tokenCount.cost = tokenCount.calcCost();
+    // tokenCount.cost = tokenCount.calcCost();
 }
 
 function appendCandidateText(candidates: any[] | undefined, builder: string): string {
@@ -193,7 +237,7 @@ async function commonPreProcess(req: UserRequest, method: Exclude<GeminiMethod, 
     const { project, location, model } = req.params;
     const modelName = (model || req.body?.model || 'gemini-1.5-pro') as string;
 
-    const { idempotencyKey, aiModel, aiProvider, tokenCount, logObject } =
+    const { idempotencyKey, argsHash, aiModel, aiProvider, tokenCount, logObject } =
         await initializeRequest(req, modelName, method);
     console.log(logObject.output('start'));
 
@@ -206,8 +250,16 @@ async function commonPreProcess(req: UserRequest, method: Exclude<GeminiMethod, 
     }
 
     const vertexUrl = buildVertexUrl(targetProject, targetLocation, modelName, method);
+    const historyContext = buildHistoryContext(method, {
+        idempotencyKey,
+        argsHash,
+        aiProvider,
+        aiModel,
+        modelName,
+        tokenCount,
+    });
 
-    return { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject, modelName };
+    return { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject, modelName, historyContext };
 }
 
 /**
@@ -254,7 +306,7 @@ export const vertexAIGeminiCountTokens = [
             const totalTokens = usage?.totalTokens ?? usage?.totalTokenCount ?? 0;
             tokenCount.prompt_tokens = typeof totalTokens === 'number' ? totalTokens : 0;
             tokenCount.completion_tokens = 0;
-            tokenCount.cost = tokenCount.calcCost();
+            // tokenCount.cost = tokenCount.calcCost();
 
             console.log(logObject.output('count', '', JSON.stringify(usage)));
 
@@ -269,7 +321,7 @@ export const vertexAIGeminiCountTokens = [
                 'countTokens',
             ).catch(() => ({
                 idempotencyKey: 'error',
-                logObject: new LogObject(Date.now(), new TokenCount('gemini-1.5-pro' as GPTModels, 0, 0), 'error', 'error'),
+                logObject: new LogObject(Date.now(), new TokenCount('gemini-1.5-pro', 0, 0), 'error', 'error'),
             }));
             await handleError(err, fallback.logObject, fallback.idempotencyKey, res);
         }
@@ -283,9 +335,10 @@ export const vertexAIGeminiAPI = [
     ...commonValidation,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
+        const predictLogger = getPredictHistoryLoggerForRequest(req);
 
         try {
-            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject, modelName } =
+            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject, modelName, historyContext } =
                 await commonPreProcess(req, 'generateContent');
 
             fss.writeFile(`${HISTORY_DIR}/${idempotencyKey}.request.json`,
@@ -335,36 +388,29 @@ export const vertexAIGeminiAPI = [
                 JSON.stringify({ instance, url: vertexUrl, headers: vertexResponse.headers, response: vertexResponse.data }, Utils.genJsonSafer()), {}, () => { });
             fss.writeFile(`${HISTORY_DIR}/${idempotencyKey}.result.md`, tokenBuilder || '', {}, () => { });
 
-            const entity = new PredictHistoryEntity();
-            entity.idempotencyKey = idempotencyKey;
-            entity.argsHash = idempotencyKey.split('-')[1];
-            entity.label = `vertexai-gemini-proxy-${idempotencyKey.split('-')[2]}`;
-            entity.provider = aiProvider?.name || 'gemini_vertex';
-            entity.model = aiModel?.name || modelName;
-            entity.take = Date.now() - logObject.baseTime;
-            entity.reqToken = tokenCount.prompt_tokens;
-            entity.resToken = tokenCount.completion_tokens;
-            entity.cost = tokenCount.cost;
-            entity.status = PredictHistoryStatus.Fine;
-            entity.message = JSON.stringify(usageMetadata || {}, Utils.genJsonSafer());
-            entity.orgKey = req.info.user.orgKey;
-            entity.createdBy = req.info.user.id;
-            entity.updatedBy = req.info.user.id;
-            if (req.info.ip) {
-                entity.createdIp = req.info.ip;
-                entity.updatedIp = req.info.ip;
-            }
-
             console.log(logObject.output('fine', '', JSON.stringify(usageMetadata || {})));
-            await ds.getRepository(PredictHistoryEntity).save(entity);
+            await predictLogger.log({
+                idempotencyKey,
+                argsHash: historyContext.argsHash,
+                label: historyContext.label,
+                provider: historyContext.provider,
+                model: historyContext.model,
+                take: logObject.lastTakeMs,
+                reqToken: tokenCount.prompt_tokens,
+                resToken: tokenCount.completion_tokens,
+                cost: tokenCount.cost,
+                status: PredictHistoryStatus.Fine,
+                message: JSON.stringify(usageMetadata || {}, Utils.genJsonSafer()),
+            });
 
             res.status(vertexResponse.status).json(vertexResponse.data);
         } catch (err: any) {
             const fallback = await commonPreProcess(req, 'generateContent').catch(() => ({
                 idempotencyKey: 'error',
-                logObject: new LogObject(Date.now(), new TokenCount((req.params.model || 'gemini-1.5-pro') as GPTModels, 0, 0), 'error', 'error'),
+                logObject: new LogObject(Date.now(), new TokenCount((req.params.model || 'gemini-1.5-pro'), 0, 0), 'error', 'error'),
+                historyContext: undefined,
             }));
-            await handleError(err, fallback.logObject, fallback.idempotencyKey, res);
+            await handleError(err, fallback.logObject, fallback.idempotencyKey, res, predictLogger, fallback.historyContext);
         }
     }
 ];
@@ -376,10 +422,11 @@ export const vertexAIGeminiAPIStream = [
     ...commonValidation,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
+        const predictLogger = getPredictHistoryLoggerForRequest(req);
         console.log(`Request: ${req.method} ${req.originalUrl}`);
 
         try {
-            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject, modelName } =
+            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject, modelName, historyContext } =
                 await commonPreProcess(req, 'streamGenerateContent');
 
             let vertexResponse: AxiosResponse | undefined;
@@ -496,49 +543,63 @@ export const vertexAIGeminiAPIStream = [
                 if (!latestUsage) {
                     tokenCount.prompt_tokens = usageSummary.prompt_tokens || tokenCount.prompt_tokens;
                     tokenCount.completion_tokens = usageSummary.completion_tokens || tokenCount.completion_tokens;
-                    tokenCount.cost = tokenCount.calcCost();
+                    // tokenCount.cost = tokenCount.calcCost();
                 }
 
                 tokenCount.tokenBuilder = tokenBuilder;
                 fss.writeFile(`${HISTORY_DIR}/${idempotencyKey}.result.md`, tokenBuilder || '', {}, () => { });
 
-                const entity = new PredictHistoryEntity();
-                entity.idempotencyKey = idempotencyKey;
-                entity.argsHash = idempotencyKey.split('-')[1];
-                entity.label = `vertexai-gemini-proxy-${idempotencyKey.split('-')[2]}`;
-                entity.provider = aiProvider?.name || 'gemini_vertex';
-                entity.model = aiModel?.name || modelName;
-                entity.take = Date.now() - logObject.baseTime;
-                entity.reqToken = tokenCount.prompt_tokens;
-                entity.resToken = tokenCount.completion_tokens;
-                entity.cost = tokenCount.cost;
-                entity.status = PredictHistoryStatus.Fine;
-                entity.message = JSON.stringify(latestUsage || usageSummary, Utils.genJsonSafer());
-                entity.orgKey = req.info.user.orgKey;
-                entity.createdBy = req.info.user.id;
-                entity.updatedBy = req.info.user.id;
-                if (req.info.ip) {
-                    entity.createdIp = req.info.ip;
-                    entity.updatedIp = req.info.ip;
-                }
-
                 console.log(logObject.output('fine', '', JSON.stringify(latestUsage || usageSummary)));
-                await ds.getRepository(PredictHistoryEntity).save(entity);
+                try {
+                    await predictLogger.log({
+                        idempotencyKey,
+                        argsHash: historyContext.argsHash,
+                        label: historyContext.label,
+                        provider: historyContext.provider,
+                        model: historyContext.model,
+                        take: logObject.lastTakeMs,
+                        reqToken: tokenCount.prompt_tokens,
+                        resToken: tokenCount.completion_tokens,
+                        cost: tokenCount.cost,
+                        status: PredictHistoryStatus.Fine,
+                        message: JSON.stringify(latestUsage || usageSummary, Utils.genJsonSafer()),
+                    });
+                } catch (logError) {
+                    console.error('Failed to persist streaming predict history', logError);
+                }
             });
 
-            vertexResponse.data.on('error', (error: Error) => {
+            vertexResponse.data.on('error', async (error: Error) => {
                 console.log(logObject.output('error', error.message));
                 fss.writeFile(`${HISTORY_DIR}/${idempotencyKey}.error.json`,
                     JSON.stringify({ error: error.message, stack: error.stack }, Utils.genJsonSafer()), {}, () => { });
+                try {
+                    await predictLogger.log({
+                        idempotencyKey,
+                        argsHash: historyContext.argsHash,
+                        label: historyContext.label,
+                        provider: historyContext.provider,
+                        model: historyContext.model,
+                        take: logObject.lastTakeMs,
+                        reqToken: tokenCount.prompt_tokens,
+                        resToken: tokenCount.completion_tokens,
+                        cost: tokenCount.cost,
+                        status: PredictHistoryStatus.Error,
+                        message: error.message,
+                    });
+                } catch (logError) {
+                    console.error('Failed to persist streaming error history', logError);
+                }
             });
 
             vertexResponse.data.pipe(res);
         } catch (err: any) {
             const fallback = await commonPreProcess(req, 'streamGenerateContent').catch(() => ({
                 idempotencyKey: 'error',
-                logObject: new LogObject(Date.now(), new TokenCount((req.params.model || 'gemini-1.5-pro') as GPTModels, 0, 0), 'error', 'error'),
+                logObject: new LogObject(Date.now(), new TokenCount((req.params.model || 'gemini-1.5-pro'), 0, 0), 'error', 'error'),
+                historyContext: undefined,
             }));
-            await handleError(err, fallback.logObject, fallback.idempotencyKey, res);
+            await handleError(err, fallback.logObject, fallback.idempotencyKey, res, predictLogger, fallback.historyContext);
         }
     }
 ];

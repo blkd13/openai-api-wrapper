@@ -8,18 +8,21 @@ import { OpenAI } from 'openai';
 import { concatMap, from } from 'rxjs';
 import { EntityManager, In, IsNull, Not } from 'typeorm';
 
-import { CachedContent, countChars, GenerateContentRequestForCache, mapForGemini, MyVertexAiClient, TokenCharCount } from '../../common/my-vertexai.js';
-import { aiApi, AIProviderClient, calculateTokenCost, embeddings, invalidMimeList, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, normalizeMessage, providerInstances, providerPrediction, TokenCount } from '../../common/openai-api-wrapper.js';
+import { CachedContent, GenerateContentRequestForCache, mapForGemini, MyVertexAiClient } from '../../common/ai/providers/vertexai.js';
+import { calculateTokenCost } from '../../common/ai/token-cost.js';
+import { AIProviderClient, embeddings, invalidMimeList, MyAnthropic, MyAnthropicVertex, MyAzureOpenAI, MyChatCompletionCreateParamsStreaming, MyCohere, MyGemini, MyOpenAI, MyToolType, normalizeMessage, providerInstances, providerPrediction } from '../../common/openai-api-wrapper.js';
 import { convertToPdfMimeList, convertToPdfMimeMap, PdfMetaData } from '../../common/pdf-funcs.js';
 import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
+import { getServiceAIClient } from '../common/ai-client.js';
+import { getPredictHistoryLoggerForRequest, getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
 import { ScopedEntityService } from '../common/scoped-entity-service.js';
 import { ds } from '../db.js';
 import { AIModelEntity, AIModelPricingEntity, AIProviderEntity, AIProviderType, getAIProviderConfig } from '../entity/ai-model-manager.entity.js';
-import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus, ScopeType, UserEntity, UserStatus } from '../entity/auth.entity.js';
+import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus, UserEntity, UserStatus } from '../entity/auth.entity.js';
 import { safeWhere } from '../entity/base.js';
 import { FileBodyEntity, FileEntity } from '../entity/file-models.entity.js';
 import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
 import { ToolCallGroupEntity, ToolCallPart, ToolCallPartCall, ToolCallPartCallBody, ToolCallPartCommand, ToolCallPartEntity, ToolCallPartInfo, ToolCallPartResult, ToolCallPartResultBody, ToolCallPartType } from '../entity/tool-call.entity.js';
 import { UserSettingEntity } from '../entity/user.entity.js';
 import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
@@ -31,6 +34,8 @@ import { tokenCounterPool } from '../worker/token-counter-service.js';
 import { clients } from './chat.js';
 import { uploadFileFunction } from './file-manager.js';
 import { appendToolCallPart } from './tool-call.js';
+
+const aiApi = getServiceAIClient();
 
 
 const { GCP_PROJECT_ID, GCP_CONTEXT_CACHE_LOCATION, GCP_API_BASE_PATH } = process.env;
@@ -145,7 +150,10 @@ async function buildFileGroupBodyMap(
  */
 export type ArgsBuildType = 'threadGroup' | 'thread' | 'messageGroup' | 'message' | 'contentPart' | 'error';
 export type MessageSet = { threadGroup: ThreadGroupEntity, thread: ThreadEntity, messageGroup: MessageGroupEntity, message: MessageEntity, contentPartList: ContentPartEntity[] };
-export type MessageArgsSet = MessageSet & { args: MyChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, } & { totalTokens?: number, totalBillableCharacters?: number } & { aiProviderClient: AIProviderClient };
+export type MessageArgsSet = MessageSet
+    & { args: MyChatCompletionCreateParamsStreaming, options?: { idempotencyKey?: string }, }
+    & { totalTokens?: number, totalBillableCharacters?: number }
+    & { aiProviderClient: AIProviderClient, aiModel: AIModelEntity, aiPrice: AIModelPricingEntity };
 export async function buildArgs(
     user: UserTokenPayloadWithRole,
     type: ArgsBuildType,
@@ -610,9 +618,9 @@ export async function buildArgs(
         });
 
         // AIプロバイダクライアントを取得
-        const aiProviderClient = await getAIProvider(user, inDto.args.model || 'default-model');
+        const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(user, inDto.args.model || 'default-model');
 
-        messageArgsSetList.push({ ...messageSet, args: inDto.args, options: inDto.options, aiProviderClient });
+        messageArgsSetList.push({ ...messageSet, args: inDto.args, options: inDto.options, aiProviderClient, aiModel, aiPrice });
 
         // 無理矢理だが、o系のモデルは出力が苦手なので調整しておく。
         if (inDto.args.model.startsWith('o1') || inDto.args.model.startsWith('o3') || inDto.args.model.startsWith('o4')) {
@@ -645,51 +653,31 @@ export async function buildArgs(
 }
 
 
-export async function getAIProviderAndModel(user: UserTokenPayloadWithRole, modelName: string): Promise<{ aiProvider: AIProviderEntity, aiModel: AIModelEntity }> {
+export async function getAIProviderAndModel(user: UserTokenPayloadWithRole, modelName: string): Promise<{ aiProvider: AIProviderEntity, aiModel: AIModelEntity, aiPrice: AIModelPricingEntity }> {
     const model = await ScopedEntityService.findByNameWithScope(
         ds.getRepository(AIModelEntity),
         modelName,
-        user
+        user,
     );
 
     if (!model) {
         throw new Error(`モデル ${modelName} が見つかりません。${user.id}`);
     }
 
-    if (!TokenCount.COST_TABLE[modelName]) {
-        // TODO 本来はidじゃなくてnameで当ててscopeの優先順位計算をすべきだが一旦手抜き
-        const price = await ds.getRepository(AIModelPricingEntity).findOne({
-            where: safeWhere({ orgKey: user.orgKey, modelId: model.id, isActive: true }),
-        }) || {} as AIModelPricingEntity;
-        if (!price.id) {
-            // console.log(`モデル ${modelName} の価格情報が見つからないので、デフォルトの価格を設定します。`);
-            // errorでもよかったが一応、、
-            // throw new Error(`モデル ${modelName} の価格情報が見つかりません。`);
-            Object.assign(price, {
-                id: '',
-                orgKey: user.orgKey,
-                modelId: model.id,
-                scopeInfo: {
-                    scopeType: ScopeType.ORGANIZATION,
-                    scopeId: user.orgKey,
-                },
-                name: modelName,
-                inputPricePerUnit: 0,
-                outputPricePerUnit: 0,
-                unit: '',
-                validFrom: new Date(),
-                isActive: true,
-            });
-        } else { }
+    // TODO 本来はidじゃなくてnameで当ててscopeの優先順位計算をすべきだが一旦手抜き
+    const aiPrice = await ds.getRepository(AIModelPricingEntity).findOne({
+        where: safeWhere({ orgKey: user.orgKey, modelId: model.id, isActive: true }),
+        order: { validFrom: 'DESC' }
+    }) || {} as AIModelPricingEntity;
+    // const price = await ScopedEntityService.findByNameWithScope(
+    //     ds.getRepository(AIModelPricingEntity),
+    //     modelName,
+    //     user,
+    // );
+    if (!aiPrice) {
+        throw new Error(`モデル ${modelName} の価格情報が見つかりません。`);
+    }
 
-        // CONST_TABLEに無理やり追加。本当はこんなやり方はしたくない。
-        TokenCount.COST_TABLE[modelName] = {
-            prompt: price.inputPricePerUnit,
-            completion: price.outputPricePerUnit,
-            metadata: price.metadata,
-        } as { prompt: number, completion: number, metadata?: any };
-        // console.log(`モデル ${modelName} の価格情報をデフォルト値で設定しました。`, TokenCount.COST_TABLE[modelName]);
-    } else { }
 
     const providerList = await Promise.all(
         model.providerNameList.map(async providerName => {
@@ -711,6 +699,7 @@ export async function getAIProviderAndModel(user: UserTokenPayloadWithRole, mode
     return {
         aiProvider: providerList[Math.floor(Math.random() * providerList.length)],
         aiModel: model, // 最優先のモデルを使用
+        aiPrice,
     };
 }
 
@@ -783,12 +772,12 @@ async function checkUserBudget(user: UserTokenPayloadWithRole): Promise<{
     }
 }
 
-export async function getAIProvider(user: UserTokenPayloadWithRole, modelName: string): Promise<AIProviderClient> {
-    const { aiProvider, aiModel } = await getAIProviderAndModel(user, modelName);
+export async function getAIProvider(user: UserTokenPayloadWithRole, modelName: string): Promise<{ aiProviderClient: AIProviderClient, aiModel: AIModelEntity, aiPrice: AIModelPricingEntity }> {
+    const { aiProvider, aiModel, aiPrice } = await getAIProviderAndModel(user, modelName);
 
     if (providerInstances[aiProvider.id] && providerInstances[aiProvider.id].updatedAt.getTime() === aiProvider.updatedAt.getTime()) {
         // 既にクライアントが生成されている場合はそれを返す
-        return providerInstances[aiProvider.id].client;
+        return { aiProviderClient: providerInstances[aiProvider.id].client, aiModel, aiPrice };
     } else { }
 
     console.log(`Using AI provider: ${aiProvider.name} (${aiProvider.type}) ${aiProvider.id})`);
@@ -854,7 +843,7 @@ export async function getAIProvider(user: UserTokenPayloadWithRole, modelName: s
 
     // クライアントをキャッシュに保存
     providerInstances[aiProvider.id] = { client: aiProviderClient, updatedAt: aiProvider.updatedAt };
-    return aiProviderClient;
+    return { aiProviderClient, aiModel, aiPrice };
 }
 
 export const budgetCheck = [
@@ -910,6 +899,8 @@ export const chatCompletionByProjectModel = [
         // connectionIdはクライアントで発番しているので、万が一にも混ざらないようにユーザーIDを付与。
         const clientId = `${user.id}-${connectionId}` as string;
         const label = options?.idempotencyKey || `${options?.labelPrefix || 'chat'}-${clientId}-${streamId}-${id}`;
+        const predictHistoryWrapperLogger = getPredictHistoryWrapperLoggerForRequest(req);
+        const predictHistoryLogger = getPredictHistoryLoggerForRequest(req);
 
         const stockList: {
             text: string,
@@ -944,14 +935,23 @@ export const chatCompletionByProjectModel = [
                 console.error('Failed to save user setting:', error);
             }
 
-            const my_vertexai = ((await getAIProvider(user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient);
-            const client = my_vertexai.client;
-            const generativeModel = client.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
+            // const { aiProviderClient, aiModel, aiPrice } = (await getAIProvider(user, COUNT_TOKEN_MODEL));
+            // const my_vertexai = aiProviderClient.client as MyVertexAiClient;
+            // const client = my_vertexai.client;
+            // const generativeModel = client.getGenerativeModel({ model: COUNT_TOKEN_MODEL, safetySettings: [], });
 
             const idList = id.split('|');
             const { messageArgsSetList } = await buildArgs(user, type, idList);
             // 取得できるメッセージが無い場合は早期に応答（ハング防止）
             if (!messageArgsSetList || messageArgsSetList.length === 0) {
+                // await logPredictHistoryWithContext(predictHistoryLogger, {
+                //     idempotencyKey: label,
+                //     argsHash: label,
+                //     label,
+                //     provider: 'unknown',
+                //     model: 'unknown',
+                //     message: 'Not found or inaccessible',
+                // }, PredictHistoryStatus.Error).catch((err) => console.error('Failed to log predict history', err));
                 res.status(404).set('Content-Type', 'text/plain; charset=utf-8').end('Not found or inaccessible');
                 return;
             }
@@ -1196,19 +1196,21 @@ export const chatCompletionByProjectModel = [
                     // console.dir(inDto.args, { depth: null });
 
                     // レスポンス返した後にゆるりとヒストリーを更新しておく。
-                    const history = new PredictHistoryWrapperEntity();
-                    history.connectionId = connectionId;
-                    history.streamId = streamId;
-                    history.messageId = message.id;
-                    history.label = label;
-                    history.model = inDto.args.model;
-                    history.provider = obj.inDto.aiProviderClient.type;
-                    history.orgKey = user.orgKey;
-                    history.createdBy = user.id;
-                    history.updatedBy = user.id;
-                    history.createdIp = ip;
-                    history.updatedIp = ip;
-                    await transactionalEntityManager.save(PredictHistoryWrapperEntity, history);
+                    await predictHistoryWrapperLogger.log({
+                        label,
+                        model: inDto.args.model,
+                        provider: obj.inDto.aiProviderClient.type,
+                        connectionId,
+                        streamId,
+                        messageId: message.id,
+                    });
+                    // await logPredictHistoryWithContext(predictHistoryLogger, {
+                    //     idempotencyKey: inDto.options?.idempotencyKey || label,
+                    //     argsHash: inDto.options?.idempotencyKey || label,
+                    //     label,
+                    //     provider: obj.inDto.aiProviderClient.type,
+                    //     model: inDto.args.model,
+                    // }, PredictHistoryStatus.Fine).catch((err) => console.error('Failed to log predict history', err));
 
                     // 入力でtoolCallCommandがある場合はツール実行指示からなので、末尾のメッセージID内の全コンテンツのfunctionを実行する
                     const toolCallCallList = [] as OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall[];
@@ -1408,14 +1410,15 @@ export const chatCompletionByProjectModel = [
                                     // stringじゃない場合はJSON.stringifyしておく。
                                     contentParts.contents[0].parts[0].text = JSON.stringify(contentParts.contents[0].parts[0].text);
                                 }
-                                const tokenResPromise = generativeModel.countTokens(contentParts);
 
-                                toolCallEntity.tokenCount = toolCallEntity.tokenCount || {};
 
-                                const openaiTokenCount = { totalTokens: await tokenCounterPool.countTokens(contentParts.contents[0].parts[0].text, COUNT_TOKEN_OPENAI_MODEL) };
-                                toolCallEntity.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiTokenCount;
+                                // TODO トークンカウント対応
+                                // const tokenResPromise = generativeModel.countTokens(contentParts);
+                                // toolCallEntity.tokenCount = toolCallEntity.tokenCount || {};
+                                // const openaiTokenCount = { totalTokens: await tokenCounterPool.countTokens(contentParts.contents[0].parts[0].text, COUNT_TOKEN_OPENAI_MODEL) };
+                                // toolCallEntity.tokenCount[COUNT_TOKEN_OPENAI_MODEL] = openaiTokenCount;
+                                // toolCallEntity.tokenCount[COUNT_TOKEN_MODEL] = await tokenResPromise;
 
-                                toolCallEntity.tokenCount[COUNT_TOKEN_MODEL] = await tokenResPromise;
                             } else { }
                             await transactionalEntityManager.save(ToolCallPartEntity, toolCallEntity);
                         }
@@ -1489,8 +1492,8 @@ export const chatCompletionByProjectModel = [
                 }>((resolve, reject) => {
                     ( // toolCallCommandがある場合はツール実行指示なのでtoolCallObservableStreamを使う
                         (toolCallPartCommandList && toolCallPartCommandList.length > 0)
-                            ? aiApi.toolCallObservableStream(inDto.args, { label, functions }, provider, providerAndToolCallCallListAry[index].toolCallCallList, toolCallPartCommandList)
-                            : aiApi.chatCompletionObservableStream(inDto.args, { label, functions }, provider)
+                            ? aiApi.toolCallObservableStream(inDto.args, { label, functions }, provider, providerAndToolCallCallListAry[index].toolCallCallList, toolCallPartCommandList, messageArgsSetList[index].aiModel, messageArgsSetList[index].aiPrice)
+                            : aiApi.chatCompletionObservableStream(inDto.args, { label, functions }, provider, messageArgsSetList[index].aiModel, messageArgsSetList[index].aiPrice)
                     ).pipe(
                         // DB更新があるので async/await をする必要があるのでfromでObservable化してconcatMapで纏めて待つ
                         // こうしないとcompleteが先に走ってしまう可能性がある。
@@ -1893,7 +1896,8 @@ export const geminiCountTokensByProjectModel = [
         try {
             // カウントしたいだけだからパラメータは適当でOK。
             const args = { messages: [], model: COUNT_TOKEN_MODEL, temperature: 0.7, top_p: 1, max_tokens: 1024, stream: true, providerName: 'vertex_ai' } as MyChatCompletionCreateParamsStreaming;
-            const client = (await getAIProvider(req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient;
+            const { aiProviderClient, aiModel, aiPrice } = (await getAIProvider(req.info.user, COUNT_TOKEN_MODEL));
+            const client = aiProviderClient.client as MyVertexAiClient;
 
             // const preTokenCount = { totalTokens: 0, totalBillableCharacters: 0 };
             const tokenCountSummaryList: { [model: string]: { totalTokens: number, totalBillableCharacters?: number } }[] = [];
@@ -1977,7 +1981,7 @@ export const geminiCountTokensByProjectModel = [
                         try {
                             const args = next.args;
                             const req: GenerateContentRequest = mapForGemini(args);
-                            const countCharsObj = countChars(args);
+                            // const countCharsObj = countChars(args);
                             // console.dir(req, { depth: null });
                             const generativeModel = client.client.getGenerativeModel({
                                 model: COUNT_TOKEN_MODEL,
@@ -2095,9 +2099,11 @@ export const geminiCountTokensByThread = [
 ];
 
 export async function geminiCountTokensByContentPart(transactionalEntityManager: EntityManager, contents: ContentPartEntity[], user: UserTokenPayloadWithRole, model: string = COUNT_TOKEN_MODEL): Promise<ContentPartEntity[]> {
-    const client = ((await getAIProvider(user, model)).client as MyVertexAiClient).client;
+    // const client = ((await getAIProvider(user, model)).aiProviderClient as MyVertexAiClient).client;
+    const { aiProviderClient, aiModel, aiPrice } = (await getAIProvider(user, model));
+    const client = aiProviderClient.client as MyVertexAiClient;
     // console.dir(contents, { depth: null });
-    const generativeModel = client.getGenerativeModel({
+    const generativeModel = client.client.getGenerativeModel({
         model, safetySettings: [],
     });
 
@@ -2176,9 +2182,9 @@ export async function geminiCountTokensByContentPart(transactionalEntityManager:
 }
 
 export async function geminiCountTokensByFile(transactionalEntityManager: EntityManager, fileList: { base64Data?: string, buffer?: Buffer | string, fileBodyEntity: FileBodyEntity }[], user: UserTokenPayloadWithRole, model: string = COUNT_TOKEN_MODEL): Promise<FileBodyEntity[]> {
-    const my_vertexai = ((await getAIProvider(user, model)).client as MyVertexAiClient);
-    const client = my_vertexai.client;
-    const generativeModel = client.getGenerativeModel({
+    const { aiProviderClient, aiModel, aiPrice } = (await getAIProvider(user, model));
+    const client = aiProviderClient.client as MyVertexAiClient;
+    const generativeModel = client.client.getGenerativeModel({
         model, safetySettings: [],
     });
 
@@ -2193,7 +2199,7 @@ export async function geminiCountTokensByFile(transactionalEntityManager: Entity
         } else if (errStr.includes('got status: 401 Unauthorized.')) {
             // 認証エラーは再認証してからretry
             console.log('retry 401');
-            await my_vertexai.getAccessToken();
+            await client.getAccessToken();
             return { shouldRetry: true };
         }
         // その他のエラーは再試行しない
@@ -2360,6 +2366,10 @@ export const geminiCreateContextCacheByProjectModel = [
             }
             const gcpProjectId = (messageArgsSetList[0].args as any).gcpProjectId || GCP_PROJECT_ID;
             const url = `${CONTEXT_CACHE_API_ENDPOINT}/projects/${gcpProjectId}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`;
+
+            const { aiProviderClient, aiModel, aiPrice } = (await getAIProvider(req.info.user, model));
+            const client = aiProviderClient.client as MyVertexAiClient;
+
             normalizeMessage(messageArgsSetList[0].args, false).subscribe({
                 next: async next => {
                     try {
@@ -2374,14 +2384,14 @@ export const geminiCreateContextCacheByProjectModel = [
                         //     gemMapped.contents.unshift(gemMapped.systemInstruction);
                         // } else { }
 
-                        const countCharsObj = countChars(args);
-                        const my_vertexai = (await getAIProvider(req.info.user, model)).client as MyVertexAiClient;
+                        // const countCharsObj = countChars(args);
+                        const my_vertexai = aiProviderClient.client as MyVertexAiClient;
                         const client = my_vertexai.client;
                         const generativeModel = client.getGenerativeModel({
                             model: COUNT_TOKEN_MODEL,
                             safetySettings: [],
                         });
-                        const countObj: TokenCharCount = await generativeModel.countTokens(gemMapped).then(tokenObject => Object.assign(tokenObject, countCharsObj));
+                        // const countObj: TokenCharCount = await generativeModel.countTokens(gemMapped).then(tokenObject => Object.assign(tokenObject, countCharsObj));
 
                         // リクエストボディ
                         const requestBody = {
@@ -2414,15 +2424,15 @@ export const geminiCreateContextCacheByProjectModel = [
                                 entity.expireTime = new Date(cache.expireTime);
                                 entity.updateTime = new Date(cache.updateTime);
 
-                                // トークンカウント
-                                entity.totalBillableCharacters = countObj.totalBillableCharacters;
-                                entity.totalTokens = countObj.totalTokens;
+                                // // トークンカウント
+                                // entity.totalBillableCharacters = countObj.totalBillableCharacters;
+                                // entity.totalTokens = countObj.totalTokens;
 
-                                // 独自トークンカウント
-                                entity.audio = countObj.audio;
-                                entity.image = countObj.image;
-                                entity.text = countObj.text;
-                                entity.video = countObj.video;
+                                // // 独自トークンカウント
+                                // entity.audio = countObj.audio;
+                                // entity.image = countObj.image;
+                                // entity.text = countObj.text;
+                                // entity.video = countObj.video;
 
                                 // // メッセージ結果（ここは取れないのでずっと0になる）
                                 // entity.candidatesTokenCount = 0;
@@ -2503,6 +2513,9 @@ export const geminiUpdateContextCacheByProjectModel = [
             const cachedContent: VertexCachedContentEntity = (inDto.args as any).cachedContent;
             const cacheName = cachedContent.name;
 
+            const { aiProviderClient, aiModel, aiPrice } = (await getAIProvider(req.info.user, inDto.args.model));
+            const client = aiProviderClient.client as MyVertexAiClient;
+
             // キャッシュの存在確認
             let cacheEntity = await ds.getRepository(VertexCachedContentEntity).findOneOrFail({
                 where: { orgKey: req.info.user.orgKey, name: cacheName }
@@ -2510,7 +2523,7 @@ export const geminiUpdateContextCacheByProjectModel = [
 
             let savedCachedContent: VertexCachedContentEntity | undefined;
 
-            const my_vertexai = (await getAIProvider(req.info.user, inDto.args.model)).client as MyVertexAiClient;
+            const my_vertexai = aiProviderClient.client as MyVertexAiClient;
             my_vertexai.getAuthorizedHeaders().then(headers =>
                 axios.patch(`${CONTEXT_CACHE_API_ENDPOINT}/${cachedContent.name}`, { ttl }, headers)
             ).then(async response => {
@@ -2572,13 +2585,17 @@ export const geminiDeleteContextCacheByProjectModel = [
                 res.status(404).set('Content-Type', 'text/plain; charset=utf-8').end('No threads found');
                 return;
             }
+
+
             const result = await ds.transaction(async transactionalEntityManager => {
                 for (const thread of threadList) {
                     // TODO for文で書いては見たものの最後axios投げるところが複数スレッド対応していないので注意。
                     const inDto = thread.inDto;
                     const cachedContent: VertexCachedContentEntity = (inDto.args as any).cachedContent;
 
-                    const my_vertexai = (await getAIProvider(req.info.user, inDto.args.model)).client as MyVertexAiClient;
+                    const { aiProviderClient, aiModel, aiPrice } = (await getAIProvider(req.info.user, inDto.args.model));
+                    const client = aiProviderClient.client as MyVertexAiClient;
+
                     // cachedContentを消して更新
                     delete (inDto.args as any).cachedContent;
                     thread.inDto = inDto;
@@ -2604,7 +2621,7 @@ export const geminiDeleteContextCacheByProjectModel = [
                         .execute();
 
                     // TODO googleに投げる前にDBコミットすることにした。こうすることで通信エラーを無視できるけどキャッシュが残っちゃったときどうするんだろう。。
-                    await my_vertexai.getAuthorizedHeaders().then(headers =>
+                    await client.getAuthorizedHeaders().then(headers =>
                         axios.delete(`${CONTEXT_CACHE_API_ENDPOINT}/${cachedContent.name}`, headers)
                     ).then(async response => {
                         res.end(JSON.stringify(response.data));
@@ -2627,7 +2644,9 @@ export const geminiGetContextCache = [
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
         try {
-            const my_vertexai = (await getAIProvider(req.info.user, COUNT_TOKEN_MODEL)).client as MyVertexAiClient;
+
+            const { aiProviderClient } = (await getAIProvider(req.info.user, COUNT_TOKEN_MODEL));
+            const my_vertexai = aiProviderClient.client as MyVertexAiClient;
             my_vertexai.getAuthorizedHeaders().then(headers =>
                 axios.get(`${CONTEXT_CACHE_API_ENDPOINT}/projects/${GCP_PROJECT_ID}/locations/${GCP_CONTEXT_CACHE_LOCATION}/cachedContents`, headers)
             ).then(response => {
@@ -2650,7 +2669,8 @@ export const embeddingsApi = [
         const { input, model } = req.body as { input: string, model: string };
         try {
             // console.log(model);
-            const provider = await getAIProvider(req.info.user, model);
+            const { aiProviderClient } = await getAIProvider(req.info.user, model);
+            const provider = aiProviderClient;
             const emb = await embeddings(req.info.user.orgKey, req.info.user.id, req.info.ip, model, provider, input);
             // res.end(emb);
             res.end(JSON.stringify(emb));

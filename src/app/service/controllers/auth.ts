@@ -1,5 +1,5 @@
 import { AxiosInstance } from 'axios';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { createHmac, randomBytes, randomInt, randomUUID } from 'crypto';
 import { Request, Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
@@ -2190,4 +2190,5 @@ export const checkProjectPermission = [
         }
     }
 ];
+
 

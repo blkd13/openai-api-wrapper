@@ -1,13 +1,14 @@
-import { MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
+import { MyToolType, providerPrediction } from "../../common/openai-api-wrapper.js";
 import { UserRequest } from "../models/info.js";
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from "../entity/project-models.entity.js";
 import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
+import { AIClientLike } from '../common/ai-client.js';
 
 // 1. 関数マッピングの作成
 export async function confluenceFunctionDefinitions(providerSubName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
-    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+    req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
     const provider = `confluence-${providerSubName}`;
     return [

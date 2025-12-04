@@ -46,6 +46,8 @@ const templateMas: { [key: string]: string } = {
         /**
          * このエージェント用の共通設定。
          * エージェントごとに設定したいデフォルト値が異なるのでrunnerの最初に書くことにした。
+         * BaseStep は CLI の --org-key / --user-id / --ip または OAW_DEFAULT_* で渡した
+         * コンテキストを引き継ぐ。個別に変えたい場合は constructor で this.applyContext(...) する。
          */
         abstract class BaseStepSample extends BaseStep {
             agentName: string = Utils.basename(Utils.dirname(import.meta.url));

@@ -1,29 +1,23 @@
+import { Usage } from "@anthropic-ai/sdk/resources.js";
 import axios, { AxiosResponse } from 'axios';
 import * as crypto from 'crypto';
 import { Request, Response } from "express";
+import { body } from "express-validator/lib/index.js";
 import * as fs from 'fs';
-
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { Stream } from "stream";
+import { calcCost } from '../../common/ai/providers/anthropic.js';
+import { MyVertexAiClient } from '../../common/ai/providers/vertexai.js';
+import { TokenCount } from "../../common/ai/token-cost.js";
+import fss from '../../common/fss.js';
+import { Utils } from "../../common/utils.js";
+import { getPredictHistoryLoggerForRequest, logPredictHistoryWithContext, PredictHistoryLogContext, ServicePredictHistoryLogger } from '../common/predict-history-logger.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
-
-import { HttpsProxyAgent } from 'https-proxy-agent';
-const { GCP_PROJECT_ID, GCP_REGION, GCP_REGION_ANTHROPIC, GCP_API_BASE_PATH } = process.env;
-
-import { body } from "express-validator/lib/index.js";
-import { MyVertexAiClient } from '../../common/my-vertexai.js';
-
-// ファイルシステム関連のimport
-import { Usage } from "@anthropic-ai/sdk/resources.js";
-import fss from '../../common/fss.js';
-import { GPTModels } from "../../common/model-definition.js";
-import { TokenCount } from "../../common/openai-api-wrapper.js";
-import { Utils } from "../../common/utils.js";
-import { ds } from "../db.js";
-import { PredictHistoryEntity } from "../entity/project-models.entity.js";
 import { PredictHistoryStatus } from "../models/values.js";
 import { getAIProviderAndModel } from "./chat-by-project-model.js";
 
-import { Stream } from "stream";
+const { GCP_PROJECT_ID, GCP_REGION, GCP_REGION_ANTHROPIC, GCP_API_BASE_PATH } = process.env;
 
 /**
  * UnzipなどのStreamからbody文字列を読み出すユーティリティ関数
@@ -58,17 +52,19 @@ const options = Object.keys(proxyObj).filter(key => proxyObj[key]).length > 0 ? 
  * ログ出力用クラス
  */
 class LogObject {
+    lastTakeMs: number = 0;
     constructor(public baseTime: number, public tokenCount: TokenCount, public idempotencyKey: string, public label: string) { }
 
     output(stepName: string, error: any = '', message: string = ''): string {
         const _take = Date.now() - this.baseTime;
+        this.lastTakeMs = _take;
         const take = _take.toLocaleString().padStart(10, ' ');
         this.baseTime = Date.now();
 
         const prompt_tokens = this.tokenCount.prompt_tokens.toLocaleString().padStart(6, ' ');
         const completion_tokens = this.tokenCount.completion_tokens.toLocaleString().padStart(6, ' ');
 
-        const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} 0 ${take} ${prompt_tokens} ${completion_tokens} ${this.tokenCount.modelShort} ${this.label} ${error}`;
+        const logString = `${Utils.formatDate()} ${stepName.padEnd(5, ' ')} 0 ${take} ${prompt_tokens} ${completion_tokens} ${this.tokenCount.model} ${this.label} ${error}`;
 
         fss.appendFile(`history.log`, `${logString} ${message}\n`, {}, () => { });
         return logString;
@@ -99,18 +95,44 @@ async function initializeRequest(req: UserRequest, modelName: string, suffix: st
     // const modelObject = await ds.getRepository(AIModelEntity).findOneByOrFail({ name: modelName || 'claude-3-5-sonnet-20241022' });
     // const modelPrice = await ds.getRepository(AIModelPricingEntity).findOneOrFail({ where: { modelId: modelObject.id }, order: { validFrom: 'DESC' } });
 
-    const { aiProvider, aiModel } = await getAIProviderAndModel(req.info.user, modelName);
+    const { aiProvider, aiModel, aiPrice } = await getAIProviderAndModel(req.info.user, modelName);
 
-    const tokenCount = new TokenCount(modelName as GPTModels, 0, 0);
+    const tokenCount = new TokenCount(modelName, 0, 0);
     const logObject = new LogObject(Date.now(), tokenCount, idempotencyKey, label);
 
-    return { idempotencyKey, label, tokenCount, aiProvider, aiModel, logObject };
+    return { idempotencyKey, label, argsHash, tokenCount, aiProvider, aiModel, aiPrice, logObject, modelName };
+}
+
+function buildHistoryContext(method: string, params: {
+    idempotencyKey: string;
+    argsHash: string;
+    aiProvider?: { name?: string } | null;
+    aiModel?: { name?: string } | null;
+    modelName: string;
+    tokenCount: TokenCount;
+}): PredictHistoryLogContext {
+    return {
+        idempotencyKey: params.idempotencyKey,
+        argsHash: params.argsHash,
+        label: `vertexai-claude-proxy-${method}`,
+        provider: params.aiProvider?.name || 'anthropic_vertex',
+        model: params.aiModel?.name || params.modelName,
+        tokenCount: params.tokenCount,
+    };
 }
 
 /**
  * 共通のエラーハンドリング
  */
-async function handleError(error: any, logObject: LogObject, idempotencyKey: string, res: Response) {
+async function handleError(
+    error: any,
+    logObject: LogObject,
+    idempotencyKey: string,
+    res: Response,
+    predictLogger?: ServicePredictHistoryLogger,
+    historyContext?: PredictHistoryLogContext,
+    status: PredictHistoryStatus = PredictHistoryStatus.Error,
+) {
     console.log(logObject.output('error', error.response?.data || error.message));
 
     fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.error.json`, JSON.stringify({
@@ -119,15 +141,32 @@ async function handleError(error: any, logObject: LogObject, idempotencyKey: str
         // stack: err.stack,
     }, Utils.genJsonSafer()), {}, () => { });
 
-    const status = error.response?.status || 500;
+    const httpStatus = error.response?.status || 500;
     const data = error.response?.data || { error: error.message };
-    // console.error(status, data);
 
     if (data && typeof data.on === "function") {
         const body = await readBodyFromUnzip(data);
-        console.error("status:", status, "body:", body);
+        console.error("status:", httpStatus, "body:", body);
     } else {
-        console.error("status:", status, "data:", data);
+        console.error("status:", httpStatus, "data:", data);
+    }
+
+    if (predictLogger && historyContext) {
+        const serialized = typeof data === 'string' ? data : JSON.stringify(data, Utils.genJsonSafer());
+        try {
+            await logPredictHistoryWithContext(predictLogger, {
+                ...historyContext,
+                takeMs: logObject.lastTakeMs,
+                tokenCount: {
+                    prompt: historyContext.tokenCount?.prompt,
+                    completion: historyContext.tokenCount?.completion,
+                    cost: historyContext.tokenCount?.cost,
+                },
+                message: serialized,
+            }, status);
+        } catch (logError) {
+            console.error('Failed to persist predict history', logError);
+        }
     }
 }
 
@@ -173,12 +212,17 @@ const my_vertexai = new MyVertexAiClient([{
  */
 async function commonPreProcess(req: UserRequest, suffix: string) {
     const { project, location, model } = req.params;
+    const modelName = (model || req.body?.model || 'claude-3-5-sonnet-20241022') as string;
 
-    const { idempotencyKey, label, aiModel, aiProvider, tokenCount, logObject } = await initializeRequest(req, model, suffix);
+    const { idempotencyKey, label, argsHash, aiModel, aiProvider, aiPrice, tokenCount, logObject } = await initializeRequest(req, modelName, suffix);
     console.log(logObject.output('start'));
 
-    const targetProject = (aiProvider.config as { projectId: string }).projectId || GCP_PROJECT_ID || project || 'default-project';
-    const targetLocation = (aiProvider.config as { regionList: string[] }).regionList[Math.floor(Math.random() * (aiProvider.config as { regionList: string[] }).regionList.length)] || GCP_REGION_ANTHROPIC || location || 'us-central1';
+    const providerConfig = (aiProvider?.config || {}) as { projectId?: string; regionList?: string[] };
+    const regionList = (Array.isArray(providerConfig.regionList) && providerConfig.regionList.length > 0)
+        ? providerConfig.regionList
+        : [GCP_REGION_ANTHROPIC || location || 'us-central1'];
+    const targetProject = providerConfig.projectId || GCP_PROJECT_ID || project || 'default-project';
+    const targetLocation = regionList[Math.floor(Math.random() * regionList.length)];
 
     const instance = req.body;
     if (!instance || !Array.isArray(instance.messages)) {
@@ -186,9 +230,17 @@ async function commonPreProcess(req: UserRequest, suffix: string) {
         throw new Error('Invalid request: messages が必要です');
     }
 
-    const vertexUrl = buildVertexUrl(targetProject, targetLocation, model, suffix as any);
+    const vertexUrl = buildVertexUrl(targetProject, targetLocation, modelName, suffix as any);
+    const historyContext = buildHistoryContext(suffix, {
+        idempotencyKey,
+        argsHash,
+        aiProvider,
+        aiModel,
+        modelName,
+        tokenCount,
+    });
 
-    return { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject };
+    return { instance, vertexUrl, idempotencyKey, aiProvider, aiModel, aiPrice, tokenCount, logObject, historyContext };
 }
 
 /**
@@ -269,7 +321,7 @@ export const vertexAIByAnthropicAPICountTokens = [
         } catch (err: any) {
             const { idempotencyKey, logObject } = await initializeRequest(req, 'claude-3-5-sonnet-20241022', 'count_tokens').catch(() => ({
                 idempotencyKey: 'error',
-                logObject: new LogObject(Date.now(), new TokenCount(req.params.model as GPTModels), 'error', 'error')
+                logObject: new LogObject(Date.now(), new TokenCount(req.params.model), 'error', 'error')
             }));
             await handleError(err, logObject, idempotencyKey, res);
         }
@@ -283,9 +335,10 @@ export const vertexAIByAnthropicAPI = [
     ...commonValidation,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
+        const predictLogger = getPredictHistoryLoggerForRequest(req);
 
         try {
-            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject } =
+            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, aiPrice, tokenCount, logObject, historyContext } =
                 await commonPreProcess(req, 'rawPredict');
 
             // リクエストをファイルに書き出す
@@ -333,20 +386,10 @@ export const vertexAIByAnthropicAPI = [
 
             // レスポンスからトークン数を取得
             if (vertexResponse.data?.usage) {
-                const usage = vertexResponse.data.usage as Usage;
-                const costTable = TokenCount.COST_TABLE[aiModel.name];
-                tokenCount.prompt_tokens = usage.input_tokens || 0;
-                tokenCount.completion_tokens = usage.output_tokens || 0;
-                tokenCount.cost = 0;
-                tokenCount.cost += usage.input_tokens * costTable.prompt / 1_000_000; // 1Mトークンあたりのコストを掛ける
-                tokenCount.cost += usage.output_tokens * costTable.completion / 1_000_000; // 1Mトークンあたりのコストを掛ける
-                // args.modelはthinkingが外れてるのでcommonArgsのmodelを使う
-                if (usage.cache_creation_input_tokens && costTable && (costTable as any).metadata?.cache_creation_input_tokens > 0) {
-                    tokenCount.cost += usage.cache_creation_input_tokens * (costTable as any).metadata?.cache_creation_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
-                } else { }
-                if (usage.cache_read_input_tokens && costTable && (costTable as any).metadata?.cache_read_input_tokens > 0) {
-                    tokenCount.cost += usage.cache_read_input_tokens * (costTable as any).metadata?.cache_read_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
-                } else { }
+                let usageCost = calcCost(vertexResponse.data, aiPrice);
+                tokenCount.prompt_tokens = usageCost.prompt_tokens;
+                tokenCount.completion_tokens = usageCost.completion_tokens;
+                tokenCount.cost = usageCost?.cost || 0;
             }
 
             // レスポンステキストを抽出（ログ用）
@@ -362,35 +405,29 @@ export const vertexAIByAnthropicAPI = [
                 JSON.stringify({ instance, url: vertexUrl, headers: vertexResponse.headers, response: vertexResponse.data }, Utils.genJsonSafer()), {}, () => { });
             fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.result.md`, tokenCount.tokenBuilder || '', {}, () => { });
 
-            const entity = new PredictHistoryEntity();
-            entity.idempotencyKey = idempotencyKey;
-            entity.argsHash = idempotencyKey.split('-')[1];
-            entity.label = `vertexai-claude-proxy-${idempotencyKey.split('-')[2]}`;
-            entity.provider = aiProvider?.name || 'anthropic_vertex';
-            entity.model = aiModel?.name || 'claude-3-5-sonnet-20241022';
-            entity.take = Date.now() - logObject.baseTime;
-            entity.reqToken = tokenCount.prompt_tokens;
-            entity.resToken = tokenCount.completion_tokens;
-            entity.cost = tokenCount.cost;
-            entity.status = PredictHistoryStatus.Fine;
-            entity.message = JSON.stringify(vertexResponse.data.usage); // 追加メッセージがあれば書く。
-            entity.orgKey = req.info.user.orgKey; // ここでは利用者不明
-            entity.createdBy = req.info.user.id; // ここでは利用者不明
-            entity.updatedBy = req.info.user.id; // ここでは利用者不明
-            if (req.info.ip) {
-                entity.createdIp = req.info.ip; // ここでは利用者不明
-                entity.updatedIp = req.info.ip; // ここでは利用者不明
-            } else { }
             console.log(logObject.output('fine', '', JSON.stringify(vertexResponse.data.usage)));
-            await ds.getRepository(PredictHistoryEntity).save(entity);
+            await predictLogger.log({
+                idempotencyKey,
+                argsHash: historyContext.argsHash,
+                label: historyContext.label,
+                provider: historyContext.provider,
+                model: historyContext.model,
+                take: logObject.lastTakeMs,
+                reqToken: tokenCount.prompt_tokens,
+                resToken: tokenCount.completion_tokens,
+                cost: tokenCount.cost,
+                status: PredictHistoryStatus.Fine,
+                message: JSON.stringify(vertexResponse.data.usage || {}, Utils.genJsonSafer()),
+            });
 
             res.status(vertexResponse.status).json(vertexResponse.data);
         } catch (err: any) {
-            const { idempotencyKey, logObject } = await commonPreProcess(req, 'predict').catch(() => ({
+            const { idempotencyKey, logObject, historyContext } = await commonPreProcess(req, 'predict').catch(() => ({
                 idempotencyKey: 'error',
-                logObject: new LogObject(Date.now(), new TokenCount(req.params.model as GPTModels), 'error', 'error')
+                logObject: new LogObject(Date.now(), new TokenCount(req.params.model), 'error', 'error'),
+                historyContext: undefined,
             }));
-            await handleError(err, logObject, idempotencyKey, res);
+            await handleError(err, logObject, idempotencyKey, res, predictLogger, historyContext);
         }
     }
 ];
@@ -402,10 +439,11 @@ export const vertexAIByAnthropicAPIStream = [
     ...commonValidation,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
+        const predictLogger = getPredictHistoryLoggerForRequest(req);
         console.log(`Request: ${req.method} ${req.originalUrl}`);
 
         try {
-            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject } =
+            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, aiPrice, tokenCount, logObject, historyContext } =
                 await commonPreProcess(req, 'streamRawPredict');
 
             let vertexResponse: AxiosResponse | undefined;
@@ -558,18 +596,18 @@ export const vertexAIByAnthropicAPIStream = [
                     }
                 }
 
-                const costTable = TokenCount.COST_TABLE[aiModel.name];
+                // const aiPrice = TokenCount.COST_TABLE[aiModel.name];
                 message = JSON.stringify(usage, Utils.genJsonSafer());
-                tokenCount.cost = 0;
-                tokenCount.cost += usage.input_tokens * costTable.prompt / 1_000_000; // 1Mトークンあたりのコストを掛ける
-                tokenCount.cost += usage.output_tokens * costTable.completion / 1_000_000; // 1Mトークンあたりのコストを掛ける
-                // args.modelはthinkingが外れてるのでcommonArgsのmodelを使う
-                if (usage.cache_creation_input_tokens && costTable && (costTable as any).metadata?.cache_creation_input_tokens > 0) {
-                    tokenCount.cost += usage.cache_creation_input_tokens * (costTable as any).metadata?.cache_creation_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
-                } else { }
-                if (usage.cache_read_input_tokens && costTable && (costTable as any).metadata?.cache_read_input_tokens > 0) {
-                    tokenCount.cost += usage.cache_read_input_tokens * (costTable as any).metadata?.cache_read_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
-                } else { }
+                // tokenCount.cost = 0;
+                // tokenCount.cost += usage.input_tokens * aiPrice.prompt / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                // tokenCount.cost += usage.output_tokens * aiPrice.completion / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                // // args.modelはthinkingが外れてるのでcommonArgsのmodelを使う
+                // if (usage.cache_creation_input_tokens && aiPrice && aiPrice.metadata?.cache_creation_input_tokens > 0) {
+                //     tokenCount.cost += usage.cache_creation_input_tokens * aiPrice.metadata?.cache_creation_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                // } else { }
+                // if (usage.cache_read_input_tokens && aiPrice && aiPrice.metadata?.cache_read_input_tokens > 0) {
+                //     tokenCount.cost += usage.cache_read_input_tokens * aiPrice.metadata?.cache_read_input_tokens / 1_000_000; // 1Mトークンあたりのコストを掛ける
+                // } else { }
 
                 // バッファをクリア
                 dataBuffer = '';
@@ -577,46 +615,60 @@ export const vertexAIByAnthropicAPIStream = [
                 tokenCount.tokenBuilder = tokenBuilder;
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.result.md`, tokenBuilder || '', {}, () => { });
 
-                const entity = new PredictHistoryEntity();
-                entity.idempotencyKey = idempotencyKey;
-                entity.argsHash = idempotencyKey.split('-')[1];
-                entity.label = `vertexai-claude-proxy-${idempotencyKey.split('-')[2]}`;
-                entity.provider = aiProvider?.name || 'anthropic_vertex';
-                entity.model = aiModel?.name || 'claude-3-5-sonnet-20241022';
-                entity.take = Date.now() - logObject.baseTime;
-                entity.reqToken = tokenCount.prompt_tokens;
-                entity.resToken = tokenCount.completion_tokens;
-                entity.cost = tokenCount.cost;
-                entity.status = PredictHistoryStatus.Fine;
-                entity.message = message; // 追加メッセージがあれば書く。
-                entity.orgKey = req.info.user.orgKey; // ここでは利用者不明
-                entity.createdBy = req.info.user.id; // ここでは利用者不明
-                entity.updatedBy = req.info.user.id; // ここでは利用者不明
-                if (req.info.ip) {
-                    entity.createdIp = req.info.ip; // ここでは利用者不明
-                    entity.updatedIp = req.info.ip; // ここでは利用者不明
-                } else { }
-
                 console.log(logObject.output('fine', '', JSON.stringify({
                     prompt_tokens: tokenCount.prompt_tokens,
                     completion_tokens: tokenCount.completion_tokens
                 })));
-                await ds.getRepository(PredictHistoryEntity).save(entity);
+                try {
+                    await predictLogger.log({
+                        idempotencyKey,
+                        argsHash: historyContext.argsHash,
+                        label: historyContext.label,
+                        provider: historyContext.provider,
+                        model: historyContext.model,
+                        take: logObject.lastTakeMs,
+                        reqToken: tokenCount.prompt_tokens,
+                        resToken: tokenCount.completion_tokens,
+                        cost: tokenCount.cost,
+                        status: PredictHistoryStatus.Fine,
+                        message,
+                    });
+                } catch (logError) {
+                    console.error('Failed to persist streaming predict history', logError);
+                }
             });
 
-            vertexResponse.data.on('error', (error: Error) => {
+            vertexResponse.data.on('error', async (error: Error) => {
                 console.log(logObject.output('error', error.message));
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.error.json`,
                     JSON.stringify({ error: error.message, stack: error.stack }, Utils.genJsonSafer()), {}, () => { });
+                try {
+                    await predictLogger.log({
+                        idempotencyKey,
+                        argsHash: historyContext.argsHash,
+                        label: historyContext.label,
+                        provider: historyContext.provider,
+                        model: historyContext.model,
+                        take: logObject.lastTakeMs,
+                        reqToken: tokenCount.prompt_tokens,
+                        resToken: tokenCount.completion_tokens,
+                        cost: tokenCount.cost,
+                        status: PredictHistoryStatus.Error,
+                        message: error.message,
+                    });
+                } catch (logError) {
+                    console.error('Failed to persist streaming error history', logError);
+                }
             });
 
             vertexResponse.data.pipe(res);
         } catch (err: any) {
-            const { idempotencyKey, logObject } = await commonPreProcess(req, 'streamRawPredict').catch(() => ({
+            const { idempotencyKey, logObject, historyContext } = await commonPreProcess(req, 'streamRawPredict').catch(() => ({
                 idempotencyKey: 'error',
-                logObject: new LogObject(Date.now(), new TokenCount(req.params.model as GPTModels, 0, 0), 'error', 'error')
+                logObject: new LogObject(Date.now(), new TokenCount(req.params.model, 0, 0), 'error', 'error'),
+                historyContext: undefined,
             }));
-            await handleError(err, logObject, idempotencyKey, res);
+            await handleError(err, logObject, idempotencyKey, res, predictLogger, historyContext);
         }
     }
 ];
