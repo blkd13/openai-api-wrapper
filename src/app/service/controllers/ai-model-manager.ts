@@ -3,7 +3,7 @@ import { body, param, query } from 'express-validator';
 import { EntityManager, In } from 'typeorm';
 
 import { AIModelAlias, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIProviderEntity, AIProviderTemplateEntity, AIProviderType, TagEntity } from '../entity/ai-model-manager.entity.js';
-import { ScopeType } from '../entity/auth.entity.js';
+import { ScopeType, UserRoleType } from '../entity/auth.entity.js';
 
 import { Utils } from '../../common/utils.js';
 import { ScopedEntityService } from '../common/scoped-entity-service.js';
@@ -38,7 +38,8 @@ export const getAIProviderTemplates = [
             // 新しいサービスを使用してスコープ考慮の一覧取得
             const providers = await ScopedEntityService.findAllWithScope(
                 ds.getRepository(AIProviderTemplateEntity),
-                req.info.user,
+                req.info.user.orgKey,
+                req.info.user.roleList,
                 { additionalFilters, includeOverridden }
             );
 
@@ -162,7 +163,8 @@ export const getAIProviders = [
             // 新しいサービスを使用してスコープ考慮の一覧取得
             const providers = await ScopedEntityService.findAllWithScope(
                 ds.getRepository(AIProviderEntity),
-                req.info.user,
+                req.info.user.orgKey,
+                req.info.user.roleList,
                 { additionalFilters, includeOverridden },
             );
 
@@ -202,7 +204,7 @@ export const upsertAIProvider = [
                 bodyData,
                 req.info.ip,
                 {
-                    uniqueFields: ['type', 'name'],
+                    uniqueFields: [['type', 'name']],
                     beforeSave: async (entity: AIProviderEntity, isNew: boolean) => {
                         // オプショナルフィールドの設定
                         if ('description' in bodyData) entity.description = bodyData.description;
@@ -285,7 +287,8 @@ export const getBaseModels = [
             // 新しいサービスを使用してスコープ考慮の一覧取得
             const models = await ScopedEntityService.findAllWithScope(
                 ds.getRepository(AIModelEntity),
-                req.info.user,
+                req.info.user.orgKey,
+                req.info.user.roleList,
                 { additionalFilters, includeOverridden }
             );
 
@@ -656,7 +659,7 @@ export const upsertModelPricing = [
                 bodyData,
                 req.info.ip,
                 {
-                    uniqueFields: ['name'], // nameで一意性を保証（スコープを考慮）
+                    uniqueFields: [['name', 'validFrom']], // name / validFrom で一意性を保証（スコープを考慮）
                 }
             );
 
@@ -727,7 +730,8 @@ export const getAllTags = [
             // ScopedEntityServiceを使用してスコープ考慮の一覧取得
             const tags = await ScopedEntityService.findAllWithScope(
                 ds.getRepository(TagEntity),
-                req.info.user,
+                req.info.user.orgKey,
+                req.info.user.roleList,
                 { includeOverridden }
             );
 

@@ -93,7 +93,6 @@ export class MyOpenAI {
                 // ストリームからデータを読み取るためのリーダーを取得
                 const reader = response.data.toReadableStream().getReader();
 
-                let tokenBuilder: string = '';
                 let isThinking = false;
 
                 // ストリームからデータを読み取る非同期関数
@@ -110,7 +109,7 @@ export class MyOpenAI {
 
                             // ファイルに書き出す
                             const trg = args.response_format?.type === 'json_object' ? 'json' : 'md';
-                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, tokenBuilder || '', {}, () => { });
+                            fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.result.${trg}`, ctx.tokenCount.tokenBuilder || '', {}, () => { });
                             break;
                         }
                         // 中身を取り出す
@@ -134,7 +133,7 @@ export class MyOpenAI {
                         const text = obj.choices.map(choice => choice.delta).filter(delta => delta).map(delta => delta.content || '').join('');
 
                         // <think></think> タグを処理する。
-                        if (!tokenBuilder && text.trim() === '<think>') {
+                        if (!ctx.tokenCount.tokenBuilder && text.trim() === '<think>') {
                             isThinking = true;
                             obj.choices.forEach(choice => delete choice.delta.content);
                         } else if (isThinking) {
@@ -148,8 +147,7 @@ export class MyOpenAI {
                             }
                         } else {
                             // 通常処理
-                            // tokenBuilder += text;
-                            // tokenCount.tokenBuilder = tokenBuilder;
+                            ctx.tokenCount.tokenBuilder += text;
                         }
                         if (obj.usage) {
                             // tokenCount.prompt_tokens = obj.usage.prompt_tokens || tokenCount.prompt_tokens;

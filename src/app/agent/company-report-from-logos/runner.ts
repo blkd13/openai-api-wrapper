@@ -10,7 +10,7 @@ import { Utils } from '../../common/utils.js';
  */
 abstract class BaseStepCompanyReportFromLogos extends BaseStep {
     agentName: string = Utils.basename(Utils.dirname(import.meta.url));
-    model: GPTModels = 'gemini-1.5-flash-002';
+    model: GPTModels = 'gemini-2.5-flash';
     systemMessageJa = 'Experts in AI-related businesses'; // AIビジネスの専門家
     lang: PromptLang = 'ja';
     format = StepOutputFormat.MARKDOWN;

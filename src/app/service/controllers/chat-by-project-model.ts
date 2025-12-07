@@ -18,7 +18,7 @@ import { getPredictHistoryLoggerForRequest, getPredictHistoryWrapperLoggerForReq
 import { ScopedEntityService } from '../common/scoped-entity-service.js';
 import { ds } from '../db.js';
 import { AIModelEntity, AIModelPricingEntity, AIProviderEntity, AIProviderType, getAIProviderConfig } from '../entity/ai-model-manager.entity.js';
-import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus, UserEntity, UserStatus } from '../entity/auth.entity.js';
+import { DepartmentEntity, DepartmentMemberEntity, DepartmentRoleType, OAuthAccountEntity, OAuthAccountStatus, UserEntity, UserRoleType, UserStatus } from '../entity/auth.entity.js';
 import { safeWhere } from '../entity/base.js';
 import { FileBodyEntity, FileEntity } from '../entity/file-models.entity.js';
 import { VertexCachedContentEntity } from '../entity/gemini-models.entity.js';
@@ -165,12 +165,17 @@ export async function buildArgs(
 ): Promise<{
     messageArgsSetList: MessageArgsSet[],
 }> {
+    if (idList.length === 0) {
+        return { messageArgsSetList: [] };
+    } else { }
+
     // 万が一にもwhere句の中の条件に対してundefinedが入ってはいけないので強制的に||''を足しておく。
     // where句の条件項目に対してundefinedが入ってしまうと、条件自体が消えるので、結果的に適当に選ばれたやつが選択される。
 
     // 指定されたIDから末尾（トリガー）となるメッセージを取得する。
     // 共通のクエリヘルパー関数
     const getLatestMessagesByMessageGroupIds = async (messageGroupIds: string[]): Promise<MessageEntity[]> => {
+        if (messageGroupIds.length === 0) return [];
         const activeMessage = await ds.getRepository(MessageEntity)
             .createQueryBuilder("t")
             .select("t.*") // ここは性能が悪化してきたら絞った方がいいかもしれない。少なくともlabelは要らないので。
@@ -181,6 +186,7 @@ export async function buildArgs(
         return convertKeysToCamelCase(activeMessage);
     };
     const getLatestMessageGroupsByThreadIds = async (threadIds: string[]): Promise<MessageGroupEntity[]> => {
+        if (threadIds.length === 0) return [];
         const subQuery = ds.getRepository(MessageGroupEntity)
             .createQueryBuilder("t")
             .select([
@@ -657,7 +663,8 @@ export async function getAIProviderAndModel(user: UserTokenPayloadWithRole, mode
     const model = await ScopedEntityService.findByNameWithScope(
         ds.getRepository(AIModelEntity),
         modelName,
-        user,
+        user.orgKey,
+        user.roleList.filter(r => r.role === UserRoleType.User), // ユーザロールで絞る
     );
 
     if (!model) {
@@ -685,7 +692,8 @@ export async function getAIProviderAndModel(user: UserTokenPayloadWithRole, mode
             const provider = await ScopedEntityService.findByNameWithScope(
                 ds.getRepository(AIProviderEntity),
                 providerName,
-                user
+                user.orgKey,
+                user.roleList.filter(r => r.role === UserRoleType.User), // ユーザロールで絞る
             );
             if (!provider) {
                 throw new Error(`プロバイダ ${providerName} が見つかりません。`);
@@ -920,19 +928,21 @@ export const chatCompletionByProjectModel = [
                 }
             }
 
-            // コンバージョンアップロード
-            try {
-                const existing = await ds.getRepository(UserSettingEntity).findOne({ where: { orgKey: user.orgKey, userId: user.id, key: 'trafficSource' } });
-                // if (existing) {
-                //     if (existing.value?.gclid) {
-                //         // gclidがついていたらコンバージョン飛ばす
-                //         // async functionだが完了待つ必要ないので敢えて待たない
-                //         uploadClickConversion(existing.value.gclid, process.env.GOOGLE_ADS_CONVERSION_ACTION_AI_QUERY!, new Date(), 1);
-                //         console.log(`GCLID conversion uploaded: ${existing.value.gclid}`);
-                //     } else { /** 無ければ無いでおかしいことではない */ }
-                // } else { /** 無ければ無いでおかしいことではない */ }
-            } catch (error) {
-                console.error('Failed to save user setting:', error);
+            if (false) {
+                // コンバージョンアップロード
+                try {
+                    const existing = await ds.getRepository(UserSettingEntity).findOne({ where: { orgKey: user.orgKey, userId: user.id, key: 'trafficSource' } });
+                    // if (existing) {
+                    //     if (existing.value?.gclid) {
+                    //         // gclidがついていたらコンバージョン飛ばす
+                    //         // async functionだが完了待つ必要ないので敢えて待たない
+                    //         uploadClickConversion(existing.value.gclid, process.env.GOOGLE_ADS_CONVERSION_ACTION_AI_QUERY!, new Date(), 1);
+                    //         console.log(`GCLID conversion uploaded: ${existing.value.gclid}`);
+                    //     } else { /** 無ければ無いでおかしいことではない */ }
+                    // } else { /** 無ければ無いでおかしいことではない */ }
+                } catch (error) {
+                    console.error('Failed to save user setting:', error);
+                }
             }
 
             // const { aiProviderClient, aiModel, aiPrice } = (await getAIProvider(user, COUNT_TOKEN_MODEL));
@@ -1904,6 +1914,11 @@ export const geminiCountTokensByProjectModel = [
             if (id) {
                 // メッセージIDが指定されていたらまずそれらを読み込む
                 const { messageArgsSetList } = await buildArgs(req.info.user, type, [id], 'countOnly');
+                // 取得できるメッセージが無い場合は早期に応答（ハング防止）
+                if (!messageArgsSetList || messageArgsSetList.length === 0) {
+                    res.status(404).set('Content-Type', 'text/plain; charset=utf-8').end('Not found or inaccessible');
+                    return;
+                } else { }
 
                 // const tokenCountSummary: { [model: string]: { totalTokens: number, totalBillableCharacters: number } } = {};
                 // 実体はトークン数だけが返ってくる
@@ -2077,6 +2092,12 @@ export const geminiCountTokensByThread = [
             if (ids.length > 0) {
                 // メッセージIDが指定されていたらまずそれらを読み込む
                 const { messageArgsSetList } = await buildArgs(req.info.user, 'thread', ids, 'countOnly');
+                // 取得できるメッセージが無い場合は早期に応答（ハング防止）
+                if (!messageArgsSetList || messageArgsSetList.length === 0) {
+                    res.status(404).set('Content-Type', 'text/plain; charset=utf-8').end('Not found or inaccessible');
+                    return;
+                } else { }
+
                 // 指定されたIDの順番に並び替え
                 const messageArgsSetListSorted = ids.map(id => messageArgsSetList.find(m => m.thread.id === id) as MessageArgsSet);
                 // 実体はトークン数だけが返ってくる
@@ -2348,6 +2369,12 @@ export const geminiCreateContextCacheByProjectModel = [
         const { ttl, expire_time } = req.body as GenerateContentRequestForCache;
         try {
             const { messageArgsSetList } = await buildArgs(req.info.user, type, [id], 'createCache');
+            // 取得できるメッセージが無い場合は早期に応答（ハング防止）
+            if (!messageArgsSetList || messageArgsSetList.length === 0) {
+                res.status(404).set('Content-Type', 'text/plain; charset=utf-8').end('Not found or inaccessible');
+                return;
+            } else { }
+
             // const modelId: 'gemini-1.5-flash-001' | 'gemini-1.5-pro-001' = 'gemini-1.5-flash-001';
 
             const user = await ds.getRepository(UserEntity).findOneOrFail({ where: { id: userId, orgKey, status: UserStatus.Active } });

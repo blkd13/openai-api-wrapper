@@ -7,7 +7,7 @@ import { MyToolType, plainExtensions, plainMime } from "../../common/openai-api-
 import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
 import { Utils } from "../../common/utils.js";
 import { boxDownloadCore } from "../api/api-box.js";
-import { AIClientLike } from '../common/ai-client.js';
+import { AIClientLike, getServiceAIClient } from '../common/ai-client.js';
 import { getPredictHistoryLoggerForRequest, getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
 import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
 import { ds } from "../db.js";
@@ -16,6 +16,7 @@ import { ContentPartEntity, MessageEntity, MessageGroupEntity } from "../entity/
 import { UserRequest } from "../models/info.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
 
+const _aiApi = getServiceAIClient();
 
 // 1. 関数マッピングの作成
 export async function boxFunctionDefinitions(
@@ -23,6 +24,7 @@ export async function boxFunctionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
+    const aiApi_ = aiApi || _aiApi; // フォールバック
     const provider = `box-${providerName}`;
     const wrapperLogger = getPredictHistoryWrapperLoggerForRequest(req);
     const predictHistoryLogger = getPredictHistoryLoggerForRequest(req);
@@ -165,7 +167,7 @@ export async function boxFunctionDefinitions(
                 return new Promise((resolve, reject) => {
                     let text = '';
                     // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
-                    aiApi.chatCompletionObservableStream(
+                    aiApi_.chatCompletionObservableStream(
                         inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
                     ).pipe(
                         map(res => res.choices.map(choice => choice.delta.content).join('')),

@@ -3,7 +3,7 @@ import { In } from 'typeorm';
 import { MattermostChannel, MattermostUser } from '../../agent/api-mattermost/api.js';
 import { MyToolType } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
-import { AIClientLike } from '../common/ai-client.js';
+import { AIClientLike, getServiceAIClient } from '../common/ai-client.js';
 import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
 import { MmUserEntity } from '../entity/api-mattermost.entity.js';
@@ -12,12 +12,15 @@ import { UserRequest } from '../models/info.js';
 import { getOAuthAccountForTool, reform } from './common.js';
 
 
+const _aiApi = getServiceAIClient();
+
 // 1. 関数マッピングの作成
 export async function mattermostFunctionDefinitions(
     providerName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
+    const aiApi_ = aiApi || _aiApi; // フォールバック
     const provider = `mattermost-${providerName}`;
     return [
         {

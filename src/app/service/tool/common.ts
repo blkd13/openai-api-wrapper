@@ -17,7 +17,7 @@ import { In } from 'typeorm';
 import { getAxios, getPuppeteer } from '../../common/http-client.js';
 import { MyToolType } from '../../common/openai-api-wrapper.js';
 import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
-import { AIClientLike } from '../common/ai-client.js';
+import { AIClientLike, getServiceAIClient } from '../common/ai-client.js';
 import { getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
 import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
@@ -27,6 +27,8 @@ import { OAuthAccountEntity } from '../entity/auth.entity.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../entity/project-models.entity.js';
 import { UserRequest } from '../models/info.js';
 
+
+const _aiApi = getServiceAIClient();
 
 const turndownService = new TurndownService();
 turndownService.remove(['script', 'style']); // 特定のHTML要素を削除
@@ -376,7 +378,7 @@ const aiModels = [
     { 'model': 'o1', 'description': '内部推論モデル。超高精度だが遅くて、高コスト。', },
     { 'model': 'o3-mini', 'description': '内部推論モデル。超高精度だが遅くて、高コスト。', },
     // { 'model': 'gemini-1.5-flash', 'description': '高速かつ効率的、Gemini 1.5 Proの軽量版。大量の情報を迅速に処理するニーズに応え、コスト効率も高い。リアルタイム処理が求められる場面での活用が期待されている。', },
-    { 'model': 'gemini-1.5-pro', 'description': '長文コンテキスト処理能力に優れる。大量のテキストやコードの解析に強みを発揮。特定のタスクにおいて既存モデルを超える性能を示す。', },
+    { 'model': 'gemini-2.5-pro', 'description': '長文コンテキスト処理能力に優れる。大量のテキストやコードの解析に強みを発揮。特定のタスクにおいて既存モデルを超える性能を示す。', },
     { 'model': 'gemini-2.0-pro-exp-02-05', 'description': 'gemini-1.5-proの次世代モデル。前世代を上回る性能を持つが、試験運用版のためやや不安定な動作もある。' },
     { 'model': 'claude-3-5-sonnet-20241022', 'description': '推論、コーディング、コンテンツ作成など多様なタスクに対応。安全性と倫理的な配慮が重視されており、企業での利用に適している。バランスの取れた性能も評価されている。', },
     { 'model': 'claude-3-7-sonnet-20250219', 'description': '推論、コーディング、コンテンツ作成など多様なタスクに対応。安全性と倫理的な配慮が重視されており、企業での利用に適している。バランスの取れた性能も評価されている。ツール利用が得意', },
@@ -389,6 +391,7 @@ export function commonFunctionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): MyToolType[] {
+    const aiApi_ = aiApi || _aiApi; // フォールバック
     const wrapperLogger = getPredictHistoryWrapperLoggerForRequest(req);
     return [
         {
@@ -569,20 +572,12 @@ export function commonFunctionDefinitions(
                                 messageId: message.id,
                                 label: newLabel,
                                 model: inDto.args.model,
-                                provider: aiProviderClient.type,
+                                provider: aiProviderClient.name,
                             });
-                            const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
-                            // await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
-                            //     idempotencyKey,
-                            //     argsHash: idempotencyKey,
-                            //     label: newLabel,
-                            //     provider: aiProviderClient.type,
-                            //     model: inDto.args.model,
-                            // }, PredictHistoryStatus.Fine).catch((err) => console.error('Failed to log predict history', err));
 
                             return new Promise((resolve, reject) => {
                                 let text = '';
-                                aiApi.chatCompletionObservableStream(
+                                aiApi_.chatCompletionObservableStream(
                                     inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
                                 ).pipe(
                                     timeout(30_000), // ← 30秒のタイムアウトを設定（ミリ秒）
@@ -594,34 +589,9 @@ export function commonFunctionDefinitions(
                                         text += next;
                                     },
                                     error: async error => {
-                                        const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
-                                        // try {
-                                        //     await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
-                                        //         idempotencyKey,
-                                        //         argsHash: idempotencyKey,
-                                        //         label: newLabel,
-                                        //         provider: aiProviderClient.type,
-                                        //         model: inDto.args.model,
-                                        //         message: error?.message || String(error),
-                                        //     }, PredictHistoryStatus.Error);
-                                        // } catch (logErr) {
-                                        //     console.error('Failed to log predict history', logErr);
-                                        // }
                                         resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: 'error' });
                                     },
                                     complete: async () => {
-                                        const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
-                                        // try {
-                                        //     await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
-                                        //         idempotencyKey,
-                                        //         argsHash: idempotencyKey,
-                                        //         label: newLabel,
-                                        //         provider: aiProviderClient.type,
-                                        //         model: inDto.args.model,
-                                        //     }, PredictHistoryStatus.Fine);
-                                        // } catch (logErr) {
-                                        //     console.error('Failed to log predict history', logErr);
-                                        // }
                                         resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: text });
                                     },
                                 });
@@ -689,6 +659,83 @@ export function commonFunctionDefinitions(
                 }));
                 await browser.close();
                 return res;
+            },
+        },
+        {
+            info: { group: 'ai', isActive: true, isInteractive: false, label: 'Gemini Google検索', },
+            definition: {
+                type: 'function', function: {
+                    name: 'web_search_by_gemini',
+                    description: `Gemini AIのGoogle検索機能を使って質問に答える`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            query: { type: 'string', description: '質問・検索クエリ' },
+                            model: { type: 'string', description: '使用するモデル[gemini-2.5-pro(default), gemini-2.5-flash, gemini-2.0-flash]' },
+                            systemPrompt: { type: 'string', description: 'システムプロンプト（default=あなたはGoogle検索を使って最新情報を提供できるアシスタントAIです。）' },
+                        },
+                        required: ['query']
+                    }
+                }
+            },
+            handler: async (args: { query: string, model?: string, systemPrompt?: string }): Promise<string> => {
+                const { query } = args;
+                const systemPrompt = args.systemPrompt || 'あなたはGoogle検索を使って最新情報を提供できるアシスタントAIです。';
+                const model = args.model || 'gemini-2.5-pro';
+                const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, model);
+
+                const inDto = Utils.deepCopyOmitting(obj.inDto, 'aiProviderClient');
+                inDto.args.model = model || inDto.args.model;
+                inDto.args.isGoogleSearch = true;
+
+                inDto.args.messages = [
+                    { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
+                    { role: 'user', content: [{ type: 'text', text: query }] },
+                ];
+
+                // Google検索を有効にする
+                (inDto.args as any).isGoogleSearch = true;
+
+                delete inDto.args.tool_choice;
+                delete inDto.args.tools;
+
+                const newLabel = `${label}-web_search_by_gemini`;
+
+                // ヒストリー保存
+                if (message) {
+                    // レスポンス返した後にゆるりとヒストリーを更新しておく。
+                    await wrapperLogger.log({
+                        connectionId,
+                        streamId,
+                        messageId: message.id,
+                        label: newLabel,
+                        model: inDto.args.model,
+                        provider: aiProviderClient.name,
+                    });
+                } else { }
+
+                return new Promise((resolve, reject) => {
+                    let text = '';
+                    aiApi_.chatCompletionObservableStream(
+                        inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
+                    ).pipe(
+                        timeout(120_000), // 120秒のタイムアウト
+                        map(res => res.choices.map(choice => choice.delta.content).join('')),
+                        toArray(),
+                        map(res => res.join('')),
+                    ).subscribe({
+                        next: next => {
+                            text += next;
+                        },
+                        error: error => {
+                            console.error('web_search_by_gemini error:', error);
+                            reject(Utils.errorFormat(error));
+                        },
+                        complete: () => {
+                            resolve(text);
+                        },
+                    });
+                });
             },
         },
         {
@@ -930,21 +977,13 @@ export function commonFunctionDefinitions(
                     messageId: message.id,
                     label: newLabel,
                     model: inDto.args.model,
-                    provider: aiProviderClient.type,
+                    provider: aiProviderClient.name,
                 });
-                const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
-                // await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
-                //     idempotencyKey,
-                //     argsHash: idempotencyKey,
-                //     label: newLabel,
-                //     provider: aiProviderClient.type,
-                //     model: inDto.args.model,
-                // }, PredictHistoryStatus.Fine).catch((err) => console.error('Failed to log predict history', err));
 
                 return new Promise((resolve, reject) => {
                     let text = '';
                     // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
-                    aiApi.chatCompletionObservableStream(
+                    aiApi_.chatCompletionObservableStream(
                         inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
                     ).pipe(
                         map(res => res.choices.map(choice => choice.delta.content).join('')),
@@ -955,34 +994,9 @@ export function commonFunctionDefinitions(
                             text += next;
                         },
                         error: async error => {
-                            const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
-                            // try {
-                            //     await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
-                            //         idempotencyKey,
-                            //         argsHash: idempotencyKey,
-                            //         label: newLabel,
-                            //         provider: aiProviderClient.type,
-                            //         model: inDto.args.model,
-                            //         message: error?.message || String(error),
-                            //     }, PredictHistoryStatus.Error);
-                            // } catch (logErr) {
-                            //     console.error('Failed to log predict history', logErr);
-                            // }
                             reject(error);
                         },
                         complete: async () => {
-                            const idempotencyKey = inDto.options?.idempotencyKey || newLabel;
-                            // try {
-                            //     await logPredictHistoryWithContext(getPredictHistoryLoggerForRequest(req), {
-                            //         idempotencyKey,
-                            //         argsHash: idempotencyKey,
-                            //         label: newLabel,
-                            //         provider: aiProviderClient.type,
-                            //         model: inDto.args.model,
-                            //     }, PredictHistoryStatus.Fine);
-                            // } catch (logErr) {
-                            //     console.error('Failed to log predict history', logErr);
-                            // }
                             resolve(text);
                         },
                     });;
@@ -1253,7 +1267,7 @@ export async function getOAuthAccountForTool(req: UserRequest, provider: string)
         where: { orgKey: req.info.user.orgKey, provider, userId: req.info.user.id },
     });
     let axiosWithAuth;
-    if (provider.startsWith('mattermost')) {
+    if (provider.startsWith('mattermost') && req.cookies.MMAUTHTOKEN) {
         // Mattermostの場合はCookieを使う
         axiosWithAuth = await getAxios(e.uriBase);
         axiosWithAuth.defaults.headers.common['Authorization'] = `Bearer ${req.cookies.MMAUTHTOKEN}`

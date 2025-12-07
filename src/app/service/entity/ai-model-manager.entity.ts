@@ -34,6 +34,7 @@ export interface AzureOpenAIConfig {
         // resource_name: string; // Azure上のリソース名
         // default_deployment?: string; // オプション：省略時のデフォルト
         baseURL: string; // オプション：カスタムベースURL（例：https://<resource_name>.openai.azure.com/）
+        ipAddress?: string; // 名前解決不可能なプライベートエンドポイントの場合は自分でIPを指定する
         apiKey: string; // オプション：APIキー（あれば）
         apiVersion?: string; // APIバージョン（例：2023-05-15）
     }[];

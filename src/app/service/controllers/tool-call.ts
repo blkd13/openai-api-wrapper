@@ -54,13 +54,14 @@ export const callFunction = [
             }
 
             const result = await funcDef.handler(req.body.parameters).then(res => {
-                console.log('LOG:--------------------');
-                console.dir(res);
+                // console.log('LOG:--------------------');
+                // console.dir(res);
                 return res;
             }).catch(error => {
                 // handler実行時の非同期エラーをキャッチする
-                console.error(`error-----------------------`);
-                console.error(error);
+                console.error(`TOOL_CALL_ERROR-----------------------`);
+                // console.error(error);
+                console.error(Utils.errorFormattedObject(error, false));
                 return { isError: true, error: Utils.errorFormattedObject(error, false) };
             });
 

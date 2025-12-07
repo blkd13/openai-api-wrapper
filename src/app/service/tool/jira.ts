@@ -1,9 +1,9 @@
-import { MyToolType, providerPrediction } from "../../common/openai-api-wrapper.js";
-import { UserRequest } from "../models/info.js";
-import { ContentPartEntity, MessageEntity, MessageGroupEntity } from "../entity/project-models.entity.js";
+import { MyToolType } from "../../common/openai-api-wrapper.js";
+import { AIClientLike, getServiceAIClient } from '../common/ai-client.js';
 import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from "../entity/project-models.entity.js";
+import { UserRequest } from "../models/info.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
-import { AIClientLike } from '../common/ai-client.js';
 
 /**
  * Jira-Star API ツール定義
@@ -63,11 +63,14 @@ import { AIClientLike } from '../common/ai-client.js';
  * - レート制限を考慮し、メタデータは適度にキャッシュすることを推奨
  */
 
+const _aiApi = getServiceAIClient();
+
 // 1. 関数マッピングの作成
 export async function jiraFunctionDefinitions(providerSubName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
+    const aiApi_ = aiApi || _aiApi; // フォールバック
     const provider = `jira-${providerSubName}`;
     return [
         {
@@ -356,27 +359,27 @@ export async function jiraFunctionDefinitions(providerSubName: string,
                     parameters: {
                         type: 'object',
                         properties: {
-                            projectKeys: { 
-                                type: 'array', 
+                            projectKeys: {
+                                type: 'array',
                                 items: { type: 'string' },
                                 description: 'プロジェクトキーの配列（例: ["EBANGO", "TEST"]）',
                                 minItems: 1,
                                 maxItems: 20
                             },
-                            issueTypeNames: { 
-                                type: 'array', 
+                            issueTypeNames: {
+                                type: 'array',
                                 items: { type: 'string' },
-                                description: '課題タイプ名の配列（例: ["タスク", "バグ"]）。未指定なら全課題タイプ' 
+                                description: '課題タイプ名の配列（例: ["タスク", "バグ"]）。未指定なら全課題タイプ'
                             },
-                            issueTypeIds: { 
-                                type: 'array', 
+                            issueTypeIds: {
+                                type: 'array',
                                 items: { type: 'number' },
-                                description: '課題タイプIDの配列（例: [1, 2]）。issueTypeNamesと同時指定不可' 
+                                description: '課題タイプIDの配列（例: [1, 2]）。issueTypeNamesと同時指定不可'
                             },
-                            expandFields: { 
-                                type: 'boolean', 
+                            expandFields: {
+                                type: 'boolean',
                                 description: 'フィールド詳細を展開するか',
-                                default: true 
+                                default: true
                             }
                         },
                         required: ['projectKeys']
@@ -393,10 +396,10 @@ export async function jiraFunctionDefinitions(providerSubName: string,
                 }
 
                 const params = new URLSearchParams();
-                
+
                 // プロジェクトキー
                 projectKeys.forEach(key => params.append('projectKeys', key));
-                
+
                 // 課題タイプ指定
                 if (issueTypeNames) {
                     issueTypeNames.forEach(name => params.append('issuetypeNames', name));
@@ -404,7 +407,7 @@ export async function jiraFunctionDefinitions(providerSubName: string,
                 if (issueTypeIds) {
                     issueTypeIds.forEach(id => params.append('issuetypeIds', id.toString()));
                 }
-                
+
                 // フィールド展開
                 if (expandFields) {
                     params.append('expand', 'projects.issuetypes.fields');

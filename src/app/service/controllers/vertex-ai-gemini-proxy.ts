@@ -7,9 +7,9 @@ import { validationErrorHandler } from '../middleware/validation.js';
 import { UserRequest } from '../models/info.js';
 
 import { UsageMetadata } from '@google-cloud/vertexai';
-import { body } from 'express-validator/lib/index.js';
+import { body, param } from 'express-validator/lib/index.js';
 import { HttpsProxyAgent } from 'https-proxy-agent';
-import { MyVertexAiClient } from '../../common/ai/providers/vertexai.js';
+import { calcCost, MyVertexAiClient } from '../../common/ai/providers/vertexai.js';
 
 import { TokenCount } from '../../common/ai/token-cost.js';
 import fss from '../../common/fss.js';
@@ -19,6 +19,7 @@ import { PredictHistoryStatus } from '../models/values.js';
 import { getAIProviderAndModel } from './chat-by-project-model.js';
 
 import { Stream } from 'stream';
+import { AIModelEntity, AIModelPricingEntity } from '../entity/ai-model-manager.entity.js';
 
 const { GCP_PROJECT_ID, GCP_REGION, GCP_REGION_GEMINI, GCP_API_BASE_PATH } = process.env;
 const baseApiPath = GCP_API_BASE_PATH || 'aiplatform.googleapis.com';
@@ -96,12 +97,12 @@ async function initializeRequest(req: UserRequest, modelName: string, suffix: st
     const argsHash = crypto.createHash('MD5').update(JSON.stringify(req.body)).digest('hex');
     const idempotencyKey = `${timestamp}-${argsHash}-${suffix}`;
 
-    const { aiProvider, aiModel } = await getAIProviderAndModel(req.info.user, modelName);
+    const { aiProvider, aiModel, aiPrice } = await getAIProviderAndModel(req.info.user, modelName);
 
     const tokenCount = new TokenCount(modelName, 0, 0);
     const logObject = new LogObject(Date.now(), tokenCount, idempotencyKey, argsHash);
 
-    return { idempotencyKey, argsHash, tokenCount, aiProvider, aiModel, logObject, modelName };
+    return { idempotencyKey, argsHash, tokenCount, aiProvider, aiModel, aiPrice, logObject, modelName };
 }
 
 function buildHistoryContext(method: GeminiMethod, params: {
@@ -109,6 +110,7 @@ function buildHistoryContext(method: GeminiMethod, params: {
     argsHash: string;
     aiProvider?: { name?: string } | null;
     aiModel?: { name?: string } | null;
+    aiPrice?: { name?: string } | null;
     modelName: string;
     tokenCount: TokenCount;
 }): PredictHistoryLogContext {
@@ -153,7 +155,6 @@ async function handleError(
     if (predictLogger && historyContext) {
         const serialized = typeof data === 'string' ? data : JSON.stringify(data, Utils.genJsonSafer());
         try {
-            historyContext.tokenCount?.prompt
             await logPredictHistoryWithContext(predictLogger, {
                 ...historyContext,
                 takeMs: logObject.lastTakeMs,
@@ -168,12 +169,24 @@ async function handleError(
             console.error('Failed to persist predict history', logError);
         }
     }
+
+    // Send HTTP response to client
+    if (!res.headersSent) {
+        if (data && typeof data.on === 'function') {
+            const body = await readBodyFromUnzip(data);
+            res.status(httpStatus).send(body);
+        } else {
+            res.status(httpStatus).json(data);
+        }
+    }
 }
 
 /**
  * 共通バリデーション
  */
 const commonValidation = [
+    param('version').notEmpty().withMessage('version is required'),
+    param('model').notEmpty().withMessage('model is required'),
     body('contents').isArray().withMessage('contents must be an array'),
     validationErrorHandler,
 ];
@@ -203,13 +216,13 @@ function resolveProjectAndLocation(aiProvider: { config?: { projectId?: string; 
     return { targetProject, targetLocation };
 }
 
-function applyUsageMetadata(tokenCount: TokenCount, usage?: UsageMetadata | null) {
+function applyUsageMetadata(tokenCount: TokenCount, aiModel: AIModelEntity, aiPrice: AIModelPricingEntity, usage?: UsageMetadata | null) {
     if (!usage) {
         return;
     }
     tokenCount.prompt_tokens = usage.promptTokenCount ?? tokenCount.prompt_tokens;
     tokenCount.completion_tokens = usage.candidatesTokenCount ?? tokenCount.completion_tokens;
-    // tokenCount.cost = tokenCount.calcCost();
+    tokenCount.cost = calcCost(tokenCount, aiModel, aiPrice, usage);
 }
 
 function appendCandidateText(candidates: any[] | undefined, builder: string): string {
@@ -235,9 +248,9 @@ function appendCandidateText(candidates: any[] | undefined, builder: string): st
  */
 async function commonPreProcess(req: UserRequest, method: Exclude<GeminiMethod, 'countTokens'>) {
     const { project, location, model } = req.params;
-    const modelName = (model || req.body?.model || 'gemini-1.5-pro') as string;
+    const modelName = (model || req.body?.model || 'gemini-2.5-pro') as string;
 
-    const { idempotencyKey, argsHash, aiModel, aiProvider, tokenCount, logObject } =
+    const { idempotencyKey, argsHash, aiModel, aiProvider, aiPrice, tokenCount, logObject } =
         await initializeRequest(req, modelName, method);
     console.log(logObject.output('start'));
 
@@ -255,11 +268,12 @@ async function commonPreProcess(req: UserRequest, method: Exclude<GeminiMethod, 
         argsHash,
         aiProvider,
         aiModel,
+        aiPrice,
         modelName,
         tokenCount,
     });
 
-    return { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject, modelName, historyContext };
+    return { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, aiPrice, tokenCount, logObject, modelName, historyContext };
 }
 
 /**
@@ -273,9 +287,9 @@ export const vertexAIGeminiCountTokens = [
         try {
             const bodyModel = req.body?.model as string | undefined;
             const pathModel = req.params?.model as string | undefined;
-            const modelName = (pathModel || bodyModel || 'gemini-1.5-pro') as string;
+            const modelName = (pathModel || bodyModel || 'gemini-2.5-pro') as string;
 
-            const { idempotencyKey, aiProvider, tokenCount, logObject } =
+            const { idempotencyKey, aiProvider, aiModel, aiPrice, tokenCount, logObject } =
                 await initializeRequest(req, modelName, 'countTokens');
 
             const { targetProject, targetLocation } = resolveProjectAndLocation(aiProvider as any, req.params.project, req.params.location);
@@ -292,21 +306,44 @@ export const vertexAIGeminiCountTokens = [
 
             console.log(logObject.output('call'));
 
-            const accessToken = await my_vertexai.getAccessToken();
-            const vertexResponse = await axios.post(vertexUrl, instance, {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json; charset=UTF-8',
-                },
-                responseType: 'json',
-                httpAgent: options.httpAgent,
-            });
+            let vertexResponse: AxiosResponse | undefined;
+            const maxRetries = 2;
+            let lastError: any;
+
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    const forceTokenRefresh = attempt > 1 && lastError?.response?.status === 401;
+                    const accessToken = await my_vertexai.getAccessToken(forceTokenRefresh);
+                    console.log(`vertexUrl: ${vertexUrl}`);
+                    vertexResponse = await axios.post(vertexUrl, instance, {
+                        headers: {
+                            Authorization: `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json; charset=UTF-8',
+                        },
+                        responseType: 'json',
+                        httpAgent: options.httpAgent,
+                    });
+                    break;
+                } catch (error) {
+                    lastError = error;
+                    if (attempt === maxRetries) {
+                        throw lastError;
+                    }
+                    if (lastError?.response?.status === 401) {
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                    }
+                }
+            }
+
+            if (!vertexResponse) {
+                throw new Error('Vertex AI response is undefined after retries');
+            }
 
             const usage = vertexResponse.data;
             const totalTokens = usage?.totalTokens ?? usage?.totalTokenCount ?? 0;
             tokenCount.prompt_tokens = typeof totalTokens === 'number' ? totalTokens : 0;
             tokenCount.completion_tokens = 0;
-            // tokenCount.cost = tokenCount.calcCost();
+            // tokenCount.cost = calcCost(tokenCount, aiModel, aiPrice, usage);
 
             console.log(logObject.output('count', '', JSON.stringify(usage)));
 
@@ -338,7 +375,7 @@ export const vertexAIGeminiAPI = [
         const predictLogger = getPredictHistoryLoggerForRequest(req);
 
         try {
-            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject, modelName, historyContext } =
+            const { instance, vertexUrl, idempotencyKey, aiModel, aiPrice, tokenCount, logObject, modelName, historyContext } =
                 await commonPreProcess(req, 'generateContent');
 
             fss.writeFile(`${HISTORY_DIR}/${idempotencyKey}.request.json`,
@@ -354,6 +391,7 @@ export const vertexAIGeminiAPI = [
                 try {
                     const forceTokenRefresh = attempt > 1 && lastError?.response?.status === 401;
                     const accessToken = await my_vertexai.getAccessToken(forceTokenRefresh);
+                    console.log(`vertexUrl: ${vertexUrl}`);
                     vertexResponse = await axios.post(vertexUrl, instance, {
                         headers: {
                             Authorization: `Bearer ${accessToken}`,
@@ -379,7 +417,7 @@ export const vertexAIGeminiAPI = [
             }
 
             const usageMetadata = vertexResponse.data?.usageMetadata as UsageMetadata | undefined;
-            applyUsageMetadata(tokenCount, usageMetadata);
+            applyUsageMetadata(tokenCount, aiModel, aiPrice, usageMetadata);
 
             let tokenBuilder = '';
             tokenBuilder = appendCandidateText(vertexResponse.data?.candidates, tokenBuilder);
@@ -426,7 +464,7 @@ export const vertexAIGeminiAPIStream = [
         console.log(`Request: ${req.method} ${req.originalUrl}`);
 
         try {
-            const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, tokenCount, logObject, modelName, historyContext } =
+            const { instance, vertexUrl, idempotencyKey, aiModel, aiPrice, tokenCount, logObject, modelName, historyContext } =
                 await commonPreProcess(req, 'streamGenerateContent');
 
             let vertexResponse: AxiosResponse | undefined;
@@ -442,6 +480,7 @@ export const vertexAIGeminiAPIStream = [
 
                     const forceTokenRefresh = attempt > 1 && lastError?.response?.status === 401;
                     const accessToken = await my_vertexai.getAccessToken(forceTokenRefresh);
+                    console.log(`vertexUrl: ${vertexUrl}`);
                     vertexResponse = await axios.post(vertexUrl, instance, {
                         headers: {
                             Authorization: `Bearer ${accessToken}`,
@@ -450,6 +489,11 @@ export const vertexAIGeminiAPIStream = [
                         responseType: 'stream',
                         httpAgent: options.httpAgent,
                     });
+
+                    if (vertexResponse) {
+                    } else {
+                        throw new Error('Vertex AI response is undefined');
+                    }
 
                     const headers: { [key: string]: string } = {};
                     Object.entries((vertexResponse as any).headers || {}).forEach(([key, value]) => {
@@ -539,7 +583,7 @@ export const vertexAIGeminiAPIStream = [
                     }
                 }
 
-                applyUsageMetadata(tokenCount, latestUsage);
+                applyUsageMetadata(tokenCount, aiModel, aiPrice, latestUsage);
                 if (!latestUsage) {
                     tokenCount.prompt_tokens = usageSummary.prompt_tokens || tokenCount.prompt_tokens;
                     tokenCount.completion_tokens = usageSummary.completion_tokens || tokenCount.completion_tokens;

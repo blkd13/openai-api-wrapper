@@ -1,3 +1,4 @@
+import bodyParser from 'body-parser';
 import { Router } from 'express';
 import { changePassword, checkProjectPermission, deleteUser, genApiKey, getOAuthAccount, getOAuthAccountList, getScopeLabels, getUser, getUserList, guestLogin, logout, oAuthEmailAuth, onetimeLogin, passwordReset, refresh, requestForPasswordReset, updateUser, userLogin, userLoginOAuth2, userLoginOAuth2Callback } from './controllers/auth.js';
 import { chatCompletion, chatCompletionStream, codegenCompletion, geminiCountTokens, geminiCreateContextCache, initEvent } from './controllers/chat.js';
@@ -43,7 +44,9 @@ import * as gitlab from './api/api-gitlab.js';
 import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
 import { getOAuthApiProxy } from './api/api-proxy.js';
 import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
-import { createAutomationJob, getAutomationJob, getAutomationJobTasks, getAutomationJobs, getAutomationJobsSummary, postAutomationJobAction } from './controllers/automation.js';
+import { createAutomationJob, getAutomationJob, getAutomationJobs, getAutomationJobsSummary, getAutomationJobTasks, postAutomationJobAction } from './controllers/automation.js';
+import { azureOpenAIResponseProxy } from './controllers/azure-openai-responses-proxy.js';
+import { azureOpenAISpeechProxy } from './controllers/azure-speech-proxy.js';
 import { budgetCheck, chatCompletionByProjectModel, embeddingsApi, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
 import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPICountTokens, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
 import { deleteDivision, getDivisionList, getDivisionMembers, removeDivisionMember, upsertDivision, upsertDivisionMember } from './controllers/division.js';
@@ -52,7 +55,10 @@ import { deleteMCPServer, getMCPServers, upsertMCPServer } from './controllers/m
 import { getDepartmentMemberLog, getDepartmentMemberLogForUser, getDepartmentMemberLogSummaryForUser, getDivisionMemberStatsList, getJournal } from './controllers/stats.js';
 import { callFunction, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId, registApiKey } from './controllers/tool-call.js';
 import { deactivateOrganization, deleteApiProvider, deleteApiProviderTemplate, deleteUserSetting, getApiProviders, getApiProviderTemplates, getOrganizations, getOrganizationUsers, getUserSetting, upsertApiProvider, upsertApiProviderTemplate, upsertOrganization, upsertUserSetting } from './controllers/user.js';
+import { vertexAIGeminiAPI, vertexAIGeminiAPIStream, vertexAIGeminiCountTokens } from './controllers/vertex-ai-gemini-proxy.js';
 import { UserRoleType } from './entity/auth.entity.js';
+
+import { saveBrowserLog } from './browser-logger/browser-log.controller.js';
 
 // routers/index.ts
 
@@ -83,6 +89,7 @@ authInviteRouter.use(authenticateInviteToken);
 
 // 個別コントローラーの設定
 // authNoneRouter.post('/login', userLogin);
+authNoneRouter.post('/:orgKey/browser-log', saveBrowserLog);
 authNoneRouter.post('/:orgKey/login', userLogin);
 authNoneRouter.post('/:orgKey/onetime', onetimeLogin);
 authNoneRouter.post('/:orgKey/request-for-password-reset', requestForPasswordReset);
@@ -119,6 +126,7 @@ authUserRouter.delete(`/user-setting/:userId/:key`, deleteUserSetting);
 authUserRouter.get('/event', initEvent);
 authUserRouter.post('/chat-completion', chatCompletion);
 authUserRouter.post('/v1/chat/completions', chatCompletionStream);
+authUserRouter.post('/v1/responses', azureOpenAIResponseProxy);
 authUserRouter.post('/v1/embeddings', embeddingsApi);
 authUserRouter.post('/codegen/completions', codegenCompletion);
 authUserRouter.post('/create-cache', geminiCreateContextCache);
@@ -330,13 +338,25 @@ authAdminRouter.delete('/organizations/:orgKey', deactivateOrganization); // 組
 
 authUserRouter.get('/scope-labels', getScopeLabels);
 
+// Azure Speech Service用プロキシ（バイナリデータ対応）
+const rawBodyParser = bodyParser.raw({ type: '*/*', limit: '500mb' });
+authUserRouter.get('/azure-speech-proxy/*', azureOpenAISpeechProxy);
+authUserRouter.post('/azure-speech-proxy/*', rawBodyParser, azureOpenAISpeechProxy);
+
+// codex用プロキシ
+authUserRouter.post('/azure-openai-responses-proxy/v1/responses', azureOpenAIResponseProxy);
+
 // Claude Code用プロキシ
 authUserRouter.post('/vertexai-claude-proxy/v1/messages', vertexAIByAnthropicAPIStream);
-authUserRouter.post('/vertexai-claude-proxy/v1/messages/count_tokens', vertexAIByAnthropicAPICountTokens);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/count-tokens\\:rawPredict', vertexAIByAnthropicAPICountTokens);
+authUserRouter.post('/vertexai-claude-proxy/v1/messages/count_tokens', vertexAIByAnthropicAPICountTokens);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:rawPredict', vertexAIByAnthropicAPI);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:streamRawPredict', vertexAIByAnthropicAPIStream);
 
+// VertexAI用プロキシ
+authUserRouter.post('/vertexai-gemini-proxy/:version/publishers/google/models/:model\\:generateContent', vertexAIGeminiAPI);
+authUserRouter.post('/vertexai-gemini-proxy/:version/publishers/google/models/:model\\:streamGenerateContent', vertexAIGeminiAPIStream);
+authUserRouter.post('/vertexai-gemini-proxy/:version/publishers/google/models/:model\\:countTokens', vertexAIGeminiCountTokens);
 
 authUserRouter.get('/predict-journal/:idempotencyKey/:argsHash/:type', getJournal);
 

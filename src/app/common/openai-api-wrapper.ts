@@ -452,7 +452,7 @@ class RunBit {
         const args = JSON.parse(JSON.stringify(this.args)) as OpenAI.ChatCompletionCreateParams;
         delete (args as any).providerName; // providerNameは付けちゃダメ
         const logObject = this.logObject;
-        const maxAttempts = 5;
+        const maxAttempts = 10; // 30秒x10回＝300秒＝5分
         const observer = this.observer;
 
         const ratelimitObj = this.openApiWrapper.currentRatelimit[this.tokenCount.model];
@@ -553,16 +553,17 @@ class RunBit {
                 let waitS = Number(String(ratelimitObj.resetTokens).replace('s', '')) || 0;
                 // 待ち時間が設定されていなかったらとりあえずRPM/TPMを回復させるために60秒待つ。
                 waitMs = waitMs === 0 ? ((waitS || 60) * 1000) : waitMs;
+                waitMs = 30000; // 一律30秒待ち
                 console.log(logObject.output('wait', `wait ${waitMs}ms ${waitS}s`));
                 setTimeout(() => {
                     try {
                         this.executeCall()
                             .catch(error => {
-                                observer.error(error);
+                                // observer.error(error);
                                 this.openApiWrapper.fire(); // キューに着火
                             });
                     } catch (e) {
-                        observer.error(error);
+                        // observer.error(error);
                         this.openApiWrapper.fire(); // キューに着火
                     }
                 }, waitMs);
@@ -607,6 +608,7 @@ export class OpenAIApiWrapper {
         // console.log(this.options);
 
         try { fs.mkdirSync(`${HISTORY_DIRE}`, { recursive: true }); } catch (e) { }
+        // ヘッダー出力
         console.log(`timestamp               step  R time[ms]  prompt comple model    cost   label`);
     }
 
@@ -1436,6 +1438,7 @@ export const invalidMimeList = [
     'application/java-serialized-object',
     'application/vnd.android.package-archive',
     'application/vnd.ms-outlook',
+    'application/vnd.palm',
     'application/x.ms.shortcut',
     // 'application/vnd.ms-excel',
     // 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

@@ -5,8 +5,14 @@ const encodings = new Map<string, Tiktoken>();
 function getEncoding(model: string): Tiktoken {
     if (!encodings.has(model)) {
         console.error(`Loading encoding for model: ${model}`);
+        try {
         const encoding = encoding_for_model(model as any);
         encodings.set(model, encoding);
+        } catch (e) {
+            // fallback to gpt-5
+            const encoding = encoding_for_model('gpt-5');
+            encodings.set(model, encoding);
+        }
         console.error(`Encoding loaded for model: ${model}`);
     }
     return encodings.get(model)!;

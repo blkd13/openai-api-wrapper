@@ -79,8 +79,8 @@ try { fs.mkdirSync(`${HISTORY_DIRE}`, { recursive: true }); } catch (e) { }
  * Vertex AI の URL を生成
  */
 function buildVertexUrl(project: string, location: string, model: string, method: 'predict' | 'streamRawPredict'): string {
-    const baseUrl = location === 'global' ? GCP_API_BASE_PATH : `${location}-${GCP_API_BASE_PATH}`;
-    return `https://${baseUrl}/v1/projects/${project}/locations/${location}/publishers/anthropic/models/${model}:${method}`;
+    const basePath = location === 'global' ? GCP_API_BASE_PATH : `${location}-${GCP_API_BASE_PATH}`;
+    return `https://${basePath}/v1/projects/${project}/locations/${location}/publishers/anthropic/models/${model}:${method}`;
 }
 
 /**
@@ -166,6 +166,16 @@ async function handleError(
             }, status);
         } catch (logError) {
             console.error('Failed to persist predict history', logError);
+        }
+    }
+
+    // Send HTTP response to client
+    if (!res.headersSent) {
+        if (data && typeof data.on === "function") {
+            const body = await readBodyFromUnzip(data);
+            res.status(httpStatus).send(body);
+        } else {
+            res.status(httpStatus).json(data);
         }
     }
 }
@@ -338,6 +348,8 @@ export const vertexAIByAnthropicAPI = [
         const predictLogger = getPredictHistoryLoggerForRequest(req);
 
         try {
+            console.log(`Request: ${req.ip} ${req.method} ${req.originalUrl}`);
+
             const { instance, vertexUrl, idempotencyKey, aiModel, aiProvider, aiPrice, tokenCount, logObject, historyContext } =
                 await commonPreProcess(req, 'rawPredict');
 
@@ -465,6 +477,7 @@ export const vertexAIByAnthropicAPIStream = [
                     // 401エラーで再試行する場合はトークンを強制リフレッシュ
                     const forceTokenRefresh = attempt > 1 && lastError?.response?.status === 401;
                     const accessToken = await my_vertexai.getAccessToken(forceTokenRefresh);
+                    // console.log(vertexUrl);
                     vertexResponse = await axios.post(vertexUrl, instance, {
                         headers: {
                             Authorization: `Bearer ${accessToken}`,

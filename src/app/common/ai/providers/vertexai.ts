@@ -5,7 +5,7 @@ import { detect } from "jschardet";
 import OpenAI from "openai";
 import { promisify } from 'util';
 
-import { AIModelPricingEntity, VertexAIConfig } from "../../../service/entity/ai-model-manager.entity.js";
+import { AIModelEntity, AIModelPricingEntity, VertexAIConfig } from "../../../service/entity/ai-model-manager.entity.js";
 import fss from '../../fss.js';
 import { AIClient, HISTORY_DIRE, plainMime } from '../../openai-api-wrapper.js';
 import { Utils } from '../../utils.js';
@@ -182,7 +182,7 @@ export class MyVertexAiClient implements AIClient {
                         ctx.tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || ctx.tokenCount.prompt_tokens;
                         ctx.tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || ctx.tokenCount.completion_tokens;
                         if (ctx.aiModel && ctx.aiPrice) {
-                            ctx.tokenCount.cost = calcCost(ctx.aiModel, ctx.aiPrice, usageMetadata);
+                            ctx.tokenCount.cost = calcCost(ctx.tokenCount, ctx.aiModel, ctx.aiPrice, usageMetadata);
                         } else {
                         }
                         // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
@@ -1028,7 +1028,7 @@ export function mapForOpenAIExtended(
 }
 
 
-function calcCost(tokenCount: TokenCount, aiPrice: AIModelPricingEntity, usage: UsageMetadata): number {
+export function calcCost(tokenCount: TokenCount, aiModel: AIModelEntity, aiPrice: AIModelPricingEntity, usage: UsageMetadata): number {
     tokenCount.cost = 0;
     // if (ctx.commonArgs.model.startsWith('gemini-2')) {
     //     // gemini-2系からはトークンベースの課金になるので、トークン数を使う。

@@ -3,7 +3,7 @@ import OpenAI, { AzureOpenAI } from 'openai';
 import { ProxyAgent } from 'undici';
 
 import { RequestOptions } from 'openai/internal/request-options.js';
-import { AzureOpenAIConfig } from '../../../service/entity/ai-model-manager.entity.js';
+import { AIModelEntity, AIModelPricingEntity, AzureOpenAIConfig } from '../../../service/entity/ai-model-manager.entity.js';
 import fss from '../../fss.js';
 import { HISTORY_DIRE } from '../../openai-api-wrapper.js';
 import { Utils } from '../../utils.js';
@@ -51,13 +51,21 @@ export class MyAzureOpenAI {
 
     async executor(ctx: ExecutorContext): Promise<void> {
 
-        const { idempotencyKey, ratelimitObj, logObject, observer, attempts, aiPrice } = ctx;
+        const { idempotencyKey, ratelimitObj, logObject, observer, attempts, aiModel, aiPrice, tokenCount } = ctx as {
+            idempotencyKey: string,
+            ratelimitObj: { remainingRequests?: number; remainingTokens?: number; },
+            logObject: any,
+            observer: any,
+            attempts: number,
+            aiModel: AIModelEntity,
+            aiPrice: AIModelPricingEntity,
+            tokenCount: TokenCount,
+        };
         const args = { ...ctx.commonArgs } as OpenAI.ChatCompletionCreateParams;
         const options = ctx.options as RequestOptions || undefined;
 
         // let runPromise: Promise<APIPromise<ChatCompletion>> | Promise<APIPromise<Stream<OpenAI.ChatCompletionChunk>>>;
         let runPromise: Promise<void>;
-        const tokenCount: TokenCount = ctx.tokenCount;
         const decoder = new TextDecoder('utf-8');
 
         for (const key of ['safetySettings', 'cachedContent', 'gcpProjectId', 'isGoogleSearch']) delete (args as any)[key]; // Gemini用プロパティを消しておく
@@ -104,7 +112,7 @@ export class MyAzureOpenAI {
             }
         };
 
-        const usageMetadata: { [key: string]: any } = {};
+        const usageMetadata: OpenAI.Completions.CompletionUsage = {} as OpenAI.Completions.CompletionUsage;
         if (args.model.startsWith('o1') || args.model.startsWith('o3') || args.model.startsWith('o4')) {
             // o1用にパラメータを調整
             delete (args as any)['max_completion_tokens'];
@@ -150,7 +158,12 @@ export class MyAzureOpenAI {
                     fss.appendFile(`${HISTORY_DIRE}/${idempotencyKey}-${attempts}.txt`, line, {}, () => { });
 
                     // トークン数をカウント
-                    applyUsage(body.usage);
+                    if (body.usage) {
+                        applyUsage(body.usage);
+                        tokenCount.prompt_tokens = body.usage.prompt_tokens || 0;
+                        tokenCount.completion_tokens = body.usage.completion_tokens || 0;
+                        tokenCount.cost = calcCost(tokenCount, aiModel, aiPrice, body.usage);
+                    } else { }
 
                     tokenBuilder += body.choices.map(choice => choice.message).filter(message => message).map(message => message.content).join('');
                     tokenCount.tokenBuilder = tokenBuilder;
@@ -224,6 +237,9 @@ export class MyAzureOpenAI {
                                 // ストリームが終了したらループを抜ける
                                 // tokenCount.cost = tokenCount.calcCost();
                                 console.log(logObject.output('fine', '', JSON.stringify(usageMetadata)));
+                                tokenCount.prompt_tokens = usageMetadata.prompt_tokens || 0;
+                                tokenCount.completion_tokens = usageMetadata.completion_tokens || 0;
+                                tokenCount.cost = calcCost(tokenCount, aiModel, aiPrice, usageMetadata);
                                 observer.complete();
 
                                 // _that.openApiWrapper.fire();
@@ -262,4 +278,24 @@ export class MyAzureOpenAI {
         }
         return runPromise;
     }
+}
+
+
+export function calcCost(tokenCount: TokenCount, aiModel: AIModelEntity, aiPrice: AIModelPricingEntity, usage: OpenAI.Completions.CompletionUsage): number {
+    tokenCount.cost = 0;
+    usage.prompt_tokens = usage.prompt_tokens || 0;
+    usage.completion_tokens = usage.completion_tokens || 0;
+    if (aiPrice) {
+        if (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens && usage.prompt_tokens_details.cached_tokens > 0 && aiPrice.metadata && aiPrice.metadata.cached_tokens > 0) {
+            // キャッシュトークンがある場合の計算
+            const billedPromptTokens = usage.prompt_tokens - usage.prompt_tokens_details.cached_tokens;
+            tokenCount.cost += usage.prompt_tokens_details.cached_tokens * (aiPrice.metadata.cached_tokens || 0) / 1_000_000;
+            tokenCount.cost += billedPromptTokens * (aiPrice.inputPricePerUnit || 0) / 1_000_000;
+            tokenCount.cost += usage.completion_tokens * (aiPrice.outputPricePerUnit || 0) / 1_000_000;
+        } else {
+            tokenCount.cost += usage.prompt_tokens * (aiPrice.inputPricePerUnit || 0) / 1_000_000;
+            tokenCount.cost += usage.completion_tokens * (aiPrice.outputPricePerUnit || 0) / 1_000_000;
+        }
+    }
+    return tokenCount.cost;
 }

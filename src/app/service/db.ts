@@ -1,7 +1,7 @@
 // db.ts
-import path from 'path';
-import { DataSource } from "typeorm";
+import { DataSource } from "typeorm"
 import { fileURLToPath } from 'url';
+import path from 'path';
 import { CustomNamingStrategy } from "../../config/naming-strategy.js";
 
 const { TZ, TYPEORM_TYPE, TYPEORM_DATABASE, TYPEORM_HOST, TYPEORM_PORT, TYPEORM_USERNAME, TYPEORM_PASSWORD, TYPEORM_SCHEMA } = process.env;
@@ -35,7 +35,7 @@ const postgres = new DataSource({
     // logging: true,
     // useUTC: true,
     // dropSchema: true, // データ全消滅するから注意。
-    entities: [path.join(currentDir, 'entity', '**', '*.entity.js'),],
+    entities: [path.join(currentDir, 'entity', '**', '*.entity.js'), path.join(currentDir, 'browser-logger', '**', '*.entity.js')],
     // migrations: [path.join(currentDir, 'migration', '**', '*.migration.js'),],
     // subscribers: [path.join(currentDir, 'subscribers', '**', '*.subscribers.js'),],
     namingStrategy: new CustomNamingStrategy(),

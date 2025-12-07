@@ -1,23 +1,24 @@
+import { In, Not } from 'typeorm';
 import { Request, Response } from 'express';
-import { body, param } from "express-validator";
-import { In } from 'typeorm';
+import { body, param, query } from "express-validator";
 
-import { Axios } from 'axios';
-import { ChatModel } from 'openai/resources.js';
-import { MattermostChannel, MattermostEmoji, Post } from '../../agent/api-mattermost/api.js';
-import { getAxios } from '../../common/http-client.js';
-import { plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
-import { Utils } from '../../common/utils.js';
-import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
-import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../controllers/chat-by-project-model.js';
-import { convertToMapSet, handleFileUpload } from '../controllers/file-manager.js';
-import { ds } from '../db.js';
-import { MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity } from '../entity/api-mattermost.entity.js';
-import { FileAccessEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
-import { ContentPartType, FileGroupType, MessageGroupType, ProjectVisibility, ThreadGroupVisibility, ThreadStatus } from '../models/values.js';
+import { UserTokenPayload } from "../middleware/authenticate.js";
+import { MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity } from '../entity/api-mattermost.entity.js';
+import { ds } from '../db.js';
+import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
+import { Utils } from '../../common/utils.js';
+import { MattermostChannel, MattermostEmoji, MattermostPost, MattermostUser, Post } from '../../agent/api-mattermost/api.js';
+import { Axios } from 'axios';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
+import { ContentPartType, MessageGroupType, ProjectVisibility, TeamMemberRoleType, ThreadStatus, ThreadGroupVisibility, FileGroupType } from '../models/values.js';
+import { convertToMapSet, handleFileUpload } from '../controllers/file-manager.js';
+import { FileAccessEntity, FileBodyEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
+import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../controllers/chat-by-project-model.js';
+import { plainExtensions, plainMime } from '../../common/openai-api-wrapper.js';
+import { getAxios } from '../../common/http-client.js';
+import { ChatModel } from 'openai/resources.js';
 
 export const getMmUsers = [
     param('providerName').isString().notEmpty(),
@@ -368,7 +369,7 @@ export const mattermostToAi = [
                                 // while (true) {
                                 //     url = `${_url}?page=${page}&per_page=200&since=${start}`;
                                 //     console.log(`d:str   : ${url}`);
-                                //     const response = await _axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
+                                //     const response = await _axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`, }, });
                                 //     console.log(`d:end ${response.data.order.length}: ${url}`);
                                 //     // console.log(response.data);
 
@@ -388,7 +389,7 @@ export const mattermostToAi = [
                             } else if (params.count) {
                                 url = `${url}?page=0&per_page=${params.count}`;
                                 // console.log(`c:str   : ${url}`);
-                                // const response = await _axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
+                                // const response = await _axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`, }, });
                                 // console.log(`c:end ${response.data.order.length}: ${url}`);
                                 // resObj.posts = { ...resObj.posts, ...response.data.posts };
                                 // resObj.order = resObj.order.concat(response.data.order);
@@ -398,7 +399,7 @@ export const mattermostToAi = [
                         }
                         // 
                         // console.log(`str   : ${url}`);
-                        const response = await axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
+                        const response = await axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`, }, });
                         console.log(`end ${response.data.order.length}: ${url}`);
                         resObj.posts = { ...resObj.posts, ...response.data.posts };
                         resObj.order = resObj.order.concat(response.data.order);
@@ -436,7 +437,7 @@ export const mattermostToAi = [
             const include_deleted = false;
             const channelUrl = `${e.uriBase}/api/v4/users/me/channels?last_delete_at=${last_delete_at}&include_deleted=${include_deleted}`;
             // console.log(`str   : ${channelUrl}`);
-            const response = await axios.get(channelUrl, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
+            const response = await axios.get(channelUrl, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`, }, });
             console.log(`end ${response.data.length}: ${channelUrl}`);
             const mmChannelMas = (response.data as MattermostChannel[]).reduce((acc, channel) => {
                 acc[channel.id] = channel;
@@ -644,7 +645,7 @@ export const mattermostToAi = [
                                     // await掛ける前にリストに入れておかないと順序が崩れる。
                                     contents.push(fileObj as FileContentPart);
                                     // console.log(imageUrl, file.mime_type, file.dataUrl?.substring(0, 50).replaceAll(/\n/g, ''), file.dataUrl?.length, file.name);
-                                    file.dataUrl = await downloadImageAsDataURL(axios, `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, imageUrl);
+                                    file.dataUrl = await downloadImageAsDataURL(axios, `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`, imageUrl);
                                     fileObj.dataUrl = file.dataUrl || '';
                                     (fileObj as any).postId = post.id; // postIdで紐づげグルーピングができるようにしておく
                                 } else { }
@@ -708,7 +709,7 @@ export const mattermostToAi = [
                         const fileBodyEntity = value.fileBodyEntity;
                         if (fileBodyEntity.tokenCount && fileBodyEntity.tokenCount['gemini-2.5-flash']) {
                             // 既にトークンカウント済みの場合はスキップ
-                            // console.log(value.tokenCount['gemini-1.5-flash'] + ' tokens for ' + sha256);
+                            // console.log(value.tokenCount['gemini-2.5-flash'] + ' tokens for ' + sha256);
                             return null;
                         } else {
                             if (value.fileType.startsWith('text/') || plainExtensions.includes(fileBodyEntity.innerPath) || plainMime.includes(fileBodyEntity.fileType) || fileBodyEntity.fileType.endsWith('+xml') || fileBodyMapSet.hashMap[sha256].base64Data.startsWith('IyEv')) {
@@ -918,3 +919,4 @@ async function downloadImageAsDataURL(axios: Axios, cookie: string, imageUrl: st
         return undefined;
     }
 };
+

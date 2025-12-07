@@ -113,6 +113,7 @@ export const getOAuthApiProxy = [
             const proxyUrl = await getProxyUrl(e.uriBase);
             const target = proxyUrl || e.uriBase;
             const MMAUTHTOKEN = req.cookies.MMAUTHTOKEN;
+            const MMUSERID = req.cookies.MMUSERID;
 
             // console.log(baseUrlObj);
             // console.dir(pathRewrite, { depth: null });
@@ -145,7 +146,7 @@ export const getOAuthApiProxy = [
                     },
                     proxyReq: async (proxyReq, req) => {
                         if (providerType === 'mattermost') {
-                            proxyReq.setHeader('Cookie', `MMAUTHTOKEN=${MMAUTHTOKEN}`);
+                            proxyReq.setHeader('Cookie', `MMAUTHTOKEN=${MMAUTHTOKEN}; MMUSERID=${MMUSERID}; `);
                             // console.log('mattermost-proxyReq', proxyReq.path, proxyReq.getHeader('Cookie'));
                         } else {
                             // mattermostはAuthorizationを使わずにブラウザのCookieを使う

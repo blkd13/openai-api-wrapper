@@ -1,22 +1,24 @@
 import { map, toArray } from "rxjs";
-
-const { GITEA_CONFIDENCIAL_OWNERS = '' } = process.env as { GITEA_CONFIDENCIAL_OWNERS: string };
-
 import { MyToolType } from "../../common/openai-api-wrapper.js";
 import { Utils } from "../../common/utils.js";
 import { GiteaRepository } from "../api/api-gitea.js";
-import { AIClientLike } from '../common/ai-client.js';
+import { AIClientLike, getServiceAIClient } from '../common/ai-client.js';
 import { getPredictHistoryLoggerForRequest, getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
 import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
 import { ContentPartEntity, MessageEntity, MessageGroupEntity } from "../entity/project-models.entity.js";
 import { UserRequest } from "../models/info.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
 
+const { GITEA_CONFIDENCIAL_OWNERS = '' } = process.env as { GITEA_CONFIDENCIAL_OWNERS: string };
+
+const _aiApi = getServiceAIClient();
+
 // 1. 関数マッピングの作成
 export async function giteaFunctionDefinitions(providerName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
+    const aiApi_ = aiApi || _aiApi; // フォールバック
     const provider = `gitea-${providerName}`;
     const wrapperLogger = getPredictHistoryWrapperLoggerForRequest(req);
     const predictHistoryLogger = getPredictHistoryLoggerForRequest(req);
@@ -1051,7 +1053,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                         return new Promise((resolve, reject) => {
                             let text = '';
                             // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
-                            aiApi.chatCompletionObservableStream(
+                            aiApi_.chatCompletionObservableStream(
                                 inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice
                             ).pipe(
                                 map(res => res.choices.map(choice => choice.delta.content).join('')),

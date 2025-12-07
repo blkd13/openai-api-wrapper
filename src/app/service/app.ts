@@ -5,6 +5,7 @@ import 'source-map-support/register.js';
 
 import bodyParser from 'body-parser';
 import cookieParser from 'cookie-parser';
+import cors from 'cors';
 import express, { Request, Response, Router } from 'express';
 import useragent from 'express-useragent';
 import moment from "moment-timezone";
