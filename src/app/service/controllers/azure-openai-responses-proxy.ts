@@ -6,8 +6,7 @@ import * as fs from 'fs';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { Stream } from "stream";
 
-import { OpenAI } from 'openai/client.js';
-import { calcCost } from '../../common/ai/providers/openai-azure.js';
+import { ResponseUsage } from 'openai/resources/responses/responses.js';
 import { TokenCount } from "../../common/ai/token-cost.js";
 import fss from '../../common/fss.js';
 import { GPTModels } from "../../common/model-definition.js";
@@ -327,7 +326,8 @@ export const azureOpenAIResponseProxy = [
 
                 let tokenBuilder = '';
                 let dataBuffer = '';
-                const usage: OpenAI.Completions.CompletionUsage = { prompt_tokens: 0, completion_tokens: 0 } as OpenAI.Completions.CompletionUsage;
+                const usage: ResponseUsage = { input_tokens: 0, output_tokens: 0 } as ResponseUsage;
+                const usageList: ResponseUsage[] = [];
 
                 // ストリーム解析（ログ・使用量集計用）。クライアントへはそのままパイプ。
                 const stream = openaiResponse.data;
@@ -365,13 +365,9 @@ export const azureOpenAIResponseProxy = [
                                 }
 
                                 // usage集計
-                                const u = data.response?.usage || data.usage;
+                                const u: ResponseUsage = data.response?.usage || data.usage;
                                 if (u) {
-                                    if (usage.prompt_tokens) { } else { Object.assign(usage, u); }
-                                    usage.prompt_tokens = (usage.prompt_tokens || 0) + (u.prompt_tokens || 0);
-                                    usage.completion_tokens = (usage.completion_tokens || 0) + (u.completion_tokens || 0);
-                                    tokenCount.prompt_tokens += u.input_tokens || 0;
-                                    tokenCount.completion_tokens += u.output_tokens || 0;
+                                    usageList.push(u);
                                 }
                             } catch (e) {
                                 // JSON parse error - 無効な行をスキップ
@@ -392,13 +388,10 @@ export const azureOpenAIResponseProxy = [
                                 } else if (data.delta?.output_text) {
                                     tokenBuilder += data.delta.output_text;
                                 }
-                                const u = data.response?.usage || data.usage;
+
+                                const u: ResponseUsage = data.response?.usage || data.usage;
                                 if (u) {
-                                    if (usage.completion_tokens) { } else { Object.assign(usage, u); }
-                                    usage.prompt_tokens = (usage.prompt_tokens || 0) + (u.prompt_tokens || 0);
-                                    usage.completion_tokens = (usage.completion_tokens || 0) + (u.completion_tokens || 0);
-                                    tokenCount.prompt_tokens += u.prompt_tokens || 0;
-                                    tokenCount.completion_tokens += u.completion_tokens || 0;
+                                    usageList.push(u);
                                 }
                             } catch (e) {
                                 console.warn('Invalid JSON in final buffer:', dataBuffer);
@@ -412,18 +405,49 @@ export const azureOpenAIResponseProxy = [
 
                 // コスト計算
                 tokenCount.cost = 0;
-                if (aiPrice) {
-                    tokenCount.cost += (usage.prompt_tokens || 0) * (aiPrice.inputPricePerUnit || 0) / 1_000_000;
-                    tokenCount.cost += (usage.completion_tokens || 0) * (aiPrice.outputPricePerUnit || 0) / 1_000_000;
-                }
+                if (aiPrice && usageList.length > 0) {
+                    if (usageList.length === 1) {
+                        Object.assign(usage, usageList[0]);
+                    } else {
+                        usage.input_tokens = 0;
+                        usage.output_tokens = 0;
+                        usage.total_tokens = 0;
+                        for (const u of usageList) {
+                            usage.input_tokens = (usage.input_tokens || 0) + (u.input_tokens || 0);
+                            usage.output_tokens = (usage.output_tokens || 0) + (u.output_tokens || 0);
+
+                            if (u.input_tokens_details) {
+                                if (usage.input_tokens_details) {
+                                    usage.input_tokens_details.cached_tokens = 0;
+                                } else {
+                                    usage.input_tokens_details = { cached_tokens: 0 };
+                                }
+                            } else { }
+
+                            if (usage.output_tokens_details) {
+                                if (usage.output_tokens_details) {
+                                    usage.output_tokens_details.reasoning_tokens = 0;
+                                } else {
+                                    usage.output_tokens_details = { reasoning_tokens: 0 };
+                                }
+                            } else { }
+                        }
+                    }
+                    if (usage.input_tokens_details && usage.input_tokens_details.cached_tokens && usage.input_tokens_details.cached_tokens > 0 && aiPrice.metadata && aiPrice.metadata.cached_tokens) {
+                        const billableInputTokens = usage.input_tokens - usage.input_tokens_details.cached_tokens;
+                        tokenCount.cost += usage.input_tokens_details.cached_tokens * (aiPrice.metadata.cached_tokens || 0) / 1_000_000;
+                        tokenCount.cost += billableInputTokens * (aiPrice.inputPricePerUnit || 0) / 1_000_000;
+                        tokenCount.cost += usage.output_tokens * (aiPrice.outputPricePerUnit || 0) / 1_000_000;
+                    } else {
+                        tokenCount.cost += usage.input_tokens * (aiPrice.inputPricePerUnit || 0) / 1_000_000;
+                        tokenCount.cost += usage.output_tokens * (aiPrice.outputPricePerUnit || 0) / 1_000_000;
+                    }
+                } else { }
 
                 tokenCount.tokenBuilder = tokenBuilder;
                 fss.writeFile(`${HISTORY_DIRE}/${idempotencyKey}.result.md`, tokenBuilder || '', {}, () => { });
 
-                console.log(logObject.output('fine', '', JSON.stringify({
-                    prompt_tokens: tokenCount.prompt_tokens,
-                    completion_tokens: tokenCount.completion_tokens
-                })));
+                console.log(logObject.output('fine', '', JSON.stringify({ usage })));
                 await predictLogger.log({
                     idempotencyKey,
                     argsHash: historyContext.argsHash,
@@ -462,12 +486,16 @@ export const azureOpenAIResponseProxy = [
                 const responseData = openaiResponse.data;
 
                 // usage
-                const usage: OpenAI.Completions.CompletionUsage | undefined = responseData?.usage;
+                const usage: ResponseUsage | undefined = responseData?.usage;
                 if (usage) {
-                    tokenCount.prompt_tokens = usage.prompt_tokens || 0;
-                    tokenCount.completion_tokens = usage.completion_tokens || 0;
-                    if (aiPrice) {
-                        tokenCount.cost = calcCost(tokenCount, aiModel, aiPrice, usage);
+                    if (usage.input_tokens_details && usage.input_tokens_details.cached_tokens && usage.input_tokens_details.cached_tokens > 0 && aiPrice.metadata && aiPrice.metadata.cached_tokens) {
+                        const billableInputTokens = usage.input_tokens - usage.input_tokens_details.cached_tokens;
+                        tokenCount.cost += usage.input_tokens_details.cached_tokens * (aiPrice.metadata.cached_tokens || 0) / 1_000_000;
+                        tokenCount.cost += billableInputTokens * (aiPrice.inputPricePerUnit || 0) / 1_000_000;
+                        tokenCount.cost += usage.output_tokens * (aiPrice.outputPricePerUnit || 0) / 1_000_000;
+                    } else {
+                        tokenCount.cost += usage.input_tokens * (aiPrice.inputPricePerUnit || 0) / 1_000_000;
+                        tokenCount.cost += usage.output_tokens * (aiPrice.outputPricePerUnit || 0) / 1_000_000;
                     }
                 } else { }
 
