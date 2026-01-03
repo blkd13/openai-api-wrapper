@@ -59,6 +59,7 @@ import { callFunction, deleteApiKey, getApiKeys, getFunctionDefinitions, getTool
 import { deactivateOrganization, deleteApiProvider, deleteApiProviderTemplate, deleteUserSetting, getApiProviders, getApiProviderTemplates, getOrganizations, getOrganizationUsers, getUserSetting, upsertApiProvider, upsertApiProviderTemplate, upsertOrganization, upsertUserSetting } from './controllers/user.js';
 import { vertexAIGeminiAPI, vertexAIGeminiAPIStream, vertexAIGeminiCountTokens } from './controllers/vertex-ai-gemini-proxy.js';
 import { checkExtApiConnection, getExtApiStatus } from './controllers/ext-api-status.js';
+import { createContextHub, createContextResource, deleteContextHub, deleteContextResource, getOrCreateContextHub, syncAllContextResources, syncContextResource, updateContextHub, updateContextResource } from './controllers/context-hub.js';
 import { UserRoleType } from './entity/auth.entity.js';
 
 import { saveBrowserLog } from './browser-logger/browser-log.controller.js';
@@ -384,3 +385,15 @@ authAdminRouter.get('/mcp-servers', getMCPServers);
 authAdminRouter.post('/mcp-server', upsertMCPServer);
 authAdminRouter.put('/mcp-server/:id', upsertMCPServer);
 authAdminRouter.delete('/mcp-server/:id', deleteMCPServer);
+
+// Context Hub
+authUserRouter.get('/context-hub/project/:projectId', getOrCreateContextHub);
+authUserRouter.post('/context-hub', createContextHub);
+authUserRouter.patch('/context-hub/:hubId', updateContextHub);
+authUserRouter.delete('/context-hub/:hubId', deleteContextHub);
+// Context Resources
+authUserRouter.post('/context-hub/resource', createContextResource);
+authUserRouter.patch('/context-hub/resource/:resourceId', updateContextResource);
+authUserRouter.delete('/context-hub/resource/:resourceId', deleteContextResource);
+authUserRouter.post('/context-hub/resource/:resourceId/sync', syncContextResource);
+authUserRouter.post('/context-hub/:hubId/sync-all', syncAllContextResources);

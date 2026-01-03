@@ -2,9 +2,9 @@ import { Request, Response } from 'express';
 import { param } from 'express-validator';
 
 import { ds } from '../db.js';
-import { UserRequest } from '../models/info.js';
 import { ApiProviderEntity, OAuthAccountEntity } from '../entity/auth.entity.js';
 import { validationErrorHandler } from '../middleware/validation.js';
+import { UserRequest } from '../models/info.js';
 import { ExtApiClient, getExtApiClient } from './auth.js';
 
 /**
@@ -30,6 +30,7 @@ async function verifyExtApiConnection(
     userId: string,
     providerKey: string
 ): Promise<ConnectionCheckResult> {
+    // console.log(`Verifying external API connection for provider: ${providerKey}`);
     // 1. プロバイダー設定を取得
     let e: ExtApiClient;
     try {
@@ -46,11 +47,18 @@ async function verifyExtApiConnection(
             providerEmail: null,
         };
     }
+    // console.log(`Found provider configuration for ${providerKey}:`, {
+    //     label: e.label,
+    //     type: e.type,
+    //     authType: e.authType,
+    // });
 
     // 2. ユーザーのOAuth認証状態を確認
     const oAuthAccount = await ds.getRepository(OAuthAccountEntity).findOne({
         where: { orgKey, userId, provider: providerKey },
     });
+
+    // console.log(`OAuth account for user ${userId} and provider ${providerKey}:`, oAuthAccount);
 
     if (!oAuthAccount) {
         return {
@@ -67,11 +75,18 @@ async function verifyExtApiConnection(
 
     // 3. 認証付きaxiosクライアントを取得してpathUserInfoにリクエスト
     try {
+        // console.log(`Attempting to verify connection for provider ${providerKey}...`);
         const axiosGenerator = await e.axiosWithAuth;
+        // console.log(`Generated axios with auth for provider ${providerKey}.`);
         const axiosWithAuth = await axiosGenerator(userId);
 
         const url = `${e.uriBase}${e.pathUserInfo}`;
+        console.log(`Verifying connection to ${providerKey} via ${url}`);
+        // console.log(`Using token: ${oAuthAccount.accessToken?.substring(0, 4)}...`);
+        console.log(`Using token: ${axiosWithAuth.defaults.headers['Authorization']?.toString()}`);
+        // console.dir(axiosWithAuth.defaults.headers);
         await axiosWithAuth.get(url);
+        // console.log(`Connection to ${providerKey} verified successfully.`);
 
         // 4. 成功
         return {
@@ -96,6 +111,8 @@ async function verifyExtApiConnection(
         } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
             message = 'サーバーに接続できません。';
         }
+
+        console.error(`Connection verification failed for provider ${providerKey}:`, error.message || error);
 
         return {
             provider: providerKey,
@@ -132,6 +149,7 @@ export const getExtApiStatus = [
             const providerKeys = apiProviders.map(
                 (provider: ApiProviderEntity) => `${provider.type}-${provider.name}`
             );
+            // console.log('Checking external API connections for providers:', providerKeys);
 
             const checkResults = await Promise.all(
                 providerKeys.map(providerKey => verifyExtApiConnection(orgKey, userId, providerKey))
