@@ -1,4 +1,4 @@
-import { Column, Entity, Index, Generated } from 'typeorm';
+import { Column, Entity, Generated, Index } from 'typeorm';
 import { MyBaseEntity } from './base.js';
 
 export enum AutomationJobStatus {

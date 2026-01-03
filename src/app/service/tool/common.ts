@@ -15,16 +15,20 @@ import { JSDOM } from 'jsdom';
 import { Browser } from 'puppeteer';
 import { In } from 'typeorm';
 import { getAxios, getPuppeteer } from '../../common/http-client.js';
-import { MyToolType, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
+import { MyToolType } from '../../common/openai-api-wrapper.js';
 import { EnhancedRequestLimiter, Utils } from '../../common/utils.js';
+import { AIClientLike, getServiceAIClient } from '../common/ai-client.js';
+import { getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
 import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
 import { AgentTaskEntity, AgentTaskPriority, AgentTaskStatus } from '../entity/agent-task.entity.js';
 import { OAuthAccountEntity } from '../entity/auth.entity.js';
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from '../entity/project-models.entity.js';
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../entity/project-models.entity.js';
 import { UserRequest } from '../models/info.js';
 
+
+const _aiApi = getServiceAIClient();
 
 const turndownService = new TurndownService();
 turndownService.remove(['script', 'style']); // 特定のHTML要素を削除
@@ -216,17 +220,17 @@ async function fetchRenderedText(browser: Browser, url: string, loadContentType:
     try {
         console.log(`puppeteer loadContentType=${loadContentType} url=${url}`);
 
-        // robots.txtチェック
-        const robotsCheck = await isRobotsTxtAllowed(url, 'Mozilla/5.0 (compatible; AI Bot)');
-        if (!robotsCheck.allowed) {
-            console.log(`Access blocked by robots.txt: ${robotsCheck.reason}`);
-            return {
-                type: 'ERROR',
-                title: 'Access Blocked',
-                favicon: '',
-                body: `このURLへのアクセスはrobots.txtによって制限されています: ${robotsCheck.reason}`
-            };
-        }
+        //        // robots.txtチェック
+        //        const robotsCheck = await isRobotsTxtAllowed(url, 'Mozilla/5.0 (compatible; AI Bot)');
+        //        if (!robotsCheck.allowed) {
+        //            console.log(`Access blocked by robots.txt: ${robotsCheck.reason}`);
+        //            return {
+        //                type: 'ERROR',
+        //                title: 'Access Blocked',
+        //                favicon: '',
+        //                body: `このURLへのアクセスはrobots.txtによって制限されています: ${robotsCheck.reason}`
+        //            };
+        //        }
 
         const page = await browser.newPage();
 
@@ -374,7 +378,7 @@ const aiModels = [
     { 'model': 'o1', 'description': '内部推論モデル。超高精度だが遅くて、高コスト。', },
     { 'model': 'o3-mini', 'description': '内部推論モデル。超高精度だが遅くて、高コスト。', },
     // { 'model': 'gemini-1.5-flash', 'description': '高速かつ効率的、Gemini 1.5 Proの軽量版。大量の情報を迅速に処理するニーズに応え、コスト効率も高い。リアルタイム処理が求められる場面での活用が期待されている。', },
-    { 'model': 'gemini-1.5-pro', 'description': '長文コンテキスト処理能力に優れる。大量のテキストやコードの解析に強みを発揮。特定のタスクにおいて既存モデルを超える性能を示す。', },
+    { 'model': 'gemini-2.5-pro', 'description': '長文コンテキスト処理能力に優れる。大量のテキストやコードの解析に強みを発揮。特定のタスクにおいて既存モデルを超える性能を示す。', },
     { 'model': 'gemini-2.0-pro-exp-02-05', 'description': 'gemini-1.5-proの次世代モデル。前世代を上回る性能を持つが、試験運用版のためやや不安定な動作もある。' },
     { 'model': 'claude-3-5-sonnet-20241022', 'description': '推論、コーディング、コンテンツ作成など多様なタスクに対応。安全性と倫理的な配慮が重視されており、企業での利用に適している。バランスの取れた性能も評価されている。', },
     { 'model': 'claude-3-7-sonnet-20250219', 'description': '推論、コーディング、コンテンツ作成など多様なタスクに対応。安全性と倫理的な配慮が重視されており、企業での利用に適している。バランスの取れた性能も評価されている。ツール利用が得意', },
@@ -382,11 +386,13 @@ const aiModels = [
 
 export function commonFunctionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
-    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+    req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): MyToolType[] {
+    const aiApi_ = aiApi || _aiApi; // フォールバック
+    const wrapperLogger = getPredictHistoryWrapperLoggerForRequest(req);
     return [
         {
-            info: { group: 'web', isActive: true, isInteractive: false, label: 'Web検索', },
+            info: { group: 'web', isActive: false, isInteractive: false, label: 'Web検索', },
             definition: {
                 type: 'function', function: {
                     name: 'web_search',
@@ -396,7 +402,7 @@ export function commonFunctionDefinitions(
                         properties: {
                             query: { type: 'string', description: '検索クエリ' },
                             num: { type: 'number', description: '検索結果の最大数', default: 30 },
-                            // loadContentType: { type: 'string', description: `コンテンツの読込タイプ（'NONE'/'MARKDOWN'/'TEXT'）`, default: 'NONE' }, // HTML形式はバーストしがちなので消した。
+                            loadContentType: { type: 'string', description: `コンテンツの読込タイプ（'NONE'/'MARKDOWN'/'TEXT'）`, default: 'NONE' }, // HTML形式はバーストしがちなので消した。
                         },
                         required: ['query']
                     }
@@ -463,7 +469,7 @@ export function commonFunctionDefinitions(
             },
         },
         {
-            info: { group: 'web', isActive: false, isInteractive: false, label: 'Web検索エージェント', },
+            info: { group: 'web', isActive: true, isInteractive: false, label: 'Web検索エージェント', },
             definition: {
                 type: 'function', function: {
                     name: 'web_search_and_get_summary',
@@ -481,13 +487,13 @@ export function commonFunctionDefinitions(
                 }
             },
             handler: async (args: { query: string, num?: number, loadContentType: 'SNIPPET' | 'BODY', userPrompt?: string }): Promise<unknown[]> => {
-                const { query, num = 30, loadContentType = 'SNIPPET', userPrompt = 'テキストに変換してください。文量が多すぎる場合は文意を損なわない程度に要約してもよいです。' } = args;
+                const { query, num = 10, loadContentType = 'SNIPPET', userPrompt = 'テキストに変換してください。文量が多すぎる場合は文意を損なわない程度に要約してもよいです。' } = args;
                 const GOOGLE_CUSTOM_SEARCH_API_KEY = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY || '';
                 const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID || '';
 
                 const systemPrompt = 'アシスタントAI';
                 const model = 'gemini-2.5-flash';
-                const aiProvider = (await getAIProvider(req.info.user, model));
+                const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, model);
 
                 // 10件ずつ分割してリクエストするための処理
                 const maxResultsPerRequest = 10; // Google APIの制限
@@ -557,24 +563,19 @@ export function commonFunctionDefinitions(
                             const newLabel = `${label}-call_ai`;
 
                             // ヒストリー保存
-                            const history = new PredictHistoryWrapperEntity();
-                            history.orgKey = req.info.user.orgKey;
-                            history.connectionId = connectionId;
-                            history.streamId = streamId;
-                            history.messageId = message.id;
-                            history.label = newLabel;
-                            history.model = inDto.args.model;
-                            history.provider = aiProvider.type;
-                            history.createdBy = req.info.user.id;
-                            history.updatedBy = req.info.user.id;
-                            history.createdIp = req.info.ip;
-                            history.updatedIp = req.info.ip;
-                            await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+                            await wrapperLogger.log({
+                                connectionId,
+                                streamId,
+                                messageId: message.id,
+                                label: newLabel,
+                                model: inDto.args.model,
+                                provider: aiProviderClient.name,
+                            });
 
                             return new Promise((resolve, reject) => {
                                 let text = '';
-                                aiApi.chatCompletionObservableStream(
-                                    inDto.args, { label: newLabel }, aiProvider,
+                                aiApi_.chatCompletionObservableStream(
+                                    inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
                                 ).pipe(
                                     timeout(30_000), // ← 30秒のタイムアウトを設定（ミリ秒）
                                     map(res => res.choices.map(choice => choice.delta.content).join('')),
@@ -584,12 +585,10 @@ export function commonFunctionDefinitions(
                                     next: next => {
                                         text += next;
                                     },
-                                    error: error => {
-                                        // reject(error);
-                                        // console.log(`WebSearch fineCounter=${fineCounter++} error`);
+                                    error: async error => {
                                         resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: 'error' });
                                     },
-                                    complete: () => {
+                                    complete: async () => {
                                         resolve({ title: item.title, snippet: item.snippet, link: item.link, favicon: html.favicon, body: text });
                                     },
                                 });
@@ -626,7 +625,7 @@ export function commonFunctionDefinitions(
             },
         },
         {
-            info: { group: 'web', isActive: false, isInteractive: false, label: 'Webページを開く（複数可）', },
+            info: { group: 'web', isActive: true, isInteractive: false, label: 'Webページを開く（複数可）', },
             definition: {
                 type: 'function', function: {
                     name: 'get_web_page_contents',
@@ -657,6 +656,80 @@ export function commonFunctionDefinitions(
                 }));
                 await browser.close();
                 return res;
+            },
+        },
+        {
+            info: { group: 'ai', isActive: true, isInteractive: false, label: 'Gemini Google検索', },
+            definition: {
+                type: 'function', function: {
+                    name: 'web_search_by_gemini',
+                    description: `Gemini AIのGoogle検索機能を使って質問に答える`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            query: { type: 'string', description: '質問・検索クエリ' },
+                            model: { type: 'string', description: '使用するモデル[gemini-2.5-pro(default), gemini-2.5-flash, gemini-2.0-flash]' },
+                            systemPrompt: { type: 'string', description: 'システムプロンプト（default=あなたはGoogle検索を使って最新情報を提供できるアシスタントAIです。）' },
+                        },
+                        required: ['query']
+                    }
+                }
+            },
+            handler: async (args: { query: string, model?: string, systemPrompt?: string }): Promise<string> => {
+                const { query } = args;
+                const systemPrompt = args.systemPrompt || 'あなたはGoogle検索を使って最新情報を提供できるアシスタントAIです。';
+                const model = args.model || 'gemini-2.5-pro';
+                const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, model);
+
+                const inDto = Utils.deepCopyOmitting(obj.inDto, 'aiProviderClient');
+                inDto.args.model = model || inDto.args.model;
+                inDto.args.isGoogleSearch = true;
+
+                inDto.args.messages = [
+                    { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
+                    { role: 'user', content: [{ type: 'text', text: query }] },
+                ];
+
+                // Google検索を有効にする
+                (inDto.args as any).isGoogleSearch = true;
+
+                delete inDto.args.tool_choice;
+                delete inDto.args.tools;
+
+                const newLabel = `${label}-web_search_by_gemini`;
+
+                // レスポンス返した後にゆるりとヒストリーを更新しておく。
+                await wrapperLogger.log({
+                    connectionId,
+                    streamId,
+                    messageId: message?.id,
+                    label: newLabel,
+                    model: inDto.args.model,
+                    provider: aiProviderClient.name,
+                });
+
+                return new Promise((resolve, reject) => {
+                    let text = '';
+                    aiApi_.chatCompletionObservableStream(
+                        inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
+                    ).pipe(
+                        timeout(120_000), // 120秒のタイムアウト
+                        map(res => res.choices.map(choice => choice.delta.content).join('')),
+                        toArray(),
+                        map(res => res.join('')),
+                    ).subscribe({
+                        next: next => {
+                            text += next;
+                        },
+                        error: error => {
+                            console.error('web_search_by_gemini error:', error);
+                            reject(Utils.errorFormat(error));
+                        },
+                        complete: () => {
+                            resolve(text);
+                        },
+                    });
+                });
             },
         },
         {
@@ -888,29 +961,24 @@ export function commonFunctionDefinitions(
                 delete inDto.args.tool_choice;
                 delete inDto.args.tools;
 
-                const aiProvider = await getAIProvider(req.info.user, inDto.args.model);
+                const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, inDto.args.model);
 
                 const newLabel = `${label}-call_ai-${model}`;
                 // レスポンス返した後にゆるりとヒストリーを更新しておく。
-                const history = new PredictHistoryWrapperEntity();
-                history.orgKey = req.info.user.orgKey;
-                history.connectionId = connectionId;
-                history.streamId = streamId;
-                history.messageId = message.id;
-                history.label = newLabel;
-                history.model = inDto.args.model;
-                history.provider = aiProvider.type;
-                history.createdBy = req.info.user.id;
-                history.updatedBy = req.info.user.id;
-                history.createdIp = req.info.ip;
-                history.updatedIp = req.info.ip;
-                await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+                await wrapperLogger.log({
+                    connectionId,
+                    streamId,
+                    messageId: message.id,
+                    label: newLabel,
+                    model: inDto.args.model,
+                    provider: aiProviderClient.name,
+                });
 
                 return new Promise((resolve, reject) => {
                     let text = '';
                     // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
-                    aiApi.chatCompletionObservableStream(
-                        inDto.args, { label: newLabel }, aiProvider,
+                    aiApi_.chatCompletionObservableStream(
+                        inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
                     ).pipe(
                         map(res => res.choices.map(choice => choice.delta.content).join('')),
                         toArray(),
@@ -919,10 +987,10 @@ export function commonFunctionDefinitions(
                         next: next => {
                             text += next;
                         },
-                        error: error => {
+                        error: async error => {
                             reject(error);
                         },
-                        complete: () => {
+                        complete: async () => {
                             resolve(text);
                         },
                     });;
@@ -991,7 +1059,7 @@ export function commonFunctionDefinitions(
             }
         } as MyToolType,
         {
-            info: { group: 'task', isActive: true, isInteractive: false, label: 'タスク登録', },
+            info: { group: 'task', isActive: false, isInteractive: false, label: 'タスク登録', },
             definition: {
                 type: 'function', function: {
                     name: 'agent_task_register',
@@ -1048,7 +1116,7 @@ export function commonFunctionDefinitions(
             },
         },
         {
-            info: { group: 'task', isActive: true, isInteractive: false, label: 'タスク一覧', },
+            info: { group: 'task', isActive: false, isInteractive: false, label: 'タスク一覧', },
             definition: {
                 type: 'function', function: {
                     name: 'agent_task_list',
@@ -1101,7 +1169,7 @@ export function commonFunctionDefinitions(
             },
         },
         {
-            info: { group: 'task', isActive: true, isInteractive: false, label: 'タスク完了', },
+            info: { group: 'task', isActive: false, isInteractive: false, label: 'タスク完了', },
             definition: {
                 type: 'function', function: {
                     name: 'agent_task_complete',
@@ -1193,7 +1261,7 @@ export async function getOAuthAccountForTool(req: UserRequest, provider: string)
         where: { orgKey: req.info.user.orgKey, provider, userId: req.info.user.id },
     });
     let axiosWithAuth;
-    if (provider.startsWith('mattermost')) {
+    if (provider.startsWith('mattermost') && req.cookies.MMAUTHTOKEN) {
         // Mattermostの場合はCookieを使う
         axiosWithAuth = await getAxios(e.uriBase);
         axiosWithAuth.defaults.headers.common['Authorization'] = `Bearer ${req.cookies.MMAUTHTOKEN}`

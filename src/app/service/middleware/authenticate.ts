@@ -64,9 +64,13 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
 
         try {
             return Promise.resolve().then(async () => {
+                // gemini-cli用にx-goog-api-keyを、Azure用にOcp-Apim-Subscription-Keyを有効にした。
+                // console.dir(req.headers);
+                const authorization = (req.headers?.authorization?.split(' ')[1] || req.headers['x-goog-api-key'] || req.headers['ocp-apim-subscription-key']) as string | undefined;
                 // JWT認証ロジック
                 // console.log(`req.cookies.access_token=` + req.cookies.access_token);
-                if (!((req.cookies && req.cookies.access_token) || req.headers.authorization)) {
+                // console.log(`authorization=` + authorization);
+                if (!((req.cookies && req.cookies.access_token) || authorization)) {
                     // 全くトークンがない場合は即時停止
                     return Promise.resolve({ isAuth: false, obj: new Error('auth info not found 0') });
                 } else {
@@ -78,7 +82,7 @@ export const authenticateUserTokenMiddleGenerator = (roleType?: UserRoleType, fo
                         // アクセストークン検証
                         ? verifyJwt<UserTokenPayload>(req.cookies.access_token, ACCESS_TOKEN_JWT_SECRET, 'user')
                         // API用トークンの検証
-                        : ds.transaction(async manager => await verifyApiKey(xRealIp, manager, req.headers.authorization?.split(' ')[1] || ''))
+                        : ds.transaction(async manager => await verifyApiKey(xRealIp, manager, authorization || ''))
                     );
 
                     if (!userTokenPayload) {

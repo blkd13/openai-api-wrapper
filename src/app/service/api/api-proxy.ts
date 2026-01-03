@@ -85,7 +85,6 @@ export const getOAuthApiProxy = [
         // console.log(e);
         let url = '';
         try {
-            const user = req.info.user;
             // エラーログ出力用に`req.params[0]` で `/api/proxy/` に続くパス全体を取得する
             url = `${e.uriBase}/${req.params[0]}`;
             const baseUrlObj = new URL(e.uriBase);
@@ -99,6 +98,9 @@ export const getOAuthApiProxy = [
             // console.log(req.params[0]);
             pathRewrite[`^/basic-api/${providerType}/${providerName}/${req.params[0]}`] = apiMap[req.params[0]];
             // console.log(pathRewrite);
+            // console.log(apiMap[req.params[0]]);
+            console.log(`API_PROXY: ${provider} url=${url} ${pathRewrite} ${apiMap[req.params[0]]} ${req.params[0]}`);
+            // const agent = new https.Agent({ rejectUnauthorized: false, });
 
             // httpsの証明書検証スキップ用のエージェント。社内だから検証しなくていい。
 
@@ -112,7 +114,9 @@ export const getOAuthApiProxy = [
             // }
             const proxyUrl = await getProxyUrl(e.uriBase);
             const target = proxyUrl || e.uriBase;
+            // console.log(`API_PROXY: ${provider} target=${target} url=${url},${proxyUrl},${e.uriBase}`);
             const MMAUTHTOKEN = req.cookies.MMAUTHTOKEN;
+            const MMUSERID = req.cookies.MMUSERID;
 
             // console.log(baseUrlObj);
             // console.dir(pathRewrite, { depth: null });
@@ -145,13 +149,15 @@ export const getOAuthApiProxy = [
                     },
                     proxyReq: async (proxyReq, req) => {
                         if (providerType === 'mattermost') {
-                            proxyReq.setHeader('Cookie', `MMAUTHTOKEN=${MMAUTHTOKEN}`);
+                            proxyReq.setHeader('Cookie', `MMAUTHTOKEN=${MMAUTHTOKEN}; MMUSERID=${MMUSERID}; `);
                             // console.log('mattermost-proxyReq', proxyReq.path, proxyReq.getHeader('Cookie'));
                         } else {
                             // mattermostはAuthorizationを使わずにブラウザのCookieを使う
                             proxyReq.setHeader('Authorization', `Bearer ${accessToken}`);
                             // console.log(`Authorization: Bearer ${accessToken}`);
                         }
+                        // console.log(`API_PROXY: ${provider} ${req.method} ${req.url} -> ${target}-${proxyReq.path}`);
+                        // console.log(`API_PROXY: ${provider} ${req.method} ${req.url} -> ${target}${proxyReq.path}`);
                         if (proxyUrl) {
                             // console.log(`host=${req.headers.host} ${proxyReq.getHeaders().host}`)
                             // 二重プロキシの場合はパスにhostを埋め込む。
@@ -161,6 +167,7 @@ export const getOAuthApiProxy = [
                             proxyReq.setHeader('host', new URL(e.uriBase).host);
                             proxyReq.setHeader('origin', `https://${new URL(e.uriBase).host}`);
                             proxyReq.setHeader('referer', `https://${proxyReq.path}`);
+
 
                             // console.dir(req);
                             // console.dir(proxyReq);

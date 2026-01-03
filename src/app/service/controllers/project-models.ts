@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 
 import { body, param, query } from 'express-validator';
-import { EntityManager, EntityNotFoundError, In, Not } from 'typeorm';
+import { EntityManager, EntityNotFoundError, ILike, In, Not } from 'typeorm';
 import { Utils } from '../../common/utils.js';
 import { ds } from '../db.js';
 import { UserEntity } from '../entity/auth.entity.js';
@@ -464,7 +464,7 @@ export const updateTeamMember = [
                     where: {
                         orgKey: req.info.user.orgKey,
                         teamId: teamId,
-                        userId: userId
+                        id: userId
                     }
                 });
 
@@ -1095,21 +1095,30 @@ export const upsertThreadGroup = [
 
 /**
  * [認証なし/user認証] スレッドグループ一覧取得
+ * Normalタイプのみページング、それ以外は全量取得
  */
-export const getThreadGroupList = [
+export const getThreadGroup = [
     param('projectId').notEmpty().isUUID(),
+    param('threadGroupId').notEmpty().isUUID(),
+    query('page').optional().isInt({ min: 1 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { projectId } = req.params;
+        const { projectId, threadGroupId } = req.params;
+        const page = (req.query.page as unknown as number) || 1;
+        const limit = (req.query.limit as unknown as number) || 50;
+        const skip = (page - 1) * limit;
 
         try {
             const project = await ds.getRepository(ProjectEntity).findOneOrFail({
                 where: { orgKey: req.info.user.orgKey, id: projectId }
             });
 
-            let threadGroups: ThreadGroupEntity[];
+            let normalThreadGroups: ThreadGroupEntity[];
+            let otherThreadGroups: ThreadGroupEntity[];
             let threads: ThreadEntity[];
+            let totalCount: number;
 
             if (req.info && req.info.user) {
                 // ログインしている場合
@@ -1123,11 +1132,27 @@ export const getThreadGroupList = [
 
                 if (teamMember || project.visibility === ProjectVisibility.Public || project.visibility === ProjectVisibility.Login) {
                     // チームメンバー、または公開/ログインユーザー向けプロジェクトの場合
-                    threadGroups = await ds.getRepository(ThreadGroupEntity).find({
-                        where: { orgKey: req.info.user.orgKey, projectId, status: Not(ThreadGroupStatus.Deleted) }
+                    const baseCondition = { id: threadGroupId, orgKey: req.info.user.orgKey, projectId, status: Not(ThreadGroupStatus.Deleted) };
+
+                    // Normalタイプのみページングで取得
+                    const normalWhereCondition = { ...baseCondition, type: ThreadGroupType.Normal, };
+                    totalCount = await ds.getRepository(ThreadGroupEntity).count({ where: normalWhereCondition });
+                    normalThreadGroups = await ds.getRepository(ThreadGroupEntity).find({
+                        where: normalWhereCondition,
+                        order: { createdAt: 'DESC' },
+                        skip,
+                        take: limit
                     });
+
+                    // Normal以外のタイプは全量取得
+                    otherThreadGroups = await ds.getRepository(ThreadGroupEntity).find({
+                        where: { ...baseCondition, type: Not(ThreadGroupType.Normal) },
+                        order: { createdAt: 'DESC' }
+                    });
+
+                    const allThreadGroups = [...normalThreadGroups, ...otherThreadGroups];
                     threads = await ds.getRepository(ThreadEntity).find({
-                        where: { orgKey: req.info.user.orgKey, threadGroupId: In(threadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) },
+                        where: { orgKey: req.info.user.orgKey, threadGroupId: In(allThreadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) },
                         order: { seq: 'ASC' }
                     });
                 } else {
@@ -1137,19 +1162,43 @@ export const getThreadGroupList = [
                 // ログインしていない場合
                 if (project.visibility === ProjectVisibility.Public) {
                     // 公開プロジェクトの場合
-                    threadGroups = await ds.getRepository(ThreadGroupEntity).find({
-                        where: { orgKey: req.info.user.orgKey, projectId, visibility: ThreadGroupVisibility.Public, status: Not(ThreadGroupStatus.Deleted) }
+                    const baseCondition = { id: threadGroupId, orgKey: req.info.user.orgKey, projectId, visibility: ThreadGroupVisibility.Public, status: Not(ThreadGroupStatus.Deleted) };
+
+                    // Normalタイプのみページングで取得
+                    const normalWhereCondition = { ...baseCondition, type: ThreadGroupType.Normal };
+                    totalCount = await ds.getRepository(ThreadGroupEntity).count({ where: normalWhereCondition });
+                    normalThreadGroups = await ds.getRepository(ThreadGroupEntity).find({
+                        where: normalWhereCondition,
+                        order: { createdAt: 'DESC' },
+                        skip,
+                        take: limit
                     });
+
+                    // Normal以外のタイプは全量取得
+                    otherThreadGroups = await ds.getRepository(ThreadGroupEntity).find({
+                        where: { ...baseCondition, type: Not(ThreadGroupType.Normal) },
+                        order: { createdAt: 'DESC' }
+                    });
+
+                    const allThreadGroups = [...normalThreadGroups, ...otherThreadGroups];
                     threads = await ds.getRepository(ThreadEntity).find({
-                        where: { orgKey: req.info.user.orgKey, threadGroupId: In(threadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
+                        where: { orgKey: req.info.user.orgKey, threadGroupId: In(allThreadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
                     });
                 } else {
                     throw new Error('このプロジェクトのスレッド一覧を取得する権限がありません');
                 }
             }
 
-            const responseDto = threadGroups.map(tg => ({ ...tg, threadList: threads.filter(t => t.threadGroupId === tg.id) }));
-            res.status(200).json(responseDto);
+            // レスポンス作成：Normalはページング情報付き、それ以外は別途全量
+            const normalResponseDto = normalThreadGroups.map(tg => ({ ...tg, threadList: threads.filter(t => t.threadGroupId === tg.id) }));
+            const otherResponseDto = otherThreadGroups.map(tg => ({ ...tg, threadList: threads.filter(t => t.threadGroupId === tg.id) }));
+            const totalPages = Math.ceil(totalCount / limit);
+            const totalItems = [...normalThreadGroups, ...otherThreadGroups].length;
+            if (normalResponseDto.length === 1) {
+                res.status(200).json([...normalResponseDto, ...otherResponseDto][0]);
+            } else {
+                res.status(404).json({ message: '指定されたスレッドグループが見つかりません' });// ページング対応していないので404
+            }
         } catch (error) {
             console.error('Error getting thread list:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
             if (error instanceof EntityNotFoundError) {
@@ -1158,6 +1207,243 @@ export const getThreadGroupList = [
                 res.status(403).json({ message: (error as any).message });
             } else {
                 res.status(500).json({ message: 'スレッド一覧の取得中にエラーが発生しました' });
+            }
+        }
+    }
+];
+/**
+ * [認証なし/user認証] スレッドグループ一覧取得
+ * Normalタイプのみページング、それ以外は全量取得
+ */
+export const getThreadGroupList = [
+    param('projectId').notEmpty().isUUID(),
+    query('page').optional().isInt({ min: 1 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { projectId } = req.params;
+        const page = (req.query.page as unknown as number) || 1;
+        const limit = (req.query.limit as unknown as number) || 50;
+        const skip = (page - 1) * limit;
+
+        try {
+            const project = await ds.getRepository(ProjectEntity).findOneOrFail({
+                where: { orgKey: req.info.user.orgKey, id: projectId }
+            });
+
+            let normalThreadGroups: ThreadGroupEntity[];
+            let otherThreadGroups: ThreadGroupEntity[];
+            let threads: ThreadEntity[];
+            let totalCount: number;
+
+            if (req.info && req.info.user) {
+                // ログインしている場合
+                const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
+                    where: {
+                        orgKey: req.info.user.orgKey,
+                        teamId: project.teamId,
+                        userId: req.info.user.id
+                    }
+                });
+
+                if (teamMember || project.visibility === ProjectVisibility.Public || project.visibility === ProjectVisibility.Login) {
+                    // チームメンバー、または公開/ログインユーザー向けプロジェクトの場合
+                    const baseCondition = { orgKey: req.info.user.orgKey, projectId, status: Not(ThreadGroupStatus.Deleted) };
+
+                    // Normalタイプのみページングで取得
+                    const normalWhereCondition = { ...baseCondition, type: ThreadGroupType.Normal };
+                    totalCount = await ds.getRepository(ThreadGroupEntity).count({ where: normalWhereCondition });
+                    normalThreadGroups = await ds.getRepository(ThreadGroupEntity).find({
+                        where: normalWhereCondition,
+                        order: { createdAt: 'DESC' },
+                        skip,
+                        take: limit
+                    });
+
+                    // Normal以外のタイプは全量取得
+                    otherThreadGroups = await ds.getRepository(ThreadGroupEntity).find({
+                        where: { ...baseCondition, type: Not(ThreadGroupType.Normal) },
+                        order: { createdAt: 'DESC' }
+                    });
+
+                    const allThreadGroups = [...normalThreadGroups, ...otherThreadGroups];
+                    threads = await ds.getRepository(ThreadEntity).find({
+                        where: { orgKey: req.info.user.orgKey, threadGroupId: In(allThreadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) },
+                        order: { seq: 'ASC' }
+                    });
+                } else {
+                    throw new Error('このプロジェクトのスレッド一覧を取得する権限がありません');
+                }
+            } else {
+                // ログインしていない場合
+                if (project.visibility === ProjectVisibility.Public) {
+                    // 公開プロジェクトの場合
+                    const baseCondition = { orgKey: req.info.user.orgKey, projectId, visibility: ThreadGroupVisibility.Public, status: Not(ThreadGroupStatus.Deleted) };
+
+                    // Normalタイプのみページングで取得
+                    const normalWhereCondition = { ...baseCondition, type: ThreadGroupType.Normal };
+                    totalCount = await ds.getRepository(ThreadGroupEntity).count({ where: normalWhereCondition });
+                    normalThreadGroups = await ds.getRepository(ThreadGroupEntity).find({
+                        where: normalWhereCondition,
+                        order: { createdAt: 'DESC' },
+                        skip,
+                        take: limit
+                    });
+
+                    // Normal以外のタイプは全量取得
+                    otherThreadGroups = await ds.getRepository(ThreadGroupEntity).find({
+                        where: { ...baseCondition, type: Not(ThreadGroupType.Normal) },
+                        order: { createdAt: 'DESC' }
+                    });
+
+                    const allThreadGroups = [...normalThreadGroups, ...otherThreadGroups];
+                    threads = await ds.getRepository(ThreadEntity).find({
+                        where: { orgKey: req.info.user.orgKey, threadGroupId: In(allThreadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
+                    });
+                } else {
+                    throw new Error('このプロジェクトのスレッド一覧を取得する権限がありません');
+                }
+            }
+
+            // レスポンス作成：Normalはページング情報付き、それ以外は別途全量
+            const normalResponseDto = normalThreadGroups.map(tg => ({ ...tg, threadList: threads.filter(t => t.threadGroupId === tg.id) }));
+            const otherResponseDto = otherThreadGroups.map(tg => ({ ...tg, threadList: threads.filter(t => t.threadGroupId === tg.id) }));
+            const totalPages = Math.ceil(totalCount / limit);
+            res.status(200).json({
+                data: [...normalResponseDto, ...otherResponseDto],
+                pagination: {
+                    page,
+                    limit,
+                    totalCount,
+                    totalPages,
+                    hasNextPage: page < totalPages,
+                    hasPrevPage: page > 1
+                }
+            });
+        } catch (error) {
+            console.error('Error getting thread list:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: '指定されたプロジェクトが見つかりません' });
+            } else if ((error as any).message === 'このプロジェクトのスレッド一覧を取得する権限がありません') {
+                res.status(403).json({ message: (error as any).message });
+            } else {
+                res.status(500).json({ message: 'スレッド一覧の取得中にエラーが発生しました' });
+            }
+        }
+    }
+];
+
+/**
+ * [認証なし/user認証] スレッドグループをタイトルで検索
+ */
+export const searchThreadGroupByTitle = [
+    param('projectId').notEmpty().isUUID(),
+    query('title').notEmpty().isString().trim(),
+    query('page').optional().isInt({ min: 1 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { projectId } = req.params;
+        const title = req.query.title as string;
+        const page = (req.query.page as unknown as number) || 1;
+        const limit = (req.query.limit as unknown as number) || 50;
+        const skip = (page - 1) * limit;
+
+        try {
+            const project = await ds.getRepository(ProjectEntity).findOneOrFail({
+                where: { orgKey: req.info.user.orgKey, id: projectId }
+            });
+
+            let threadGroups: ThreadGroupEntity[];
+            let threads: ThreadEntity[];
+            let totalCount: number;
+
+            if (req.info && req.info.user) {
+                // ログインしている場合
+                const teamMember = await ds.getRepository(TeamMemberEntity).findOne({
+                    where: {
+                        orgKey: req.info.user.orgKey,
+                        teamId: project.teamId,
+                        userId: req.info.user.id
+                    }
+                });
+
+                if (teamMember || project.visibility === ProjectVisibility.Public || project.visibility === ProjectVisibility.Login) {
+                    // チームメンバー、または公開/ログインユーザー向けプロジェクトの場合
+                    const whereCondition = {
+                        orgKey: req.info.user.orgKey,
+                        projectId,
+                        title: ILike(`%${title}%`),
+                        status: Not(ThreadGroupStatus.Deleted)
+                    };
+
+                    totalCount = await ds.getRepository(ThreadGroupEntity).count({ where: whereCondition });
+                    threadGroups = await ds.getRepository(ThreadGroupEntity).find({
+                        where: whereCondition,
+                        order: { createdAt: 'DESC' },
+                        skip,
+                        take: limit
+                    });
+
+                    threads = await ds.getRepository(ThreadEntity).find({
+                        where: { orgKey: req.info.user.orgKey, threadGroupId: In(threadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) },
+                        order: { seq: 'ASC' }
+                    });
+                } else {
+                    throw new Error('このプロジェクトのスレッド一覧を検索する権限がありません');
+                }
+            } else {
+                // ログインしていない場合
+                if (project.visibility === ProjectVisibility.Public) {
+                    // 公開プロジェクトの場合
+                    const whereCondition = {
+                        orgKey: req.info.user.orgKey,
+                        projectId,
+                        title: ILike(`%${title}%`),
+                        visibility: ThreadGroupVisibility.Public,
+                        status: Not(ThreadGroupStatus.Deleted)
+                    };
+
+                    totalCount = await ds.getRepository(ThreadGroupEntity).count({ where: whereCondition });
+                    threadGroups = await ds.getRepository(ThreadGroupEntity).find({
+                        where: whereCondition,
+                        order: { createdAt: 'DESC' },
+                        skip,
+                        take: limit
+                    });
+
+                    threads = await ds.getRepository(ThreadEntity).find({
+                        where: { orgKey: req.info.user.orgKey, threadGroupId: In(threadGroups.map(tg => tg.id)), status: Not(ThreadStatus.Deleted) }
+                    });
+                } else {
+                    throw new Error('このプロジェクトのスレッド一覧を検索する権限がありません');
+                }
+            }
+
+            // レスポンス作成
+            const responseDto = threadGroups.map(tg => ({ ...tg, threadList: threads.filter(t => t.threadGroupId === tg.id) }));
+            const totalPages = Math.ceil(totalCount / limit);
+            res.status(200).json({
+                data: responseDto,
+                pagination: {
+                    page,
+                    limit,
+                    totalCount,
+                    totalPages,
+                    hasNextPage: page < totalPages,
+                    hasPrevPage: page > 1
+                }
+            });
+        } catch (error) {
+            console.error('Error searching thread group by title:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: '指定されたプロジェクトが見つかりません' });
+            } else if ((error as any).message === 'このプロジェクトのスレッド一覧を検索する権限がありません') {
+                res.status(403).json({ message: (error as any).message });
+            } else {
+                res.status(500).json({ message: 'スレッドグループの検索中にエラーが発生しました' });
             }
         }
     }

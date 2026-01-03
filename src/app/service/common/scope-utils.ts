@@ -99,11 +99,11 @@ export class ScopeUtils {
     /**
      * ユーザーのロールリストからスコープ条件を生成
      */
-    static generateScopeConditions(user: UserTokenPayloadWithRole, baseCriteria: any = {}): any[] {
-        return user.roleList.map(role => {
+    static generateScopeConditions(orgKey: string, roleList: UserRole[], baseCriteria: any = {}): any[] {
+        return roleList.map(role => {
             const condition = {
                 ...baseCriteria,
-                orgKey: user.orgKey,
+                orgKey,
                 scopeInfo: {
                     scopeType: role.scopeInfo.scopeType,
                     scopeId: role.scopeInfo.scopeId,

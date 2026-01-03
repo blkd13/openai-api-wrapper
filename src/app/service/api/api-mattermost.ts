@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { body, param } from "express-validator";
-import { In } from 'typeorm';
+import { body, param, query } from "express-validator";
+import { In, Not } from 'typeorm';
 
 import { Axios } from 'axios';
 import { ChatModel } from 'openai/resources.js';
@@ -12,7 +12,7 @@ import { ExtApiClient, getExtApiClient } from '../controllers/auth.js';
 import { geminiCountTokensByContentPart, geminiCountTokensByFile } from '../controllers/chat-by-project-model.js';
 import { convertToMapSet, handleFileUpload } from '../controllers/file-manager.js';
 import { ds } from '../db.js';
-import { MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity } from '../entity/api-mattermost.entity.js';
+import { MmTimelineChannelEntity, MmTimelineEntity, MmTimelineStatus, MmUserEntity, MmUserGroupEntity, MmUserGroupScope, MmUserGroupStatus } from '../entity/api-mattermost.entity.js';
 import { FileAccessEntity, FileEntity, FileGroupEntity } from '../entity/file-models.entity.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity, ProjectEntity, TeamMemberEntity, ThreadEntity, ThreadGroupEntity } from '../entity/project-models.entity.js';
 import { validationErrorHandler } from "../middleware/validation.js";
@@ -72,12 +72,13 @@ export const getTimelines = [
         try {
             const timelines = await ds.getRepository(MmTimelineEntity).find({
                 where: { orgKey: req.info.user.orgKey, userId, status: MmTimelineStatus.Normal },
-                order: { createdAt: 'DESC' },
+                order: { sortOrder: 'ASC', createdAt: 'DESC' },
             });
             // channelsを埋めておく
             timelines.forEach(tl => (tl as any).channels = []);
             const timelineChannel = await ds.getRepository(MmTimelineChannelEntity).find({
-                where: { orgKey: req.info.user.orgKey, timelineId: In(timelines.map(timeline => timeline.id)) }
+                where: { orgKey: req.info.user.orgKey, timelineId: In(timelines.map(timeline => timeline.id)) },
+                order: { sortOrder: 'ASC', createdAt: 'ASC' },
             })
             const tlMas = timelines.reduce((mas, curr) => {
                 mas[curr.id] = curr;
@@ -99,17 +100,30 @@ export const createTimeline = [
     body('title').isString().notEmpty(),
     body('description').optional().isString(),
     body('channelIds').optional().isArray(),
+    body('sortOrder').optional().isInt({ min: 0 }),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { title, description, channelIds } = req.body as { title: string, description: string, channelIds: string[] };
+        const { title, description, channelIds, sortOrder } = req.body as { title: string, description: string, channelIds: string[], sortOrder?: number };
         const { providerName } = req.params as { providerName: string };
         try {
             const savedTl = await ds.transaction(async em => {
-                const timeline = { orgKey: req.info.user.orgKey, userId: req.info.user.id, title, description, createdBy: req.info.user.id, updatedBy: req.info.user.id, createdIp: req.info.ip, updatedIp: req.info.ip };
+                // sortOrderが指定されていない場合は最後尾に追加
+                let finalSortOrder = sortOrder;
+                if (finalSortOrder === undefined || finalSortOrder === null) {
+                    const maxSortOrderResult = await em.getRepository(MmTimelineEntity)
+                        .createQueryBuilder('timeline')
+                        .select('MAX(timeline.sortOrder)', 'maxSortOrder')
+                        .where('timeline.orgKey = :orgKey', { orgKey: req.info.user.orgKey })
+                        .andWhere('timeline.userId = :userId', { userId: req.info.user.id })
+                        .andWhere('timeline.status = :status', { status: MmTimelineStatus.Normal })
+                        .getRawOne();
+                    finalSortOrder = (maxSortOrderResult?.maxSortOrder ?? -1) + 1;
+                }
+                const timeline = { orgKey: req.info.user.orgKey, userId: req.info.user.id, title, description, sortOrder: finalSortOrder, createdBy: req.info.user.id, updatedBy: req.info.user.id, createdIp: req.info.ip, updatedIp: req.info.ip };
                 const savedTl = await em.getRepository(MmTimelineEntity).save(timeline);
-                channelIds.forEach(async channelId => {
-                    await em.getRepository(MmTimelineChannelEntity).save({ orgKey: req.info.user.orgKey, channelId, timelineId: savedTl.id, isMute: false, createdBy: req.info.user.id, updatedBy: req.info.user.id, createdIp: req.info.ip, updatedIp: req.info.ip, lastViewedAt: new Date() });
+                channelIds.forEach(async (channelId, index) => {
+                    await em.getRepository(MmTimelineChannelEntity).save({ orgKey: req.info.user.orgKey, channelId, timelineId: savedTl.id, isMute: false, sortOrder: index, createdBy: req.info.user.id, updatedBy: req.info.user.id, createdIp: req.info.ip, updatedIp: req.info.ip, lastViewedAt: new Date() });
                 });
                 return savedTl;
             });
@@ -151,6 +165,10 @@ export const updateTimeline = [
                         where: { orgKey: req.info.user.orgKey, timelineId: id }
                     });
 
+                    const existingChannelIdMap = existingChannels.reduce((map, ch) => {
+                        map[ch.channelId] = ch;
+                        return map;
+                    }, {} as { [channelId: string]: MmTimelineChannelEntity });
                     const existingChannelIds = existingChannels.map(ch => ch.channelId);
                     const channelsToAdd = channelIds.filter(chId => !existingChannelIds.includes(chId));
                     const channelsToRemove = existingChannels.filter(ch => !channelIds.includes(ch.channelId));
@@ -160,13 +178,14 @@ export const updateTimeline = [
                         await em.getRepository(MmTimelineChannelEntity).remove(channelsToRemove);
                     }
 
-                    // 追加するチャンネルを処理
+                    // 追加するチャンネルを処理（sortOrderは配列のインデックス）
                     if (channelsToAdd.length > 0) {
                         const newChannels = channelsToAdd.map(channelId => {
                             const newChannel = new MmTimelineChannelEntity();
                             newChannel.orgKey = req.info.user.orgKey;
                             newChannel.timelineId = id;
                             newChannel.channelId = channelId;
+                            newChannel.sortOrder = channelIds.indexOf(channelId);
                             newChannel.createdBy = req.info.user.id;
                             newChannel.createdIp = req.info.ip;
                             newChannel.updatedBy = req.info.user.id;
@@ -175,6 +194,18 @@ export const updateTimeline = [
                         });
 
                         await em.getRepository(MmTimelineChannelEntity).save(newChannels);
+                    }
+
+                    // 既存チャンネルのsortOrderを更新（配列のインデックスに基づいて）
+                    const channelsToUpdate = existingChannels.filter(ch => channelIds.includes(ch.channelId));
+                    for (const channel of channelsToUpdate) {
+                        const newSortOrder = channelIds.indexOf(channel.channelId);
+                        if (channel.sortOrder !== newSortOrder) {
+                            channel.sortOrder = newSortOrder;
+                            channel.updatedBy = req.info.user.id;
+                            channel.updatedIp = req.info.ip;
+                            await em.getRepository(MmTimelineChannelEntity).save(channel);
+                        }
                     }
                 }
 
@@ -270,6 +301,76 @@ export const deleteTimeline = [
     }
 ];
 
+/**
+ * タイムラインの並び順を一括更新
+ * PATCH /api/user/mattermost/:providerName/timeline/reorder
+ */
+export const reorderTimelines = [
+    param('providerName').isString().notEmpty(),
+    body('timelineIds').isArray({ min: 1 }),
+    body('timelineIds.*').isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const userId = req.info.user.id;
+        const { providerName } = req.params as { providerName: string };
+        const { timelineIds } = req.body as { timelineIds: string[] };
+
+        try {
+            // 重複チェック
+            const uniqueTimelineIds = [...new Set(timelineIds)];
+            if (uniqueTimelineIds.length !== timelineIds.length) {
+                return res.status(400).json({
+                    error: 'duplicate_timeline_ids',
+                    message: 'Duplicate timeline IDs are not allowed'
+                });
+            }
+
+            await ds.transaction(async em => {
+                const timelineRepository = em.getRepository(MmTimelineEntity);
+
+                // 指定されたタイムラインをすべて取得
+                const timelines = await timelineRepository.find({
+                    where: {
+                        orgKey: req.info.user.orgKey,
+                        id: In(timelineIds),
+                        status: MmTimelineStatus.Normal,
+                    }
+                });
+
+                // 存在しないタイムラインIDのチェック
+                const foundIds = timelines.map(tl => tl.id);
+                const missingIds = timelineIds.filter(id => !foundIds.includes(id));
+                if (missingIds.length > 0) {
+                    throw { status: 400, message: `Invalid timeline IDs: ${missingIds.join(', ')}` };
+                }
+
+                // 他ユーザーのタイムラインが含まれていないかチェック
+                const otherUserTimelines = timelines.filter(tl => tl.userId !== userId);
+                if (otherUserTimelines.length > 0) {
+                    throw { status: 403, message: 'Cannot reorder timelines owned by other users' };
+                }
+
+                // sortOrderを更新
+                for (let i = 0; i < timelineIds.length; i++) {
+                    const timeline = timelines.find(tl => tl.id === timelineIds[i]);
+                    if (timeline && timeline.sortOrder !== i) {
+                        timeline.sortOrder = i;
+                        timeline.updatedBy = userId;
+                        timeline.updatedIp = req.info.ip;
+                        await timelineRepository.save(timeline);
+                    }
+                }
+            });
+
+            res.status(200).json({ success: true });
+        } catch (error) {
+            console.error(error);
+            res.status((error as any).status || 500).json({ error: (error as any).message || 'Internal Server Error' });
+        }
+    }
+];
+
 export type ToAiIdType = 'timeline' | 'timelineChannel' | 'channel' | 'thread';
 export type ToAiFilterType = 'timespan' | 'count' | 'batch';
 export const mattermostToAi = [
@@ -288,7 +389,7 @@ export const mattermostToAi = [
         const { projectId, id, idType, filterType, params, systemPrompt } = req.body as { projectId: string, id: string, idType: ToAiIdType, filterType: ToAiFilterType, params: any, systemPrompt: string };
         let { title } = req.body as { title: string };
         // console.log(req.body);
-        const provider = 'mattermost';
+        const provider = 'mattermost-default';
         const e = {} as ExtApiClient;
         try {
             Object.assign(e, await getExtApiClient(req.info.user.orgKey, provider));
@@ -368,7 +469,7 @@ export const mattermostToAi = [
                                 // while (true) {
                                 //     url = `${_url}?page=${page}&per_page=200&since=${start}`;
                                 //     console.log(`d:str   : ${url}`);
-                                //     const response = await _axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
+                                //     const response = await _axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`, }, });
                                 //     console.log(`d:end ${response.data.order.length}: ${url}`);
                                 //     // console.log(response.data);
 
@@ -388,7 +489,7 @@ export const mattermostToAi = [
                             } else if (params.count) {
                                 url = `${url}?page=0&per_page=${params.count}`;
                                 // console.log(`c:str   : ${url}`);
-                                // const response = await _axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
+                                // const response = await _axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`, }, });
                                 // console.log(`c:end ${response.data.order.length}: ${url}`);
                                 // resObj.posts = { ...resObj.posts, ...response.data.posts };
                                 // resObj.order = resObj.order.concat(response.data.order);
@@ -398,7 +499,7 @@ export const mattermostToAi = [
                         }
                         // 
                         // console.log(`str   : ${url}`);
-                        const response = await axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
+                        const response = await axios.get(url, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`, }, });
                         console.log(`end ${response.data.order.length}: ${url}`);
                         resObj.posts = { ...resObj.posts, ...response.data.posts };
                         resObj.order = resObj.order.concat(response.data.order);
@@ -436,7 +537,7 @@ export const mattermostToAi = [
             const include_deleted = false;
             const channelUrl = `${e.uriBase}/api/v4/users/me/channels?last_delete_at=${last_delete_at}&include_deleted=${include_deleted}`;
             // console.log(`str   : ${channelUrl}`);
-            const response = await axios.get(channelUrl, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, }, });
+            const response = await axios.get(channelUrl, { headers: { Cookie: `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`, }, });
             console.log(`end ${response.data.length}: ${channelUrl}`);
             const mmChannelMas = (response.data as MattermostChannel[]).reduce((acc, channel) => {
                 acc[channel.id] = channel;
@@ -644,7 +745,7 @@ export const mattermostToAi = [
                                     // await掛ける前にリストに入れておかないと順序が崩れる。
                                     contents.push(fileObj as FileContentPart);
                                     // console.log(imageUrl, file.mime_type, file.dataUrl?.substring(0, 50).replaceAll(/\n/g, ''), file.dataUrl?.length, file.name);
-                                    file.dataUrl = await downloadImageAsDataURL(axios, `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}`, imageUrl);
+                                    file.dataUrl = await downloadImageAsDataURL(axios, `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`, imageUrl);
                                     fileObj.dataUrl = file.dataUrl || '';
                                     (fileObj as any).postId = post.id; // postIdで紐づげグルーピングができるようにしておく
                                 } else { }
@@ -708,7 +809,7 @@ export const mattermostToAi = [
                         const fileBodyEntity = value.fileBodyEntity;
                         if (fileBodyEntity.tokenCount && fileBodyEntity.tokenCount['gemini-2.5-flash']) {
                             // 既にトークンカウント済みの場合はスキップ
-                            // console.log(value.tokenCount['gemini-1.5-flash'] + ' tokens for ' + sha256);
+                            // console.log(value.tokenCount['gemini-2.5-flash'] + ' tokens for ' + sha256);
                             return null;
                         } else {
                             if (value.fileType.startsWith('text/') || plainExtensions.includes(fileBodyEntity.innerPath) || plainMime.includes(fileBodyEntity.fileType) || fileBodyEntity.fileType.endsWith('+xml') || fileBodyMapSet.hashMap[sha256].base64Data.startsWith('IyEv')) {
@@ -873,7 +974,7 @@ export const mattermostToAi = [
                                 break;
                         }
                         if (content.type === ContentPartType.FILE && fileGroupIdSet.has(contentPart.linkId)) {
-                            // 追加済みのファイルグループの人だったら追加しない。                  
+                            // 追加済みのファイルグループの人だったら追加しない。
                         } else {
                             contentPart = await tm.save(ContentPartEntity, contentPart);
                             updatedContentParts.push(contentPart);
@@ -918,3 +1019,463 @@ async function downloadImageAsDataURL(axios: Axios, cookie: string, imageUrl: st
         return undefined;
     }
 };
+
+// =============================================
+// ユーザーグループ CRUD operations
+// =============================================
+
+// 予約語リスト（Mattermostで使用されているものと衝突を避ける）
+const RESERVED_HANDLES = ['all', 'here', 'channel'];
+
+// ハンドルのバリデーション用正規表現
+const HANDLE_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
+
+// メンバー数上限
+const MAX_MEMBER_COUNT = 100;
+
+/**
+ * Mattermostのチームメンバーシップを確認するヘルパー関数
+ * @param axios Axiosインスタンス
+ * @param cookie 認証Cookie
+ * @param teamId MattermostのチームID
+ * @returns ユーザーがチームに所属しているかどうか
+ */
+async function checkMattermostTeamMembership(
+    axios: Axios,
+    cookie: string,
+    teamId: string
+): Promise<boolean> {
+    try {
+        // /api/v4/users/me/teams でユーザーが所属しているチーム一覧を取得
+        const response = await axios.get('/api/v4/users/me/teams', {
+            headers: { Cookie: cookie }
+        });
+        const teams = response.data as { id: string }[];
+        return teams.some(team => team.id === teamId);
+    } catch (error) {
+        console.error('Failed to check team membership:', error);
+        return false;
+    }
+}
+
+/**
+ * ユーザーグループ一覧取得
+ * GET /api/v1/mattermost/:providerName/user-group
+ */
+export const getUserGroups = [
+    param('providerName').isString().notEmpty(),
+    query('teamId').optional().isString(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const userId = req.info.user.id;
+        const { providerName } = req.params as { providerName: string };
+        const { teamId } = req.query as { teamId?: string };
+        
+        try {
+            const userGroupRepository = ds.getRepository(MmUserGroupEntity);
+            
+            // 1. owner_idが認証ユーザーのpersonalグループ全て
+            const personalGroups = await userGroupRepository.find({
+                where: {
+                    orgKey: req.info.user.orgKey,
+                    ownerId: userId,
+                    scope: MmUserGroupScope.Personal,
+                    status: MmUserGroupStatus.Normal
+                },
+                order: { createdAt: 'DESC' },
+            });
+            
+            // 2. team_idパラメータ指定時、そのチームのteamスコープグループ全て
+            let teamGroups: MmUserGroupEntity[] = [];
+            if (teamId) {
+                teamGroups = await userGroupRepository.find({
+                    where: {
+                        orgKey: req.info.user.orgKey,
+                        mmTeamId: teamId,
+                        scope: MmUserGroupScope.Team,
+                        status: MmUserGroupStatus.Normal
+                    },
+                    order: { createdAt: 'DESC' },
+                });
+            }
+            
+            res.json({ groups: [...personalGroups, ...teamGroups] });
+        } catch (error) {
+            console.error(error);
+            res.status((error as any).status || 500).json({ error: (error as any).message || 'Internal Server Error' });
+        }
+    }
+];
+
+/**
+ * ユーザーグループ作成
+ * POST /api/v1/mattermost/:providerName/user-group
+ */
+export const createUserGroup = [
+    param('providerName').isString().notEmpty(),
+    body('name').isString().notEmpty().isLength({ min: 1, max: 64 }).trim(),
+    body('handle').isString().notEmpty().isLength({ min: 1, max: 32 }).trim().toLowerCase(),
+    body('memberIds').isArray({ min: 1, max: MAX_MEMBER_COUNT }),
+    body('scope').isString().notEmpty().isIn([MmUserGroupScope.Personal, MmUserGroupScope.Team]),
+    body('teamId').optional().isString(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const userId = req.info.user.id;
+        const { providerName } = req.params as { providerName: string };
+        const { name, handle, memberIds, scope, teamId } = req.body as {
+            name: string;
+            handle: string;
+            memberIds: string[];
+            scope: MmUserGroupScope;
+            teamId?: string;
+        };
+        
+        try {
+            // ハンドルのバリデーション
+            if (!HANDLE_REGEX.test(handle)) {
+                return res.status(400).json({
+                    error: 'invalid_handle',
+                    message: 'Handle must contain only lowercase letters, numbers, and hyphens. Cannot start or end with hyphen.'
+                });
+            }
+            
+            // 予約語チェック
+            if (RESERVED_HANDLES.includes(handle)) {
+                return res.status(400).json({
+                    error: 'invalid_handle',
+                    message: `Handle '${handle}' is reserved and cannot be used`
+                });
+            }
+            
+            // scope=teamの場合、teamIdは必須
+            if (scope === MmUserGroupScope.Team && !teamId) {
+                return res.status(400).json({
+                    error: 'team_id_required',
+                    message: 'team_id is required when scope is "team"'
+                });
+            }
+            
+            // scope=teamの場合、チームメンバーシップを確認
+            if (scope === MmUserGroupScope.Team && teamId) {
+                const provider = 'mattermost-default';
+                try {
+                    const e = await getExtApiClient(req.info.user.orgKey, provider);
+                    const axios = await getAxios(e.uriBase);
+                    const cookie = `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`;
+                    const isMember = await checkMattermostTeamMembership(axios, cookie, teamId);
+                    if (!isMember) {
+                        return res.status(403).json({
+                            error: 'forbidden',
+                            message: 'You are not a member of the specified team'
+                        });
+                    }
+                } catch (error) {
+                    return res.status(401).json({ error: 'Mattermost authentication failed' });
+                }
+            }
+            
+            // member_idsの重複排除
+            const uniqueMemberIds = [...new Set(memberIds)];
+            if (uniqueMemberIds.length === 0) {
+                return res.status(400).json({
+                    error: 'invalid_member_ids',
+                    message: 'At least one member is required'
+                });
+            }
+            if (uniqueMemberIds.length > MAX_MEMBER_COUNT) {
+                return res.status(400).json({
+                    error: 'invalid_member_ids',
+                    message: `Member count cannot exceed ${MAX_MEMBER_COUNT}`
+                });
+            }
+            
+            const userGroupRepository = ds.getRepository(MmUserGroupEntity);
+            
+            // ハンドル重複チェック
+            let existingGroup: MmUserGroupEntity | null = null;
+            if (scope === MmUserGroupScope.Personal) {
+                existingGroup = await userGroupRepository.findOne({
+                    where: {
+                        orgKey: req.info.user.orgKey,
+                        ownerId: userId,
+                        handle: handle,
+                        scope: MmUserGroupScope.Personal,
+                        status: MmUserGroupStatus.Normal
+                    }
+                });
+            } else {
+                existingGroup = await userGroupRepository.findOne({
+                    where: {
+                        orgKey: req.info.user.orgKey,
+                        mmTeamId: teamId,
+                        handle: handle,
+                        scope: MmUserGroupScope.Team,
+                        status: MmUserGroupStatus.Normal
+                    }
+                });
+            }
+            
+            if (existingGroup) {
+                return res.status(409).json({
+                    error: 'handle_already_exists',
+                    message: `The handle '${handle}' is already in use`
+                });
+            }
+            
+            // 新規グループ作成
+            const userGroup = new MmUserGroupEntity();
+            userGroup.orgKey = req.info.user.orgKey;
+            userGroup.name = name;
+            userGroup.handle = handle;
+            userGroup.memberIds = uniqueMemberIds;
+            userGroup.ownerId = userId;
+            userGroup.scope = scope;
+            userGroup.mmTeamId = scope === MmUserGroupScope.Team ? teamId : undefined;
+            userGroup.status = MmUserGroupStatus.Normal;
+            userGroup.createdBy = userId;
+            userGroup.updatedBy = userId;
+            userGroup.createdIp = req.info.ip;
+            userGroup.updatedIp = req.info.ip;
+            
+            const savedGroup = await userGroupRepository.save(userGroup);
+            
+            res.status(201).json(savedGroup);
+        } catch (error) {
+            console.error(error);
+            res.status((error as any).status || 500).json({ error: (error as any).message || 'Internal Server Error' });
+        }
+    }
+];
+
+/**
+ * ユーザーグループ更新
+ * PUT /api/v1/mattermost/:providerName/user-group/:id
+ */
+export const updateUserGroup = [
+    param('providerName').isString().notEmpty(),
+    param('id').isUUID(),
+    body('name').optional().isString().isLength({ min: 1, max: 64 }).trim(),
+    body('handle').optional().isString().isLength({ min: 1, max: 32 }).trim().toLowerCase(),
+    body('memberIds').optional().isArray({ min: 1, max: MAX_MEMBER_COUNT }),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const userId = req.info.user.id;
+        const { providerName, id } = req.params as { providerName: string; id: string };
+        const { name, handle, memberIds } = req.body as {
+            name?: string;
+            handle?: string;
+            memberIds?: string[];
+        };
+        
+        try {
+            const userGroupRepository = ds.getRepository(MmUserGroupEntity);
+            
+            // グループ取得
+            const group = await userGroupRepository.findOne({
+                where: {
+                    orgKey: req.info.user.orgKey,
+                    id: id,
+                    status: MmUserGroupStatus.Normal
+                }
+            });
+            
+            if (!group) {
+                return res.status(404).json({
+                    error: 'not_found',
+                    message: 'User group not found'
+                });
+            }
+            
+            // 権限チェック
+            if (group.scope === MmUserGroupScope.Personal) {
+                // personalスコープ: owner_idが認証ユーザーと一致するか
+                if (group.ownerId !== userId) {
+                    return res.status(403).json({
+                        error: 'forbidden',
+                        message: 'You do not have permission to update this group'
+                    });
+                }
+            } else {
+                // teamスコープ: チームメンバーシップを確認
+                const provider = 'mattermost-default';
+                try {
+                    const e = await getExtApiClient(req.info.user.orgKey, provider);
+                    const axios = await getAxios(e.uriBase);
+                    const cookie = `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`;
+                    const isMember = await checkMattermostTeamMembership(axios, cookie, group.mmTeamId!);
+                    if (!isMember) {
+                        return res.status(403).json({
+                            error: 'forbidden',
+                            message: 'You are not a member of the team and cannot update this group'
+                        });
+                    }
+                } catch (error) {
+                    return res.status(401).json({ error: 'Mattermost authentication failed' });
+                }
+            }
+            
+            // ハンドル変更時のバリデーション
+            if (handle && handle !== group.handle) {
+                if (!HANDLE_REGEX.test(handle)) {
+                    return res.status(400).json({
+                        error: 'invalid_handle',
+                        message: 'Handle must contain only lowercase letters, numbers, and hyphens. Cannot start or end with hyphen.'
+                    });
+                }
+                
+                if (RESERVED_HANDLES.includes(handle)) {
+                    return res.status(400).json({
+                        error: 'invalid_handle',
+                        message: `Handle '${handle}' is reserved and cannot be used`
+                    });
+                }
+                
+                // 重複チェック
+                let existingGroup: MmUserGroupEntity | null = null;
+                if (group.scope === MmUserGroupScope.Personal) {
+                    existingGroup = await userGroupRepository.findOne({
+                        where: {
+                            orgKey: req.info.user.orgKey,
+                            ownerId: userId,
+                            handle: handle,
+                            scope: MmUserGroupScope.Personal,
+                            status: MmUserGroupStatus.Normal,
+                            id: Not(id)
+                        }
+                    });
+                } else {
+                    existingGroup = await userGroupRepository.findOne({
+                        where: {
+                            orgKey: req.info.user.orgKey,
+                            mmTeamId: group.mmTeamId,
+                            handle: handle,
+                            scope: MmUserGroupScope.Team,
+                            status: MmUserGroupStatus.Normal,
+                            id: Not(id)
+                        }
+                    });
+                }
+                
+                if (existingGroup) {
+                    return res.status(409).json({
+                        error: 'handle_already_exists',
+                        message: `The handle '${handle}' is already in use`
+                    });
+                }
+                
+                group.handle = handle;
+            }
+            
+            // 更新
+            if (name) {
+                group.name = name;
+            }
+            
+            if (memberIds) {
+                const uniqueMemberIds = [...new Set(memberIds)];
+                if (uniqueMemberIds.length === 0) {
+                    return res.status(400).json({
+                        error: 'invalid_member_ids',
+                        message: 'At least one member is required'
+                    });
+                }
+                if (uniqueMemberIds.length > MAX_MEMBER_COUNT) {
+                    return res.status(400).json({
+                        error: 'invalid_member_ids',
+                        message: `Member count cannot exceed ${MAX_MEMBER_COUNT}`
+                    });
+                }
+                group.memberIds = uniqueMemberIds;
+            }
+            
+            group.updatedBy = userId;
+            group.updatedIp = req.info.ip;
+            
+            const savedGroup = await userGroupRepository.save(group);
+            
+            res.status(200).json(savedGroup);
+        } catch (error) {
+            console.error(error);
+            res.status((error as any).status || 500).json({ error: (error as any).message || 'Internal Server Error' });
+        }
+    }
+];
+
+/**
+ * ユーザーグループ削除
+ * DELETE /api/v1/mattermost/:providerName/user-group/:id
+ */
+export const deleteUserGroup = [
+    param('providerName').isString().notEmpty(),
+    param('id').isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const userId = req.info.user.id;
+        const { providerName, id } = req.params as { providerName: string; id: string };
+        
+        try {
+            const userGroupRepository = ds.getRepository(MmUserGroupEntity);
+            
+            // グループ取得
+            const group = await userGroupRepository.findOne({
+                where: {
+                    orgKey: req.info.user.orgKey,
+                    id: id,
+                    status: MmUserGroupStatus.Normal
+                }
+            });
+            
+            if (!group) {
+                return res.status(404).json({
+                    error: 'not_found',
+                    message: 'User group not found'
+                });
+            }
+            
+            // 権限チェック
+            if (group.scope === MmUserGroupScope.Personal) {
+                // personalスコープ: owner_idが認証ユーザーと一致するか
+                if (group.ownerId !== userId) {
+                    return res.status(403).json({
+                        error: 'forbidden',
+                        message: 'You do not have permission to delete this group'
+                    });
+                }
+            } else {
+                // teamスコープ: チームメンバーシップを確認
+                const provider = 'mattermost-default';
+                try {
+                    const e = await getExtApiClient(req.info.user.orgKey, provider);
+                    const axios = await getAxios(e.uriBase);
+                    const cookie = `MMAUTHTOKEN=${req.cookies.MMAUTHTOKEN}; MMUSERID=${req.cookies.MMUSERID};`;
+                    const isMember = await checkMattermostTeamMembership(axios, cookie, group.mmTeamId!);
+                    if (!isMember) {
+                        return res.status(403).json({
+                            error: 'forbidden',
+                            message: 'You are not a member of the team and cannot delete this group'
+                        });
+                    }
+                } catch (error) {
+                    return res.status(401).json({ error: 'Mattermost authentication failed' });
+                }
+            }
+            
+            // 論理削除
+            group.status = MmUserGroupStatus.Deleted;
+            group.updatedBy = userId;
+            group.updatedIp = req.info.ip;
+            
+            await userGroupRepository.save(group);
+            
+            res.status(204).send();
+        } catch (error) {
+            console.error(error);
+            res.status((error as any).status || 500).json({ error: (error as any).message || 'Internal Server Error' });
+        }
+    }
+];
+

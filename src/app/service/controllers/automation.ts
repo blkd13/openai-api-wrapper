@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { body, param, query } from 'express-validator';
 import { In, MoreThanOrEqual, Not } from 'typeorm';
 
+import { createTaskTemplate } from '../automation/job-manager.js';
 import { ds } from '../db.js';
 import {
     AutomationJobEntity,
@@ -14,7 +15,6 @@ import { ProjectEntity, TeamMemberEntity } from '../entity/project-models.entity
 import { validationErrorHandler } from '../middleware/validation.js';
 import { UserRequest } from '../models/info.js';
 import { ProjectStatus, ProjectVisibility } from '../models/values.js';
-import { createTaskTemplate } from '../automation/job-manager.js';
 
 const MAX_PAGE_SIZE = 100;
 

@@ -300,6 +300,9 @@ export class MmTimelineEntity extends MyBaseEntity {
 
     @Column({ type: 'enum', enum: MmTimelineStatus, default: MmTimelineStatus.Normal })
     status!: MmTimelineStatus;
+
+    @Column({ type: 'int', default: 0 })
+    sortOrder!: number;
 }
 
 @Entity()
@@ -319,6 +322,49 @@ export class MmTimelineChannelEntity extends MyBaseEntity {
 
     @Column({ type: 'timestamptz', nullable: true })
     lastViewedAt?: Date;
+
+    @Column({ type: 'int', default: 0 })
+    sortOrder!: number;
+}
+
+// ユーザーグループ スコープ
+export enum MmUserGroupScope {
+    Personal = 'personal', // 作成者本人のみ使用可能
+    Team = 'team', // チーム内の全員が使用可能
+}
+
+// ユーザーグループ ステータス
+export enum MmUserGroupStatus {
+    Normal = 'Normal', // 普通
+    Deleted = 'Deleted', // 削除済み
+}
+
+@Entity()
+@Index(['orgKey', 'ownerId']) // インデックスを追加
+@Index(['orgKey', 'mmTeamId']) // インデックスを追加
+@Index(['orgKey', 'ownerId', 'handle'], { unique: true, where: `"scope" = 'personal' AND "status" = 'Normal'` }) // personalスコープ内でのハンドル一意性
+@Index(['orgKey', 'mmTeamId', 'handle'], { unique: true, where: `"scope" = 'team' AND "status" = 'Normal'` }) // teamスコープ内でのハンドル一意性
+export class MmUserGroupEntity extends MyBaseEntity {
+    @Column({ length: 64 })
+    name!: string;
+
+    @Column({ length: 32 })
+    handle!: string;
+
+    @Column('text', { array: true })
+    memberIds!: string[];
+
+    @Column({ type: 'uuid' })
+    ownerId!: string;
+
+    @Column({ type: 'enum', enum: MmUserGroupScope })
+    scope!: MmUserGroupScope;
+
+    @Column({ nullable: true })
+    mmTeamId?: string; // MattermostのチームID（scope='team'の場合は必須）
+
+    @Column({ type: 'enum', enum: MmUserGroupStatus, default: MmUserGroupStatus.Normal })
+    status!: MmUserGroupStatus;
 }
 
 

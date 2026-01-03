@@ -12,6 +12,14 @@ export enum ToolCallPartType {
     RESULT = 'result',
 }
 
+// ツールコールの実行状態
+export type ToolCallStatus =
+    | 'pending'    // 未実行（待機中）
+    | 'running'    // 実行中
+    | 'completed'  // 正常完了
+    | 'error'      // エラー発生
+    | 'cancelled'; // ユーザーによるキャンセル
+
 export enum ToolCallGroupStatus {
     Normal = 'Normal',
     Deleted = 'Deleted',
@@ -69,6 +77,7 @@ export interface ToolCallPartInfoBody extends MyToolInfo {
     name: string;
     label: string;
     isInteractive: boolean; // ユーザーの入力を要するもの
+    status?: ToolCallStatus; // ツールコールの実行状態（履歴復元時のバッジ表示用）
 }
 
 // isActive: boolean;

@@ -4,11 +4,28 @@ import { ChatCompletionContentPart, ChatCompletionMessageParam } from 'openai/re
 
 import fss from './fss.js';
 import { GPTModels } from '../common/model-definition.js';
-import { OpenAIApiWrapper } from "./openai-api-wrapper.js";
+import { createAIClient, AIClientLike } from './ai/factory.js';
 import { Utils } from './utils.js';
+import { MyCompletionOptions } from './openai-api-wrapper.js';
+
+export interface BaseStepContext {
+    orgKey?: string;
+    userId?: string;
+    ip?: string;
+}
+
+let baseStepDefaultContext: BaseStepContext = {};
+
+export function setBaseStepDefaultContext(context: BaseStepContext): void {
+    baseStepDefaultContext = { ...baseStepDefaultContext, ...normalizeContext(context) };
+}
+
+export function getBaseStepDefaultContext(): BaseStepContext {
+    return { ...baseStepDefaultContext };
+}
 
 // aiApi as singleton (for queing requests)
-export const aiApi = new OpenAIApiWrapper({ allowLocalFiles: true });
+export const aiApi = createAIClient({ wrapperOptions: { allowLocalFiles: true } });
 
 export interface StructuredPrompt {
     title?: string;
@@ -100,6 +117,20 @@ export enum StepOutputFormat {
  * プロンプトと結果をファイル出力する。
  */
 export abstract class BaseStep extends BaseStepInterface<string> {
+    protected aiClient: AIClientLike;
+
+    constructor(client: AIClientLike = aiApi, context?: BaseStepContext) {
+        super();
+        this.aiClient = client;
+        this.applyContext(baseStepDefaultContext);
+        if (context) {
+            this.applyContext(context);
+        }
+    }
+
+    orgKey?: string;
+    userId?: string;
+    ip?: string;
 
     /** default parameters */
     // model: GPTModels = 'gpt-3.5-turbo';
@@ -315,15 +346,13 @@ export abstract class BaseStep extends BaseStepInterface<string> {
         let content = '';
         let isInit = false;
         return new Observable<string>(subscriber => {
-            aiApi.chatCompletionObservableStream({
+            this.aiClient.chatCompletionObservableStream({
                 messages: messages,
                 model: this.model,
                 temperature: this.temperature,
                 response_format: { type: this.format === StepOutputFormat.JSON ? 'json_object' : 'text' },
                 stream: true,
-            }, {
-                label: this.label
-            }).pipe( // オペレータじゃなくSubscribeでも良かった。
+            }, this.buildRequestOptions(this.label)).pipe( // オペレータじゃなくSubscribeでも良かった。
                 // ストリームを結合する
                 map(data => data.choices[0]?.delta?.content || ''),
                 tap(data => {
@@ -354,7 +383,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
 
                                     isInit = false;
                                     content = '';
-                                    aiApi.chatCompletionObservableStream({
+                                    this.aiClient.chatCompletionObservableStream({
                                         messages: [
                                             { role: 'system', content: `All output is done in JSON.` },
                                             { role: 'user', content: correctPrompt },
@@ -362,9 +391,7 @@ export abstract class BaseStep extends BaseStepInterface<string> {
                                         model: `gpt-3.5-turbo`, // JSON整形の失敗をやり直すだけなのでgpt-3.5-turboで十分。
                                         temperature: 0,
                                         stream: true,
-                                    }, {
-                                        label: `${this.label}JsonCorrect`,
-                                    }).pipe(
+                                    }, this.buildRequestOptions(`${this.label}JsonCorrect`)).pipe(
                                         map(data => data.choices[0]?.delta?.content || ''),
                                         tap(data => {
                                             content += data;
@@ -439,6 +466,46 @@ export abstract class BaseStep extends BaseStepInterface<string> {
     chooseTitle(title: { titleJa?: string, titleEn?: string }): string {
         return this.lang === 'ja' ? title.titleJa || title.titleEn || '' : title.titleEn || title.titleJa || '';
     }
+
+    protected buildRequestOptions(label: string = this.label, extra?: Partial<MyCompletionOptions>): MyCompletionOptions {
+        return {
+            label,
+            orgKey: this.orgKey,
+            userId: this.userId,
+            ip: this.ip,
+            ...(extra || {}),
+        };
+    }
+
+    applyContext(context: BaseStepContext = {}): void {
+        const normalized = normalizeContext(context);
+        if (normalized.orgKey !== undefined) {
+            this.orgKey = normalized.orgKey;
+        }
+        if (normalized.userId !== undefined) {
+            this.userId = normalized.userId;
+        }
+        if (normalized.ip !== undefined) {
+            this.ip = normalized.ip;
+        }
+    }
+}
+
+function normalizeContext(context?: BaseStepContext): BaseStepContext {
+    const normalized: BaseStepContext = {};
+    if (!context) {
+        return normalized;
+    }
+    if (context.orgKey !== undefined) {
+        normalized.orgKey = context.orgKey;
+    }
+    if (context.userId !== undefined) {
+        normalized.userId = context.userId;
+    }
+    if (context.ip !== undefined) {
+        normalized.ip = context.ip;
+    }
+    return normalized;
 }
 
 /**

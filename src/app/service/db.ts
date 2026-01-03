@@ -10,18 +10,18 @@ const { TZ, TYPEORM_TYPE, TYPEORM_DATABASE, TYPEORM_HOST, TYPEORM_PORT, TYPEORM_
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 console.log(`currentDir=${currentDir}`);
 
-const sqlite = new DataSource({
-    type: 'sqlite',
-    database: './data/database.sqlite',
-    entities: [path.join(currentDir, 'entity', '**', '*.entity.js'),],
-    synchronize: true,
-    logging: true,
-    // extra: {
-    //     pragma: {
-    //         journal_mode: "wal"
-    //     }
-    // }
-});
+// const sqlite = new DataSource({
+//     type: 'sqlite',
+//     database: './data/database.sqlite',
+//     entities: [path.join(currentDir, 'entity', '**', '*.entity.js'),],
+//     synchronize: true,
+//     logging: true,
+//     // extra: {
+//     //     pragma: {
+//     //         journal_mode: "wal"
+//     //     }
+//     // }
+// });
 
 const postgres = new DataSource({
     type: TYPEORM_TYPE as 'postgres',
@@ -35,7 +35,7 @@ const postgres = new DataSource({
     // logging: true,
     // useUTC: true,
     // dropSchema: true, // データ全消滅するから注意。
-    entities: [path.join(currentDir, 'entity', '**', '*.entity.js'),],
+    entities: [path.join(currentDir, 'entity', '**', '*.entity.js'), path.join(currentDir, 'browser-logger', '**', '*.entity.js')],
     // migrations: [path.join(currentDir, 'migration', '**', '*.migration.js'),],
     // subscribers: [path.join(currentDir, 'subscribers', '**', '*.subscribers.js'),],
     namingStrategy: new CustomNamingStrategy(),

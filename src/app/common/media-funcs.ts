@@ -3,7 +3,7 @@ import ffmpeg, { FfprobeData } from 'fluent-ffmpeg';
 import fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
-import { spawn, exec } from 'child_process';
+import { spawn, exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 
@@ -113,6 +113,69 @@ export async function detectMimeType(filePath: string, fileName: string): Promis
 // });
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * 画像を1024x1024の正方形にリサイズする（libvips使用）
+ * gpt-image-1の画像編集APIは1024x1024のみ対応のため、前処理として使用
+ * 別プロセスで実行されるため、Expressのメインスレッドをブロックしない
+ * 
+ * @param inputBuffer 入力画像のBuffer
+ * @returns リサイズ済み画像のBuffer
+ */
+export async function resizeImageToSquare(inputBuffer: Buffer, size: number = 1024): Promise<Buffer> {
+    const tempDir = path.join(process.cwd(), 'tmp');
+    if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const timestamp = Date.now();
+    const randomId = crypto.randomBytes(4).toString('hex');
+    const inputPath = path.join(tempDir, `vips-input-${timestamp}-${randomId}.png`);
+    const tmpPath = path.join(tempDir, `vips-tmp-${timestamp}-${randomId}.png`);
+    const outputPath = path.join(tempDir, `vips-output-${timestamp}-${randomId}.png`);
+
+    try {
+        // 入力Bufferを一時ファイルに書き込み
+        await fs.promises.writeFile(inputPath, inputBuffer);
+
+        // Step 1: vips thumbnail でリサイズ（アスペクト比を保持）
+        console.log(`[resizeImageToSquare] Step 1: thumbnail ${inputPath} -> ${tmpPath}`);
+        await execFileAsync("vips", [
+            "thumbnail",
+            inputPath,
+            tmpPath,
+            String(size),
+        ]);
+
+        // Step 2: vips embed で正方形に埋め込み（透明背景でパディング）
+        console.log(`[resizeImageToSquare] Step 2: embed ${tmpPath} -> ${outputPath}`);
+        await execFileAsync("vips", [
+            "embed",
+            tmpPath,
+            outputPath,
+            "0", "0",
+            String(size), String(size),
+            "--extend", "background",
+            "--background", "0,0,0,0",
+        ]);
+
+        // 出力ファイルを読み込んでBufferとして返す
+        const outputBuffer = await fs.promises.readFile(outputPath);
+        console.log(`[resizeImageToSquare] Resized image: ${inputBuffer.length} bytes -> ${outputBuffer.length} bytes`);
+
+        return outputBuffer;
+    } finally {
+        // 一時ファイルを削除
+        try {
+            if (fs.existsSync(inputPath)) await fs.promises.unlink(inputPath);
+            if (fs.existsSync(tmpPath)) await fs.promises.unlink(tmpPath);
+            if (fs.existsSync(outputPath)) await fs.promises.unlink(outputPath);
+        } catch (cleanupError) {
+            console.error('[resizeImageToSquare] Failed to cleanup temp files:', cleanupError);
+        }
+    }
+}
 
 export async function minimizeAudioForMinutes(inputFile: string, outputFile: string): Promise<string> {
     try {

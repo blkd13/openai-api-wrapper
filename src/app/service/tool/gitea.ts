@@ -1,22 +1,27 @@
 import { map, toArray } from "rxjs";
+import { MyToolType } from "../../common/openai-api-wrapper.js";
+import { Utils } from "../../common/utils.js";
+import { GiteaRepository } from "../api/api-gitea.js";
+import { AIClientLike, getServiceAIClient } from '../common/ai-client.js';
+import { getPredictHistoryLoggerForRequest, getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
+import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from "../entity/project-models.entity.js";
+import { UserRequest } from "../models/info.js";
+import { getOAuthAccountForTool, reform } from "./common.js";
 
 const { GITEA_CONFIDENCIAL_OWNERS = '' } = process.env as { GITEA_CONFIDENCIAL_OWNERS: string };
 
-import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
-import { UserRequest } from "../models/info.js";
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
-import { Utils } from "../../common/utils.js";
-import { ds } from "../db.js";
-import { getOAuthAccountForTool, reform } from "./common.js";
-import { GiteaRepository } from "../api/api-gitea.js";
+const _aiApi = getServiceAIClient();
 
 // 1. 関数マッピングの作成
 export async function giteaFunctionDefinitions(providerName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
-    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+    req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
+    const aiApi_ = aiApi || _aiApi; // フォールバック
     const provider = `gitea-${providerName}`;
+    const wrapperLogger = getPredictHistoryWrapperLoggerForRequest(req);
+    const predictHistoryLogger = getPredictHistoryLoggerForRequest(req);
     return [
         {
             info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリ検索`, },
@@ -978,7 +983,7 @@ export async function giteaFunctionDefinitions(providerName: string,
             handler: async (args: { userPrompt?: string, owner: string, repo: string, file_path_list: string[], ref: string }): Promise<string> => {
                 const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { userPrompt = '要約してください', owner, repo, file_path_list, ref } = args;
-                const aiProvider = await getAIProvider(req.info.user, obj.inDto.args.model);
+                const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, obj.inDto.args.model);
 
                 if (GITEA_CONFIDENCIAL_OWNERS.split(',').includes(owner)) {
                     return Promise.resolve(`\`\`\`json\n{ "error": "このリポジトリは機密情報を含むため、表示できません", "details": "機密情報を含むリポジトリの場合、表示を制限しています。" }\n\`\`\``);
@@ -1012,7 +1017,7 @@ export async function giteaFunctionDefinitions(providerName: string,
                         const systemPrompt = 'アシスタントAI';
 
                         const inDto = Utils.deepCopyOmitting(obj.inDto, 'aiProviderClient');
-                        // inDto.args.model = 'gemini-1.5-pro';
+                        // inDto.args.model = 'gemini-2.5-pro';
                         inDto.args.messages = [
                             { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
                             {
@@ -1029,25 +1034,27 @@ export async function giteaFunctionDefinitions(providerName: string,
 
                         const newLabel = `${label}-call_ai-${inDto.args.model}`;
                         // レスポンス返した後にゆるりとヒストリーを更新しておく。
-                        const history = new PredictHistoryWrapperEntity();
-                        history.orgKey = req.info.user.orgKey;
-                        history.connectionId = connectionId;
-                        history.streamId = streamId;
-                        history.messageId = message.id;
-                        history.label = newLabel;
-                        history.model = inDto.args.model;
-                        history.provider = aiProvider.type;
-                        history.createdBy = req.info.user.id;
-                        history.updatedBy = req.info.user.id;
-                        history.createdIp = req.info.ip;
-                        history.updatedIp = req.info.ip;
-                        await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+                        await wrapperLogger.log({
+                            connectionId,
+                            streamId,
+                            messageId: message.id,
+                            label: newLabel,
+                            model: inDto.args.model,
+                            provider: aiProviderClient.type,
+                        });
+                        // await logPredictHistoryWithContext(predictHistoryLogger, {
+                        //     idempotencyKey: inDto.options?.idempotencyKey || newLabel,
+                        //     argsHash: inDto.options?.idempotencyKey || newLabel,
+                        //     label: newLabel,
+                        //     provider: aiProviderClient.type,
+                        //     model: inDto.args.model,
+                        // }, PredictHistoryStatus.Fine).catch((err) => console.error('Failed to log predict history', err));
 
                         return new Promise((resolve, reject) => {
                             let text = '';
                             // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
-                            aiApi.chatCompletionObservableStream(
-                                inDto.args, { label: newLabel }, aiProvider,
+                            aiApi_.chatCompletionObservableStream(
+                                inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice
                             ).pipe(
                                 map(res => res.choices.map(choice => choice.delta.content).join('')),
                                 toArray(),
@@ -1056,10 +1063,33 @@ export async function giteaFunctionDefinitions(providerName: string,
                                 next: next => {
                                     text += next;
                                 },
-                                error: error => {
+                                error: async error => {
+                                    // try {
+                                    //     await logPredictHistoryWithContext(predictHistoryLogger, {
+                                    //         idempotencyKey: inDto.options?.idempotencyKey || newLabel,
+                                    //         argsHash: inDto.options?.idempotencyKey || newLabel,
+                                    //         label: newLabel,
+                                    //         provider: aiProviderClient.type,
+                                    //         model: inDto.args.model,
+                                    //         message: error?.message || String(error),
+                                    //     }, PredictHistoryStatus.Error);
+                                    // } catch (logErr) {
+                                    //     console.error('Failed to log predict history', logErr);
+                                    // }
                                     reject(error);
                                 },
-                                complete: () => {
+                                complete: async () => {
+                                    // try {
+                                    //     await logPredictHistoryWithContext(predictHistoryLogger, {
+                                    //         idempotencyKey: inDto.options?.idempotencyKey || newLabel,
+                                    //         argsHash: inDto.options?.idempotencyKey || newLabel,
+                                    //         label: newLabel,
+                                    //         provider: aiProviderClient.type,
+                                    //         model: inDto.args.model,
+                                    //     }, PredictHistoryStatus.Fine);
+                                    // } catch (logErr) {
+                                    //     console.error('Failed to log predict history', logErr);
+                                    // }
                                     resolve(text);
                                 },
                             });;

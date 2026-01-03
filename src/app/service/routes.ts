@@ -1,3 +1,4 @@
+import bodyParser from 'body-parser';
 import { Router } from 'express';
 import { changePassword, checkProjectPermission, deleteUser, genApiKey, getOAuthAccount, getOAuthAccountList, getScopeLabels, getUser, getUserList, guestLogin, logout, oAuthEmailAuth, onetimeLogin, passwordReset, refresh, requestForPasswordReset, updateUser, userLogin, userLoginOAuth2, userLoginOAuth2Callback } from './controllers/auth.js';
 import { chatCompletion, chatCompletionStream, codegenCompletion, geminiCountTokens, geminiCreateContextCache, initEvent } from './controllers/chat.js';
@@ -20,9 +21,11 @@ import {
     getTeam,
     getTeamList,
     getTeamMembers,
+    getThreadGroup,
     getThreadGroupList,
     moveThreadGroup,
     removeTeamMember,
+    searchThreadGroupByTitle,
     threadClone,
     threadGroupClone,
     updateMessageOrMessageGroupTimestamp,
@@ -40,19 +43,24 @@ import { authenticateInviteToken, authenticateOAuthUser, authenticateUserTokenMi
 import { boxApiCollection, boxApiItem, boxDownload, boxUpload, upsertBoxApiCollection } from './api/api-box.js';
 import * as gitea from './api/api-gitea.js';
 import * as gitlab from './api/api-gitlab.js';
-import { createTimeline, deleteTimeline, getMmUsers, getTimelines, mattermostToAi, updateTimeline, updateTimelineChannel } from './api/api-mattermost.js';
+import { createTimeline, createUserGroup, deleteTimeline, deleteUserGroup, getMmUsers, getTimelines, getUserGroups, mattermostToAi, reorderTimelines, updateTimeline, updateTimelineChannel, updateUserGroup } from './api/api-mattermost.js';
 import { getOAuthApiProxy } from './api/api-proxy.js';
-import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
-import { createAutomationJob, getAutomationJob, getAutomationJobTasks, getAutomationJobs, getAutomationJobsSummary, postAutomationJobAction } from './controllers/automation.js';
+import { deleteAIProvider, deleteAIProviderTemplate, deleteBaseModel, deleteModelPricing, deleteTag, getAIProviders, getAIProviderTemplates, getAllTags, getBaseModels, getModelPricings, getOpenAIModel, getOpenAIModels, upsertAIProvider, upsertAIProviderTemplate, upsertBaseModel, upsertModelPricing, upsertTag } from './controllers/ai-model-manager.js';
+import { createAutomationJob, getAutomationJob, getAutomationJobs, getAutomationJobsSummary, getAutomationJobTasks, postAutomationJobAction } from './controllers/automation.js';
+import { azureOpenAIResponseProxy } from './controllers/azure-openai-responses-proxy.js';
+import { azureOpenAISpeechProxy } from './controllers/azure-speech-proxy.js';
 import { budgetCheck, chatCompletionByProjectModel, embeddingsApi, geminiCountTokensByProjectModel, geminiCreateContextCacheByProjectModel, geminiDeleteContextCacheByProjectModel, geminiUpdateContextCacheByProjectModel } from './controllers/chat-by-project-model.js';
 import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPICountTokens, vertexAIByAnthropicAPIStream } from './controllers/claude-proxy.js';
 import { deleteDivision, getDivisionList, getDivisionMembers, removeDivisionMember, upsertDivision, upsertDivisionMember } from './controllers/division.js';
 import { downloadFile, fileActivate, getFileGroup, getFileList, updateFileAccess, uploadFiles } from './controllers/file-manager.js';
 import { deleteMCPServer, getMCPServers, upsertMCPServer } from './controllers/mcp-manager.js';
-import { getDepartmentMemberLog, getDepartmentMemberLogForUser, getDepartmentMemberLogSummaryForUser, getDivisionMemberStatsList, getJournal } from './controllers/stats.js';
+import { getDepartmentMemberLog, getDepartmentMemberLogForUser, getDepartmentMemberLogSummaryForAdmin, getDepartmentMemberLogSummaryForUser, getDivisionMemberStatsList, getJournal } from './controllers/stats.js';
 import { callFunction, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId, registApiKey } from './controllers/tool-call.js';
 import { deactivateOrganization, deleteApiProvider, deleteApiProviderTemplate, deleteUserSetting, getApiProviders, getApiProviderTemplates, getOrganizations, getOrganizationUsers, getUserSetting, upsertApiProvider, upsertApiProviderTemplate, upsertOrganization, upsertUserSetting } from './controllers/user.js';
+import { vertexAIGeminiAPI, vertexAIGeminiAPIStream, vertexAIGeminiCountTokens } from './controllers/vertex-ai-gemini-proxy.js';
 import { UserRoleType } from './entity/auth.entity.js';
+
+import { saveBrowserLog } from './browser-logger/browser-log.controller.js';
 
 // routers/index.ts
 
@@ -83,6 +91,7 @@ authInviteRouter.use(authenticateInviteToken);
 
 // 個別コントローラーの設定
 // authNoneRouter.post('/login', userLogin);
+authNoneRouter.post('/:orgKey/browser-log', saveBrowserLog);
 authNoneRouter.post('/:orgKey/login', userLogin);
 authNoneRouter.post('/:orgKey/onetime', onetimeLogin);
 authNoneRouter.post('/:orgKey/request-for-password-reset', requestForPasswordReset);
@@ -119,6 +128,7 @@ authUserRouter.delete(`/user-setting/:userId/:key`, deleteUserSetting);
 authUserRouter.get('/event', initEvent);
 authUserRouter.post('/chat-completion', chatCompletion);
 authUserRouter.post('/v1/chat/completions', chatCompletionStream);
+authUserRouter.post('/v1/responses', azureOpenAIResponseProxy);
 authUserRouter.post('/v1/embeddings', embeddingsApi);
 authUserRouter.post('/codegen/completions', codegenCompletion);
 authUserRouter.post('/create-cache', geminiCreateContextCache);
@@ -142,13 +152,13 @@ authUserRouter.post('/mcp/tools/call', callFunction);
 authUserRouter.post('/team', createTeam);
 authUserRouter.get('/team', getTeamList);
 authUserRouter.get('/team/:id', getTeam);
-authUserRouter.patch('/team/:id', updateTeam);
+authUserRouter.put('/team/:id', updateTeam);
 authUserRouter.delete('/team/:id', deleteTeam);
 
 // チームメンバー関連
 authUserRouter.post('/team/:teamId/member', addTeamMember);
 authUserRouter.get('/team/:teamId/members', getTeamMembers);
-authUserRouter.patch('/team/:teamId/member/:userId', updateTeamMember);
+authUserRouter.put('/team/:teamId/member/:userId', updateTeamMember);
 authUserRouter.delete('/team/:teamId/member/:userId', removeTeamMember);
 
 //// 部管理用
@@ -166,6 +176,7 @@ authAdminRouter.delete('/division/:divisionId/member/:userId', removeDivisionMem
 
 authAdminRouter.get(`/division-stats`, getDivisionMemberStatsList); // 部署情報取得
 authAdminRouter.get(`/predict-history/:userId`, getDepartmentMemberLog); // 管理者がユーザーを指定して見る用
+authAdminRouter.get(`/predict-history/summary/:userId`, getDepartmentMemberLogSummaryForAdmin); // 管理者がユーザーを指定してサマリーを取得する用
 authUserRouter.get(`/predict-history`, getDepartmentMemberLogForUser); // ユーザーが自分で見る用
 authUserRouter.get(`/predict-history/summary`, getDepartmentMemberLogSummaryForUser); // ユーザーが自分のサマリーを取得する用
 
@@ -181,9 +192,11 @@ authUserRouter.get('/project', getProjectList);
 authUserRouter.get('/project/:id', getProject);
 
 // スレッド関連
+authUserRouter.get('/project/:projectId/thread-group/:threadGroupId', getThreadGroup);
 authUserRouter.post('/project/:projectId/thread-group', upsertThreadGroup);
 authUserRouter.patch('/project/:projectId/thread-group', updateThreadGroupTitleAndDescription);
 authUserRouter.get('/project/:projectId/thread-group', getThreadGroupList);
+authUserRouter.get('/project/:projectId/thread-group-search', searchThreadGroupByTitle);
 // authUserRouter.get('/thread/:id', getThread);
 // authUserRouter.patch('/thread/:id', updateThread);
 authUserRouter.put('/thread-group/:id', moveThreadGroup);
@@ -234,10 +247,16 @@ authUserRouter.get(`/mattermost/:providerName/user`, getMmUsers); // 自作のma
 authUserRouter.post(`/mattermost/:providerName/user`, getMmUsers); // 自作のmattermost user取得API
 authUserRouter.get(`/mattermost/:providerName/timeline`, getTimelines);
 authUserRouter.post(`/mattermost/:providerName/timeline`, createTimeline);
+authUserRouter.patch(`/mattermost/:providerName/timeline/reorder`, reorderTimelines);
 authUserRouter.patch(`/mattermost/:providerName/timeline/:id`, updateTimeline);
 authUserRouter.patch(`/mattermost/:providerName/timeline/:timelineId/channel/:timelineChannelId`, updateTimelineChannel);
 authUserRouter.delete(`/mattermost/:providerName/timeline/:id`, deleteTimeline);
 authUserRouter.post(`/mattermost/:providerName/timeline/to-ai`, mattermostToAi);
+// Mattermost User Groups
+authUserRouter.get(`/mattermost/:providerName/user-groups`, getUserGroups);
+authUserRouter.post(`/mattermost/:providerName/user-groups`, createUserGroup);
+authUserRouter.put(`/mattermost/:providerName/user-groups/:id`, updateUserGroup);
+authUserRouter.delete(`/mattermost/:providerName/user-groups/:id`, deleteUserGroup);
 
 // OAuth2 マスタ
 authUserRouter.get(`/oauth/account`, getOAuthAccountList);
@@ -310,6 +329,11 @@ authUserRouter.get('/ai-model/:modelId/pricing', getModelPricings);
 authAdminRouter.post('/ai-model/:modelId/pricing', upsertModelPricing);
 authAdminRouter.put('/ai-model/:modelId/pricing/:id?', upsertModelPricing);
 authAdminRouter.delete('/ai-model/:modelId/pricing/:id', deleteModelPricing);
+
+// OpenAI互換 Models API
+authUserRouter.get('/v1/models', getOpenAIModels);
+authUserRouter.get('/v1/models/:model', getOpenAIModel);
+
 authUserRouter.get('/tags', getAllTags);
 authAdminRouter.post('/tag', upsertTag);
 authAdminRouter.put('/tag/:tagId', upsertTag);
@@ -330,13 +354,25 @@ authAdminRouter.delete('/organizations/:orgKey', deactivateOrganization); // 組
 
 authUserRouter.get('/scope-labels', getScopeLabels);
 
+// Azure Speech Service用プロキシ（バイナリデータ対応）
+const rawBodyParser = bodyParser.raw({ type: '*/*', limit: '500mb' });
+authUserRouter.get('/azure-speech-proxy/*', azureOpenAISpeechProxy);
+authUserRouter.post('/azure-speech-proxy/*', rawBodyParser, azureOpenAISpeechProxy);
+
+// codex用プロキシ
+authUserRouter.post('/azure-openai-responses-proxy/v1/responses', azureOpenAIResponseProxy);
+
 // Claude Code用プロキシ
 authUserRouter.post('/vertexai-claude-proxy/v1/messages', vertexAIByAnthropicAPIStream);
-authUserRouter.post('/vertexai-claude-proxy/v1/messages/count_tokens', vertexAIByAnthropicAPICountTokens);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/count-tokens\\:rawPredict', vertexAIByAnthropicAPICountTokens);
+authUserRouter.post('/vertexai-claude-proxy/v1/messages/count_tokens', vertexAIByAnthropicAPICountTokens);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:rawPredict', vertexAIByAnthropicAPI);
 authUserRouter.post('/vertexai-claude-proxy/v1/projects/:project/locations/:location/publishers/anthropic/models/:model\\:streamRawPredict', vertexAIByAnthropicAPIStream);
 
+// VertexAI用プロキシ
+authUserRouter.post('/vertexai-gemini-proxy/:version/publishers/google/models/:model\\:generateContent', vertexAIGeminiAPI);
+authUserRouter.post('/vertexai-gemini-proxy/:version/publishers/google/models/:model\\:streamGenerateContent', vertexAIGeminiAPIStream);
+authUserRouter.post('/vertexai-gemini-proxy/:version/publishers/google/models/:model\\:countTokens', vertexAIGeminiCountTokens);
 
 authUserRouter.get('/predict-journal/:idempotencyKey/:argsHash/:type', getJournal);
 

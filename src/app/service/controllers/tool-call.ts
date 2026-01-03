@@ -9,7 +9,7 @@ import { Utils } from "../../common/utils.js";
 import { ds } from "../db.js";
 import { OAuthAccountEntity, OAuthAccountStatus, UserEntity, UserStatus } from "../entity/auth.entity.js";
 import { ProjectEntity, TeamMemberEntity } from "../entity/project-models.entity.js";
-import { ToolCallGroupEntity, ToolCallPart, ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartInfoBody, ToolCallPartResultBody, ToolCallPartStatus, ToolCallPartType } from "../entity/tool-call.entity.js";
+import { ToolCallGroupEntity, ToolCallPart, ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartInfoBody, ToolCallPartResultBody, ToolCallPartStatus, ToolCallPartType, ToolCallStatus } from "../entity/tool-call.entity.js";
 import { validationErrorHandler } from "../middleware/validation.js";
 import { UserRequest } from "../models/info.js";
 import { ProjectVisibility } from "../models/values.js";
@@ -45,7 +45,7 @@ export const callFunction = [
             console.dir(_req.body);
             // 汚い。。。
             const args = { model: 'gemini-2.5-flash', messages: [], stream: true, } as OpenAI.ChatCompletionCreateParamsStreaming;
-            const funcDefs = await functionDefinitions({ inDto: { args }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy');
+            const funcDefs = await functionDefinitions({ inDto: { args }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, `tool-${req.info.user.id}`);
             const funcDef = funcDefs.find(f => f.info.name === _req.body.function_name);
             if (!funcDef) {
                 console.error(`Function not found: ${_req.body.function_name}`);
@@ -54,13 +54,14 @@ export const callFunction = [
             }
 
             const result = await funcDef.handler(req.body.parameters).then(res => {
-                console.log('LOG:--------------------');
-                console.dir(res);
+                // console.log('LOG:--------------------');
+                // console.dir(res);
                 return res;
             }).catch(error => {
                 // handler実行時の非同期エラーをキャッチする
-                console.error(`error-----------------------`);
-                console.error(error);
+                console.error(`TOOL_CALL_ERROR-----------------------`);
+                // console.error(error);
+                console.error(Utils.errorFormattedObject(error, false));
                 return { isError: true, error: Utils.errorFormattedObject(error, false) };
             });
 
@@ -86,6 +87,39 @@ export interface ToolCallSet {
     resultList: ToolCallPartResultBody[];
 }
 
+/**
+ * ToolCallSet の状態を導出する
+ * @param resultList 結果リスト
+ * @param commandList コマンドリスト
+ * @returns ToolCallStatus
+ */
+export function deriveToolCallStatus(
+    resultList?: ToolCallPartResultBody[],
+    commandList?: ToolCallPartCommandBody[],
+): ToolCallStatus {
+    // result がある場合
+    if (resultList && resultList.length > 0) {
+        const lastResult = resultList[resultList.length - 1];
+        try {
+            const content = typeof lastResult.content === 'string'
+                ? JSON.parse(lastResult.content)
+                : lastResult.content;
+            if (content?.isError) {
+                return 'error';
+            }
+        } catch {
+            // パースエラーは無視して completed として扱う
+        }
+        return 'completed';
+    }
+
+    // commandList にキャンセルがある場合
+    if (commandList?.some(cmd => cmd.command === 'cancel')) {
+        return 'cancelled';
+    }
+
+    return 'running';
+}
 
 export function toolCallListToToolCallSetList(toolCallList: ToolCallPart[]): ToolCallSet[] {
     const toolCallSetList: ToolCallSet[] = [];
@@ -123,6 +157,15 @@ export function appendToolCallPart(toolCallSetList: ToolCallSet[], toolCallPart:
             masterToolCallPart.resultList.push(toolCallPart.body);
             break;
     }
+
+    // status を自動計算して info に設定
+    if (masterToolCallPart.info) {
+        masterToolCallPart.info.status = deriveToolCallStatus(
+            masterToolCallPart.resultList,
+            masterToolCallPart.commandList,
+        );
+    }
+
     return toolCallSetList;
 }
 

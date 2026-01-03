@@ -1,11 +1,12 @@
 import { OpenAI } from 'openai';
 import { IsNull, MoreThan } from 'typeorm';
-import { MyToolType, OpenAIApiWrapper } from '../../common/openai-api-wrapper.js';
+import { MyToolType } from '../../common/openai-api-wrapper.js';
 import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
 import { ApiProviderEntity, OAuthAccountEntity, OAuthAccountStatus } from '../entity/auth.entity.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../entity/project-models.entity.js';
 import { UserRequest } from '../models/info.js';
+import { AIClientLike } from '../common/ai-client.js';
 import { boxFunctionDefinitions } from './box.js';
 import { commonFunctionDefinitions } from './common.js';
 import { confluenceFunctionDefinitions } from './confluence.js';
@@ -18,7 +19,7 @@ import { mcpFunctionDefinitions } from './mcp.js';
 // 1. 関数マッピングの作成
 export async function functionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
-    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+    req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
     connectedOnly: boolean = false,
 ): Promise<MyToolType[]> {
 
@@ -73,7 +74,7 @@ export async function functionDefinitions(
         gitea: giteaFunctionDefinitions,
         gitlab: gitlabFunctionDefinitions,
         mcp: mcpFunctionDefinitions,
-    } as Record<string, (name: string, obj: any, req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string) => Promise<MyToolType[]>>;
+    } as Record<string, (name: string, obj: any, req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string) => Promise<MyToolType[]>>;
 
     // 各プロバイダーの関数定義を取得
     const functionDefinitions = (await Promise.all(apiProviders.map(async provider =>

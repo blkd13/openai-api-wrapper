@@ -1,7 +1,8 @@
-import { MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
-import { UserRequest } from "../models/info.js";
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
+import { MyToolType } from "../../common/openai-api-wrapper.js";
+import { AIClientLike, getServiceAIClient } from '../common/ai-client.js';
 import { MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from "../entity/project-models.entity.js";
+import { UserRequest } from "../models/info.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
 
 /**
@@ -62,11 +63,14 @@ import { getOAuthAccountForTool, reform } from "./common.js";
  * - レート制限を考慮し、メタデータは適度にキャッシュすることを推奨
  */
 
+const _aiApi = getServiceAIClient();
+
 // 1. 関数マッピングの作成
 export async function jiraFunctionDefinitions(providerSubName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
-    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+    req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
+    const aiApi_ = aiApi || _aiApi; // フォールバック
     const provider = `jira-${providerSubName}`;
     return [
         {

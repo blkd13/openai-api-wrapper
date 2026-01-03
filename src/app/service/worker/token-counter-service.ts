@@ -111,12 +111,21 @@ export class TokenCounterProcessPool extends EventEmitter {
             const duration = Date.now() - task.startTime;
             this.emit('taskCompleted', { id: task.id, duration, success: !result.error });
 
+            // if (result.error) {
+            //     task.reject(new Error(result.error));
+            // } else if (result.count !== null) {
+            //     task.resolve(result.count);
+            // } else {
+            //     task.reject(new Error('Invalid response from process'));
+            // }
             if (result.error) {
-                task.reject(new Error(result.error));
+                // task.reject(new Error(result.error));
+                task.resolve(0);
             } else if (result.count !== null) {
                 task.resolve(result.count);
             } else {
-                task.reject(new Error('Invalid response from process'));
+                // task.reject(new Error('Invalid response from process'));
+                task.resolve(0);
             }
         }
 
@@ -137,7 +146,10 @@ export class TokenCounterProcessPool extends EventEmitter {
                 if (task.timeout) {
                     clearTimeout(task.timeout);
                 }
-                task.reject(error);
+
+                // task.reject(error);
+                task.resolve(0);
+
                 this.emit('taskFailed', { id: task.id, error: error.message });
             }
         }
@@ -186,15 +198,22 @@ export class TokenCounterProcessPool extends EventEmitter {
         process.busy = true;
         process.currentTaskId = task.id;
 
+        // (1) タイムアウト時の処理
         task.timeout = setTimeout(() => {
             const idx = this.queue.findIndex(t => t.id === task.id);
             if (idx !== -1) {
                 this.queue.splice(idx, 1);
-                task.reject(new Error('Token counting timeout'));
+
+                // reject → resolve(0)
+                try {
+                    task.resolve(0);
+                } catch (e) {
+                    console.error('Error resolving task on timeout:', e);
+                }
 
                 this.emit('taskTimeout', { id: task.id });
 
-                // タイムアウトしたプロセスは信頼できないので再起動
+                // タイムアウトしたプロセスは再起動
                 this.recycleProcess(process);
             }
         }, this.defaultTimeout);
@@ -307,3 +326,6 @@ const shutdown = async (signal: string) => {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+process.on('uncaughtException', err => console.error('[uncaughtException]', err));
+process.on('unhandledRejection', (reason) => console.error('[unhandledRejection]', reason));

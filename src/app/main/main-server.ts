@@ -3,7 +3,7 @@ import * as http from 'http';
 import * as url from 'url';
 import { ChatCompletionCreateParamsStreaming } from 'openai/resources/chat/completions';
 
-import { OpenAIApiWrapper } from '../common/openai-api-wrapper.js';
+import { createAIClient } from '../common/ai/factory.js';
 import { map } from 'rxjs/dist/types/index.js';
 
 interface Client {
@@ -14,7 +14,7 @@ interface Client {
 const basePath = '/api';
 const clients: Record<string, Client> = {};
 
-export const aiApi = new OpenAIApiWrapper();
+export const aiApi = createAIClient();
 
 let serverOptions: { cors: boolean } = { cors: false };
 

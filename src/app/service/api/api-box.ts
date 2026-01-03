@@ -1186,7 +1186,12 @@ export async function boxDownloadCore(e: ExtApiClient, fileId: string, userId: s
 
         return { fileBodyId: fileBodyEntity.id, innerPath, fileName, sha1Digest, sha256Digest, fileSize, fileType, status: 'downloaded' };
     } catch (error) {
-        console.error('Error:', error);
+        const response = (error as any).response;
+        if (response) {
+            console.error('Error:', response.status, response.statusText, response.data);
+        } else {
+            console.error('Error:', (error as any).status);
+        }
         // res.status((error as any).status || 500).json({
         //     error: (error as any).message || 'Internal Server Error'
         // });

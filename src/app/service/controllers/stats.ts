@@ -245,7 +245,7 @@ export const getDepartmentMemberLog = [
 // 既存のエンドポイントを修正してtotalCountも返すように
 export const getDepartmentMemberLogForUser = [
     query('offset').optional().isInt({ min: 0 }).toInt(),
-    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 10000 }).toInt(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
@@ -274,57 +274,135 @@ export const getDepartmentMemberLogForUser = [
 
 interface MonthlySummary {
     month: string;
+    aplType: 'chat' | 'api' | 'ClaudeProxy' | 'AzureOpenAIProxy' | 'GeminiProxy' | 'etc';
+    provider: string;
+    throttleKey: string;
+    model: string;
     totalCost: number;
     totalReqTokens: number;
     totalResTokens: number;
     count: number;
 }
+
+function aplTypeFromModel(label: string): 'chat' | 'api' | 'ClaudeProxy' | 'AzureOpenAIProxy' | 'GeminiProxy' | 'etc' {
+    if (label.startsWith('chat-')) {
+        return 'chat';
+    } else if (label.startsWith('vertexai-claude-proxy-')) {
+        return 'ClaudeProxy';
+    } else if (label.startsWith('azure-openai-responses-')) {
+        return 'AzureOpenAIProxy';
+    } else if (label.startsWith('vertexai-gemini-proxy-')) {
+        return 'GeminiProxy';
+    }
+    return 'api';
+}
+
+async function getMonthlySummary(orgKey: string, userId: string): Promise<MonthlySummary[]> {
+    // 全データを取得（集計用）
+    const predictHistory = await ds.query(`
+            SELECT p.created_at, p.model, p.provider, p.take, p.cost, p.req_token, p.res_token, p.label, p.status, p.idempotency_key, p.args_hash, m.throttle_key
+            FROM predict_history_view p
+            LEFT OUTER JOIN ai_model_entity m
+            ON p.model = m.name AND p.org_key = m.org_key
+            WHERE p.org_key = $1 AND p.user_id = $2
+            ORDER BY p.created_at DESC
+        `, [orgKey, userId]);
+
+    const summaryMap = new Map<string, MonthlySummary>();
+
+    (predictHistory as Array<{
+        created_at: string,
+        model: string,
+        provider: string,
+        take: number,
+        cost: number,
+        req_token: number,
+        res_token: number,
+        label: string,
+        status: string,
+        idempotency_key: string,
+        args_hash: string,
+        throttle_key: string,
+    }>).forEach(predict => {
+        const month = Utils.formatDate(new Date(predict.created_at), 'yyyy-MM');
+        const aplType = aplTypeFromModel(predict.label || '');
+        const model = predict.model || 'unknown';
+        const provider = (predict.provider || 'unknown').split(':')[0]; // プロバイダは先頭部分のみ 
+        const throttleKey = predict.throttle_key || 'unknown';
+
+        // 月/モデル/APL種別/プロバイダをキーとして集計
+        const key = `${month}|${aplType}|${provider}|${throttleKey}|${model}`;
+        const summary = summaryMap.get(key) || {
+            month,
+            aplType,
+            provider,
+            throttleKey,
+            model,
+            totalCost: 0,
+            totalReqTokens: 0,
+            totalResTokens: 0,
+            count: 0
+        };
+
+        summary.totalCost += predict.cost * 150;
+        summary.totalReqTokens += predict.req_token;
+        summary.totalResTokens += predict.res_token;
+        summary.count += 1;
+
+        summaryMap.set(key, summary);
+    });
+
+    const monthlySummary = Array.from(summaryMap.values()).sort((a, b) => {
+        // 月で降順ソート、同じ月ならモデル名でソート
+        const monthCompare = b.month.localeCompare(a.month);
+        if (monthCompare !== 0) return monthCompare;
+        const aplTypeCompare = a.aplType.localeCompare(b.aplType);
+        if (aplTypeCompare !== 0) return aplTypeCompare;
+        return a.model.localeCompare(b.model);
+    });
+    return monthlySummary;
+}
+// 月次集計用の新しいエンドポイント
+export const getDepartmentMemberLogSummaryForAdmin = [
+    param('userId').isUUID().notEmpty(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+
+        // 自分が権限を持っている部のメンバーか確認
+        const where = req.info.user.roleList.filter(role => [UserRoleType.Admin, UserRoleType.SuperAdmin].includes(role.role)).map(role => ({
+            orgKey: req.info.user.orgKey,
+            userId: req.params.userId,
+            scopeInfo: role.scopeInfo,
+            status: UserStatus.Active,
+        }));
+        if (!where || where.length === 0) {
+            res.status(403).json({ error: '権限がありません。' });
+            return;
+        }
+        try {
+            const isContainRole = await ds.getRepository(UserRoleEntity).findOneOrFail({ where });
+        } catch (error) {
+            res.status(403).json({ error: '権限がありません。' });
+            return;
+        }
+
+        const monthlySummary = await getMonthlySummary(req.info.user.orgKey, req.params.userId);
+
+        // 纏める
+        res.json({ monthlySummary });
+    }
+];
+
+
 // 月次集計用の新しいエンドポイント
 export const getDepartmentMemberLogSummaryForUser = [
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
 
-        // 全データを取得（集計用）
-        const predictHistory = await ds.query(`
-            SELECT created_at, model, provider, take, cost, req_token, res_token, status, idempotency_key, args_hash
-            FROM predict_history_view 
-            WHERE org_key = $1 AND user_id = $2
-            ORDER BY created_at DESC
-        `, [req.info.user.orgKey, req.info.user.id]);
+        const monthlySummary = await getMonthlySummary(req.info.user.orgKey, req.info.user.id);
 
-        const summaryMap = new Map<string, MonthlySummary>();
-
-        (predictHistory as Array<{
-            created_at: string,
-            model: string,
-            provider: string,
-            take: number,
-            cost: number,
-            req_token: number,
-            res_token: number,
-            status: string,
-            idempotency_key: string,
-            args_hash: string
-        }>).forEach(predict => {
-            const month = Utils.formatDate(new Date(predict.created_at), 'yyyy-MM');
-            const summary = summaryMap.get(month) || {
-                month,
-                totalCost: 0,
-                totalReqTokens: 0,
-                totalResTokens: 0,
-                count: 0
-            };
-
-            summary.totalCost += predict.cost * 150;
-            summary.totalReqTokens += predict.req_token;
-            summary.totalResTokens += predict.res_token;
-            summary.count += 1;
-
-            summaryMap.set(month, summary);
-        });
-
-        const monthlySummary = Array.from(summaryMap.values()).sort((a, b) => b.month.localeCompare(a.month));
         // 纏める
         res.json({ monthlySummary });
     }
@@ -334,6 +412,72 @@ export const getDepartmentMemberLogSummaryForUser = [
 import fg from 'fast-glob';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { spawn } from 'child_process';
+import * as tar from 'tar-stream';
+
+/**
+ * idempotencyKey から日付文字列を取得（先頭8文字: YYYYMMDD）
+ */
+function getDateFromIdempotencyKey(idempotencyKey: string): string {
+    const dateStr = idempotencyKey.substring(0, 8);
+    return `${dateStr.substring(0, 4)}-${dateStr.substring(4, 6)}-${dateStr.substring(6, 8)}`;
+}
+
+/**
+ * tar.zst ファイルから idempotencyKey と拡張子にマッチするファイルを読み出す
+ * zstdcat コマンドを使用して高速に展開
+ */
+async function readFromTarZst(
+    tarZstPath: string,
+    idempotencyKey: string,
+    ext: string
+): Promise<string | null> {
+    return new Promise((resolve, reject) => {
+        const zstd = spawn('zstdcat', [tarZstPath]);
+        const extract = tar.extract();
+        let found = false;
+        const chunks: Buffer[] = [];
+        let stderr = '';
+
+        zstd.stderr.on('data', d => stderr += d);
+
+        extract.on('entry', (header, stream, next) => {
+            if (header.name.includes(idempotencyKey) && header.name.endsWith(`.${ext}`)) {
+                found = true;
+                stream.on('data', chunk => chunks.push(chunk));
+                stream.on('end', () => {
+                    resolve(Buffer.concat(chunks).toString('utf8'));
+                    // 残りのストリームを閉じる
+                    zstd.stdout.unpipe();
+                    zstd.kill();
+                });
+            }
+            stream.on('end', next);
+            stream.resume();
+        });
+
+        extract.on('finish', () => {
+            if (!found) {
+                resolve(null);
+            }
+        });
+
+        extract.on('error', reject);
+
+        zstd.on('error', (err) => {
+            reject(new Error(`zstdcat failed: ${err.message}`));
+        });
+
+        zstd.on('close', code => {
+            if (code !== 0 && !found) {
+                reject(new Error(`zstdcat failed with code ${code}: ${stderr}`));
+            }
+        });
+
+        // zstdcatの出力をtar-streamに流す
+        zstd.stdout.pipe(extract);
+    });
+}
 
 export async function readRequestLog(
     logDir: string,
@@ -341,25 +485,42 @@ export async function readRequestLog(
     argsHash: string,
     type: 'request' | 'response' | 'stream' = 'request'
 ): Promise<string> {
-    // パターンにマッチするファイルを探す
-    const pattern = `${logDir}*/${idempotencyKey}*.` + (type === 'stream' ? 'txt' : `${type}.json`);
+    const ext = type === 'stream' ? 'txt' : `${type}.json`;
+
+    // 1. まず平文ファイルを探す
+    const pattern = `${logDir}*/${idempotencyKey}*.${ext}`;
     const [filePath] = await fg(pattern);
-    if (!filePath) {
+
+    let content: string | null = null;
+
+    if (filePath) {
+        content = await fs.readFile(filePath, 'utf8');
+    } else {
+        // 2. 平文がなければ tar.zst から探す
+        const dateStr = getDateFromIdempotencyKey(idempotencyKey);
+        const tarZstPath = path.join(logDir, `history-${dateStr}.tar.zst`);
+
+        try {
+            await fs.access(tarZstPath);
+            content = await readFromTarZst(tarZstPath, idempotencyKey, ext);
+        } catch {
+            // tar.zst ファイルが存在しない
+        }
+    }
+
+    if (!content) {
         throw new Error(`ログファイルが見つかりません: ${pattern}`);
     }
-    // 見つかったファイルを読み込む
-    const jsonString = await fs.readFile(filePath, 'utf8');
-    // console.log(`readRequestLog: ${filePath}`);
-    if (type === 'response') {
-        const jsonObj = JSON.parse(jsonString);
-        if (jsonObj.response.headers && jsonObj.response.headers['set-cookie']) {
-            delete jsonObj.response.headers['set-cookie']; // set-cookieヘッダーは認証系なので削除する
-        }
-        return JSON.stringify(jsonObj.response); // レスポンスはresponseフィールドのみを返す
-    } else {
-        return jsonString;
 
+    if (type === 'response') {
+        const jsonObj = JSON.parse(content);
+        if (jsonObj.response?.headers?.['set-cookie']) {
+            delete jsonObj.response.headers['set-cookie'];
+        }
+        return JSON.stringify(jsonObj.response);
     }
+
+    return content;
 }
 
 export const getJournal = [

@@ -87,13 +87,28 @@ const argv = yargs(hideBin(process.argv))
         ['batch <agent> [step]', 'b'], message.example.batch,
         (yargs) => yargs
             .positional('agent', { describe: message.agent, type: 'string', demandOption: true, choices: agentList })
-            .positional('step', { describe: 'step', type: 'number', default: 0 }),
+            .positional('step', { describe: 'step', type: 'number', default: 0 })
+            .option('org-key', { describe: 'override orgKey for BaseStep', type: 'string' })
+            .option('user-id', { describe: 'override userId for BaseStep', type: 'string' })
+            .option('ip', { describe: 'override ip for BaseStep', type: 'string' })
+            .option('context-file', { describe: 'path to JSON file that supplies orgKey/userId/ip', type: 'string' }),
         (argv: ArgumentsCamelCase<{
             agent: string,
             step?: number,
+            orgKey?: string,
+            userId?: string,
+            ip?: string,
+            contextFile?: string,
         }>) => {
             // batchの実行
-            import(`./main/main-batch.js`).then(async (m) => { m.main(argv.agent as string || ''); });
+            import(`./main/main-batch.js`).then(async (m) => {
+                m.main(argv.agent as string || '', {
+                    orgKey: argv.orgKey,
+                    userId: argv.userId,
+                    ip: argv.ip,
+                    contextFile: argv.contextFile,
+                });
+            });
         })
     // rest api server 用の設定
     .example('$0 server -p 3000 -h localhost --cors', `${message.example.server}`)

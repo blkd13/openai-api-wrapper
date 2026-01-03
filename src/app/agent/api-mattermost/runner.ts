@@ -6,7 +6,7 @@ import { Utils } from '../../common/utils.js';
 import fss from '../../common/fss.js';
 import { ds } from './../../service/db.js';
 import { MmUserEntity, MmUserPreEntity } from './../../service/entity/api-mattermost.entity.js';
-import { ApiMattermostService, GetChannelsPostsResponse, MattermostChannel, MattermostTeam } from './api.js';
+import { ApiMattermostService, GetChannelsPostsResponse, MattermostChannel, MattermostTeam, axiosMattermost, axiosMattermostPost } from './api.js';
 const { BATCH_USER_ID, BATCH_TENANT_KEY } = process.env as { BATCH_USER_ID: string, BATCH_TENANT_KEY: string };
 
 function sleep(ms: number) {
@@ -719,7 +719,7 @@ export async function main() {
     try {
         const api: ApiMattermostService = new ApiMattermostService();
         // getAllEmoji(api);
-        const client = new WebSocketClient();
+        // const client = new WebSocketClient();  // 使ってないならコメントアウト
         // client.initialize('https://may-chat.beafland.com/api/v4/websocket', 'e6hbkjjon7gaxnznujzo6n19ge');
         // user全部持ってくるやつ
         await getAllUsers(api);
@@ -743,6 +743,28 @@ export async function main() {
 
     } catch (e) {
         console.log(e);
+    } finally {
+        // axiosの接続プールをクリーンアップ
+        const httpAdapter = axiosMattermost.defaults.adapter;
+        const httpAdapterPost = axiosMattermostPost.defaults.adapter;
+        
+        // HTTPエージェントがあれば破棄
+        if (axiosMattermost.defaults.httpAgent) {
+            console.log('axiosMattermost.defaults.httpAgent');
+            (axiosMattermost.defaults.httpAgent as any).destroy?.();
+        }
+        if (axiosMattermost.defaults.httpsAgent) {
+            console.log('axiosMattermost.defaults.httpsAgent');
+            (axiosMattermost.defaults.httpsAgent as any).destroy?.();
+        }
+        if (axiosMattermostPost.defaults.httpAgent) {
+            console.log('axiosMattermostPost.defaults.httpAgent');
+            (axiosMattermostPost.defaults.httpAgent as any).destroy?.();
+        }
+        if (axiosMattermostPost.defaults.httpsAgent) {
+            console.log('axiosMattermostPost.defaults.httpsAgent');
+            (axiosMattermostPost.defaults.httpsAgent as any).destroy?.();
+        }
     }
     let obj;
     // return Promise.resolve().then(() => {

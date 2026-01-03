@@ -1,19 +1,35 @@
+import fs from 'fs/promises';
+import path from 'path';
 import { map, toArray } from "rxjs";
+import simpleGit from 'simple-git';
+import { PassThrough } from 'stream';
+import tar from 'tar-stream';
+import zlib from 'zlib';
 
-import { genClientByProvider, MyToolType, OpenAIApiWrapper, providerPrediction } from "../../common/openai-api-wrapper.js";
-import { UserRequest } from "../models/info.js";
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
-import { ds } from "../db.js";
-import { getOAuthAccountForTool, reform } from "./common.js";
+import { getProxyUrl } from "../../common/http-client.js";
+import { MyToolType } from "../../common/openai-api-wrapper.js";
 import { Utils } from "../../common/utils.js";
+import { AIClientLike, getServiceAIClient } from "../common/ai-client.js";
+import { getPredictHistoryLoggerForRequest, getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
+import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { decrypt } from "../controllers/tool-call.js";
+import { ds } from "../db.js";
+import { GitProjectEntity, GitProjectStatus } from "../entity/api-git.entity.js";
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from "../entity/project-models.entity.js";
+import { UserRequest } from "../models/info.js";
+import { getOAuthAccountForTool, reform } from "./common.js";
+
+const _aiApi = getServiceAIClient();
 
 // 1. 関数マッピングの作成
 export async function gitlabFunctionDefinitions(providerName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
-    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+    req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
+    const aiApi_ = aiApi || _aiApi; // フォールバック
     const provider = `gitlab-${providerName}`;
+    const wrapperLogger = getPredictHistoryWrapperLoggerForRequest(req);
+    const predictHistoryLogger = getPredictHistoryLoggerForRequest(req);
     return [
         {
             info: { group: provider, isActive: true, isInteractive: false, label: `汎用検索`, },
@@ -686,7 +702,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
             handler: async (args: { userPrompt?: string, project_id: number, file_path_list: string[], ref: string }): Promise<any> => {
                 const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { userPrompt = '要約してください', project_id, file_path_list, ref } = args;
-                const aiProvider = await getAIProvider(req.info.user, obj.inDto.args.model);
+                const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, obj.inDto.args.model);
 
                 if (ref) {
                     // ブランチ名、タグ名、SHAのいずれかが指定されている場合
@@ -714,7 +730,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
 
                     const systemPrompt = 'アシスタントAI';
                     const inDto = Utils.deepCopyOmitting(obj.inDto, 'aiProviderClient');
-                    // inDto.args.model = 'gemini-1.5-pro';
+                    // inDto.args.model = 'gemini-2.5-pro';
                     inDto.args.messages = [
                         { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
                         {
@@ -731,25 +747,20 @@ export async function gitlabFunctionDefinitions(providerName: string,
 
                     const newLabel = `${label}-call_ai-${inDto.args.model}`;
                     // レスポンス返した後にゆるりとヒストリーを更新しておく。
-                    const history = new PredictHistoryWrapperEntity();
-                    history.orgKey = req.info.user.orgKey;
-                    history.connectionId = connectionId;
-                    history.streamId = streamId;
-                    history.messageId = message.id;
-                    history.label = newLabel;
-                    history.model = inDto.args.model;
-                    history.provider = aiProvider.type;
-                    history.createdBy = req.info.user.id;
-                    history.updatedBy = req.info.user.id;
-                    history.createdIp = req.info.ip;
-                    history.updatedIp = req.info.ip;
-                    await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+                    await wrapperLogger.log({
+                        connectionId,
+                        streamId,
+                        messageId: message.id,
+                        label: newLabel,
+                        model: inDto.args.model,
+                        provider: aiProviderClient.type,
+                    });
 
                     return new Promise((resolve, reject) => {
                         let text = '';
                         // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
-                        aiApi.chatCompletionObservableStream(
-                            inDto.args, { label: newLabel }, aiProvider,
+                        aiApi_.chatCompletionObservableStream(
+                            inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
                         ).pipe(
                             map(res => res.choices.map(choice => choice.delta.content).join('')),
                             toArray(),
@@ -758,10 +769,33 @@ export async function gitlabFunctionDefinitions(providerName: string,
                             next: next => {
                                 text += next;
                             },
-                            error: error => {
+                            error: async error => {
+                                // try {
+                                //     await logPredictHistoryWithContext(predictHistoryLogger, {
+                                //         idempotencyKey: inDto.options?.idempotencyKey || newLabel,
+                                //         argsHash: inDto.options?.idempotencyKey || newLabel,
+                                //         label: newLabel,
+                                //         provider: aiProviderClient.type,
+                                //         model: inDto.args.model,
+                                //         message: error?.message || String(error),
+                                //     }, PredictHistoryStatus.Error);
+                                // } catch (logErr) {
+                                //     console.error('Failed to log predict history', logErr);
+                                // }
                                 reject(error);
                             },
-                            complete: () => {
+                            complete: async () => {
+                                // try {
+                                //     await logPredictHistoryWithContext(predictHistoryLogger, {
+                                //         idempotencyKey: inDto.options?.idempotencyKey || newLabel,
+                                //         argsHash: inDto.options?.idempotencyKey || newLabel,
+                                //         label: newLabel,
+                                //         provider: aiProviderClient.type,
+                                //         model: inDto.args.model,
+                                //     }, PredictHistoryStatus.Fine);
+                                // } catch (logErr) {
+                                //     console.error('Failed to log predict history', logErr);
+                                // }
                                 resolve(text);
                             },
                         });;
@@ -948,7 +982,7 @@ export async function gitlabFunctionDefinitions(providerName: string,
                                 type: 'string',
                                 description: '検索対象のブランチ名、タグ名、またはコミットSHA',
                                 default: 'main'
-        }
+                            }
                         },
                         required: ['project_id', 'search']
                     }
@@ -957,6 +991,11 @@ export async function gitlabFunctionDefinitions(providerName: string,
             handler: async (args: { project_id: number, search: string, filename_filter?: string, per_page?: number, page?: number, ref?: string }): Promise<any> => {
                 const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 let { project_id, search, filename_filter, per_page, page, ref } = args;
+
+                if (project_id && search) {
+                } else {
+                    throw new Error('project_idとsearchは必須です。');
+                }
 
                 per_page = Math.max(Math.min(per_page || 20, 100), 1);
                 page = Math.max(page || 1, 1);
@@ -3339,6 +3378,169 @@ export async function gitlabFunctionDefinitions(providerName: string,
                 return result;
             }
         },
+        {
+            info: { group: provider, isActive: true, isInteractive: false, label: `リポジトリクローン(tgz)`, },
+            definition: {
+                type: 'function', function: {
+                    name: `gitlab_${providerName}_clone_repository`,
+                    description: `GitLabリポジトリをクローンしてtgz形式で取得。初回はclone、2回目以降はfetchで差分取得するため高速。`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            project_id: { type: 'string', description: 'プロジェクトID（数値またはURL-encoded path）' },
+                            ref: { type: 'string', description: 'ブランチ、タグ、またはコミットハッシュ', default: 'main' }
+                        },
+                        required: ['project_id']
+                    }
+                }
+            },
+            handler: async (args: { project_id: string, ref?: string }): Promise<any> => {
+                const { e, oAuthAccount, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
+                const { project_id, ref = 'main' } = args;
+
+                // プロジェクト情報を取得
+                const projectUrl = `${e.uriBase}/api/v4/projects/${encodeURIComponent(project_id)}`;
+                const projectInfo = (await axiosWithAuth.get(projectUrl)).data;
+                const { id: gitlabProjectId, path_with_namespace, http_url_to_repo } = projectInfo;
+
+                // リポジトリディレクトリのパス
+                const repoDir = `${GIT_REPOSITORIES}/${provider}/${path_with_namespace}`;
+
+                // OAuth tokenを使用したクローンURL（ドメインとポートをuriBaseに合わせる）
+                const urlObj = new URL(http_url_to_repo);
+                const uriBaseObj = new URL(e.uriBase);
+                urlObj.protocol = uriBaseObj.protocol;
+                urlObj.host = uriBaseObj.host;
+                urlObj.port = uriBaseObj.port;
+                urlObj.pathname = urlObj.pathname.replaceAll(/\/\/+/g, '/');
+                const repoUrlWithoutAuth = urlObj.toString();
+
+                // アクセストークンを復号化してURLに埋め込む
+                const decryptedAccessToken = decrypt(oAuthAccount.accessToken);
+                urlObj.username = encodeURIComponent('oauth2');
+                urlObj.password = encodeURIComponent(decryptedAccessToken);
+                const repoUrlWithAuth = urlObj.toString();
+
+                // 悲観的ロックでgitリポジトリ操作前にDBで状態管理
+                const gitProject = await ds.transaction(async (tm) => {
+                    // 該当Entityの取得 or 作成
+                    let gitProject = await tm.findOne(GitProjectEntity, {
+                        where: { orgKey: req.info.user.orgKey, provider, gitProjectId: gitlabProjectId },
+                        lock: { mode: "pessimistic_write" },
+                    });
+
+                    if (!gitProject) {
+                        // 新規作成
+                        gitProject = new GitProjectEntity();
+                        gitProject.orgKey = req.info.user.orgKey;
+                        gitProject.provider = provider;
+                        gitProject.gitProjectId = gitlabProjectId;
+                        gitProject.status = GitProjectStatus.Cloning;
+                        gitProject.createdBy = req.info.user.id!;
+                        gitProject.updatedBy = req.info.user.id!;
+                        gitProject.createdIp = req.info.ip!;
+                        gitProject.updatedIp = req.info.ip!;
+                        gitProject = await tm.save(gitProject);
+                    } else {
+                        // 既に別のプロセスが Cloning / Fetching 中ならエラー
+                        if ([GitProjectStatus.Cloning, GitProjectStatus.Fetching].includes(gitProject.status)) {
+                            throw new Error("Another process is already cloning/fetching this repository. Please wait and retry.");
+                        }
+
+                        // リポジトリディレクトリが存在するかチェック
+                        try {
+                            const stats = await fs.stat(repoDir);
+                            if (!stats.isDirectory()) {
+                                // ディレクトリではない場合は削除して再クローン
+                                await fs.rm(repoDir, { recursive: true, force: true });
+                                gitProject.status = GitProjectStatus.Cloning;
+                            } else {
+                                // ディレクトリが存在する場合はrefの存在をチェック
+                                const isRefExists = await isRefExist(repoDir, ref);
+                                if (isRefExists) {
+                                    gitProject.status = GitProjectStatus.Normal;
+                                } else {
+                                    gitProject.status = GitProjectStatus.Fetching;
+                                    gitProject.updatedBy = req.info.user.id!;
+                                    gitProject.updatedIp = req.info.ip!;
+                                    gitProject = await tm.save(gitProject);
+                                }
+                            }
+                        } catch (err: any) {
+                            // ディレクトリが存在しない場合は新規クローン
+                            if (err.code === 'ENOENT') {
+                                gitProject.status = GitProjectStatus.Cloning;
+                            } else {
+                                throw err;
+                            }
+                        }
+                    }
+
+                    return gitProject;
+                });
+
+                // gitリポジトリ操作
+                try {
+                    if ([GitProjectStatus.Cloning, GitProjectStatus.Fetching].includes(gitProject.status)) {
+                        const proxy = await getProxyUrl(e.uriBase) || '';
+                        const git = simpleGit().env('http', proxy).env('https', proxy).env('sslVerify', 'false');
+
+                        if (gitProject.status === GitProjectStatus.Cloning) {
+                            console.log(`Cloning ${path_with_namespace}...`);
+                            await fs.mkdir(path.dirname(repoDir), { recursive: true });
+                            await git.clone(repoUrlWithAuth, repoDir);
+                            // .git/config内のURLを認証情報なしに変更
+                            await git.cwd(repoDir).remote(['set-url', 'origin', repoUrlWithoutAuth]);
+                            gitProject.status = GitProjectStatus.Normal;
+                            console.log(`Successfully cloned ${path_with_namespace}`);
+                        } else if (gitProject.status === GitProjectStatus.Fetching) {
+                            console.log(`Pulling ${path_with_namespace}...`);
+                            await git.cwd(repoDir).pull(repoUrlWithAuth);
+                            gitProject.status = GitProjectStatus.Normal;
+                            console.log(`Successfully pulled ${path_with_namespace}`);
+                        }
+
+                        gitProject.updatedBy = req.info.user.id!;
+                        gitProject.updatedIp = req.info.ip!;
+                        await ds.getRepository(GitProjectEntity).save(gitProject);
+                    }
+
+                    // git archiveでtgz生成
+                    console.log(`Creating archive for ${path_with_namespace} at ${ref}...`);
+                    const tgzBuffer = await createArchiveFromGit(repoDir, ref);
+
+                    return {
+                        success: true,
+                        project: {
+                            id: projectInfo.id,
+                            name: projectInfo.name,
+                            path_with_namespace: projectInfo.path_with_namespace,
+                        },
+                        ref,
+                        archive: {
+                            filename: `${projectInfo.name}-${ref}.tgz`,
+                            size_bytes: tgzBuffer.length,
+                            size_mb: (tgzBuffer.length / 1024 / 1024).toFixed(2),
+                            base64: tgzBuffer.toString('base64')
+                        },
+                        message: `リポジトリを正常にクローンしました。展開するには: tar xzf ${projectInfo.name}-${ref}.tgz`
+                    };
+
+                } catch (error: any) {
+                    console.error('Error cloning repository:', error);
+
+                    // エラー時はステータスをErrorに更新
+                    gitProject.status = GitProjectStatus.Error;
+                    gitProject.lastFetchError = error.message;
+                    await ds.getRepository(GitProjectEntity).save(gitProject);
+
+                    return {
+                        success: false,
+                        error: error.message || 'リポジトリのクローンに失敗しました',
+                    };
+                }
+            }
+        },
     ];
 };
 
@@ -3364,3 +3566,70 @@ function formatMode(mode: string): string {
 
     return result;
 }
+
+/**
+ * 指定されたリファレンス（commit ID）が存在するかチェックする関数
+ * @param repoDir リポジトリのディレクトリ（存在することが前提）
+ * @param ref チェックするcommit ID
+ */
+async function isRefExist(repoDir: string, ref: string): Promise<boolean> {
+    const git = simpleGit();
+    try {
+        // ディレクトリの存在確認
+        await fs.access(repoDir);
+        await git.cwd(repoDir).revparse(['--verify', ref]);
+        await git.cwd(repoDir).raw(['cat-file', '-e', ref]);
+        return true;
+    } catch (err) {
+        if ((err as Error).message.includes('fatal') || (err as any).code === 'ENOENT') {
+            return false;
+        }
+        throw err;
+    }
+}
+
+/**
+ * git archiveでリポジトリをtgz形式で取得
+ */
+async function createArchiveFromGit(repoDir: string, ref: string): Promise<Buffer> {
+    return new Promise<Buffer>(async (resolve, reject) => {
+        try {
+            const git = simpleGit();
+            const passThrough = new PassThrough();
+            const pack = tar.pack();
+            const gzip = zlib.createGzip();
+            const chunks: Buffer[] = [];
+
+            // git archiveの出力をパイプで処理
+            git.outputHandler((command, stdout, stderr) => {
+                stdout.pipe(passThrough);
+            });
+
+            // tar展開 -> 再圧縮(gzip)
+            const extract = tar.extract();
+            extract.on('entry', (header, stream, next) => {
+                stream.pipe(pack.entry(header, next));
+            });
+
+            extract.on('finish', () => {
+                pack.finalize();
+            });
+
+            // gzip圧縮されたデータを収集
+            gzip.on('data', (chunk) => chunks.push(chunk));
+            gzip.on('end', () => resolve(Buffer.concat(chunks)));
+            gzip.on('error', reject);
+
+            // パイプライン: git archive -> passThrough -> extract -> pack -> gzip
+            passThrough.pipe(extract);
+            pack.pipe(gzip);
+
+            // git archiveコマンド実行
+            await git.cwd(repoDir).raw(['archive', '--format=tar', ref]);
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
+const { GIT_REPOSITORIES } = process.env as { GIT_REPOSITORIES: string };

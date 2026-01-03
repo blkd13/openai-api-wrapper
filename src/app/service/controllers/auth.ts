@@ -1,3 +1,4 @@
+import { endWith } from 'rxjs';
 import { AxiosInstance } from 'axios';
 import bcrypt from 'bcrypt';
 import { createHmac, randomBytes, randomInt, randomUUID } from 'crypto';
@@ -706,7 +707,10 @@ export async function tryRefreshCore(tm: EntityManager, xRealIp: string, deviceI
         // 再利用検知：このセッションは乗っ取られた可能性
         existing.revoked = true;
         await repo.save(existing); // セッションを無効化
-        await repo.update({ orgKey: existing.orgKey, userId: existing.userId, sid: existing.sid, revoked: false }, { current: false, revoked: true, updatedBy: existing.userId, updatedIp: xRealIp });
+        await repo.update(
+            { orgKey: existing.orgKey, userId: existing.userId, sid: existing.sid, revoked: false },
+            { current: false, revoked: true, updatedBy: existing.userId, updatedIp: xRealIp }
+        );
 
         session.status = SessionStatus.Revoked;
         tm.getRepository(SessionEntity).save(session);
@@ -990,15 +994,27 @@ export const userLoginOAuth2Callback = [
 
 
                     // 流入時の情報を残しておく
-                    const userSetting = new UserSettingEntity();
+                    let userSetting: UserSettingEntity;
+                    manager.getRepository(UserSettingEntity);
+                    userSetting = await manager.findOneBy(UserSettingEntity, { orgKey: user.orgKey, userId: user.id, key: 'trafficSource' }) as UserSettingEntity;
+                    if (userSetting) {
+                    } else {
+                        userSetting = new UserSettingEntity();
                     userSetting.orgKey = user.orgKey;
                     userSetting.userId = user.id;
                     userSetting.key = 'trafficSource';
-                    // リファラを保存しておく
-                    userSetting.value = { referrer: req.headers['referer'] || undefined, deviceType: req.useragent ? (req.useragent?.isMobile) ? 'mobile' : ((req.useragent?.isTablet) ? 'tablet' : 'desktop') : undefined };
+                        userSetting.value = {};
                     userSetting.createdBy = user.id;
-                    userSetting.updatedBy = user.id;
                     userSetting.createdIp = ipAddress;
+                    }
+                    // リファラを保存しておく
+                    userSetting.value[oAuthAccount.provider] = {
+                        fromUrl: existing.meta?.query?.fromUrl || null,
+                        timestamp: new Date().toISOString(),
+                        referrer: req.headers['referer'] || undefined,
+                        deviceType: req.useragent ? (req.useragent?.isMobile) ? 'mobile' : ((req.useragent?.isTablet) ? 'tablet' : 'desktop') : undefined
+                    };
+                    userSetting.updatedBy = user.id;
                     userSetting.updatedIp = ipAddress;
                     if (existing.meta?.query?.gclid) {
                         // gclidがついていたら保存しておく
@@ -1048,6 +1064,12 @@ export const userLoginOAuth2Callback = [
                         // const proxyPath = `${prefix}/${e.provider.split('-')[0]}/${e.name}`;
                         // console.log(proxyPath);
                         res.cookie('MMAUTHTOKEN', accessToken, {
+                            maxAge: Utils.parseTimeStringToMilliseconds(`1y`), // ミリ秒単位で指定
+                            httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
+                            secure: true, // HTTPSでのみ送信されるようにする
+                            sameSite: 'strict', // CSRF保護のためのオプション
+                        });
+                        res.cookie('MMUSERID', oAuthUserInfo.id, {
                             maxAge: Utils.parseTimeStringToMilliseconds(`1y`), // ミリ秒単位で指定
                             httpOnly: true, // クッキーをHTTPプロトコルのみでアクセス可能にする
                             secure: true, // HTTPSでのみ送信されるようにする
@@ -1548,7 +1570,7 @@ export const refresh = [
                     return { userTokenPayload: '', accessToken: '' };
                 }
             });
-            console.log(`ref:userToken=${JSON.stringify(userTokenPayload, Utils.genJsonSafer())}`);
+            // console.log(`ref:userToken=${JSON.stringify(userTokenPayload, Utils.genJsonSafer())}`);
             if (userTokenPayload) {
                 // (req as UserRequest).info = { user: userTokenPayload, ip: xRealIp, cookie: req.cookies };
                 // return { isAuth: true, obj: userTokenPayload };
@@ -2020,7 +2042,171 @@ export class ContainerManager {
     }
 
     /**
-     * コンテナを起動
+     * メモリ上のコンテナ情報を取得または復元
+     */
+    private getOrRestoreContainer(uuid: string, containerEntity: ContainerInstanceEntity): ContainerInfo {
+        let container = this.containers.get(uuid);
+        if (!container) {
+            // メモリに存在しない場合（サーバー再起動後など）、DBの情報から復元
+            const filepath = path.join(process.cwd(), 'data', 'container', `docker-compose.${uuid}.yml`);
+            container = {
+                uuid,
+                status: containerEntity.status === ContainerStatus.RUNNING ? 'running' :
+                    containerEntity.status === ContainerStatus.CREATED ? 'created' : 'stopped',
+                filepath,
+                terminalUrl: `/terminal/${uuid}`,
+                filesUrl: `/files/${uuid}`
+            };
+            this.containers.set(uuid, container);
+        }
+        return container;
+    }
+
+    /**
+     * コンテナの実際の状態をDockerコマンドで確認し、DBも更新する
+     */
+    public async checkContainerStatus(manager: EntityManager, req: UserRequest, uuid: string): Promise<ContainerStatus> {
+        const containerEntity = await manager.getRepository(ContainerInstanceEntity).findOne({
+            where: safeWhere({
+                orgKey: req.info.user.orgKey,
+                projectId: uuid,
+            })
+        });
+
+        if (!containerEntity) {
+            throw new Error(`Container entity with UUID ${uuid} not found`);
+        }
+
+        const container = this.getOrRestoreContainer(uuid, containerEntity);
+
+        try {
+            // docker-compose ps で実際の状態を確認
+            // const { stdout } = await execAsync(`docker-compose -f ${container.filepath} ps --format json`);
+            console.log(`docker ps -a --filter "name=-project-${uuid}" --format '{{json .}}'`);
+            const { stdout } = await execAsync(`docker ps -a --filter "name=-project-${uuid}-" --format '{{json .}}'`);
+            // docker ps -a --filter "name=-1 --format '{{json .}}'"
+
+            let actualStatus = ContainerStatus.EXITED;
+
+            // console.log(stdout.trim());
+            if (stdout.trim()) {
+                // 出力がある場合、JSON形式でパース
+                const lines = stdout.trim().split('\n');
+                const containers = lines.map(line => JSON.parse(line));
+
+                // project-{uuid} のコンテナを探す
+                const targetContainer = containers.find(c => c.Names?.includes(`-project-${uuid}-`));
+
+                if (targetContainer) {
+                    const state = targetContainer.State?.toLowerCase() || '';
+                    // console.log(`Container state: ${state}`);
+
+                    if (state.includes('running')) {
+                        actualStatus = ContainerStatus.RUNNING;
+                    } else if (state.includes('paused')) {
+                        actualStatus = ContainerStatus.PAUSED;
+                    } else if (state.includes('restarting')) {
+                        actualStatus = ContainerStatus.RESTARTING;
+                    } else if (state.includes('exited') || state.includes('dead')) {
+                        actualStatus = ContainerStatus.EXITED;
+                    } else {
+                        actualStatus = ContainerStatus.CREATED;
+                    }
+                }
+            }
+
+            // DBの状態を実際の状態に同期
+            containerEntity.status = actualStatus;
+            containerEntity.updatedBy = req.info.user.id;
+            containerEntity.updatedIp = req.info.ip;
+            await manager.getRepository(ContainerInstanceEntity).save(containerEntity);
+
+            // メモリ上の状態も更新
+            if (actualStatus === ContainerStatus.RUNNING) {
+                container.status = 'running';
+            } else if (actualStatus === ContainerStatus.EXITED) {
+                container.status = 'stopped';
+            } else if (actualStatus === ContainerStatus.CREATED) {
+                container.status = 'created';
+            } else {
+                container.status = 'error';
+            }
+            this.containers.set(uuid, container);
+
+            return actualStatus;
+        } catch (error) {
+            // docker-compose ps でエラーが出た場合は、コンテナが存在しないと判断
+            console.error(`Error checking container status: ${error}`);
+            containerEntity.status = ContainerStatus.EXITED;
+            containerEntity.updatedBy = req.info.user.id;
+            containerEntity.updatedIp = req.info.ip;
+            await manager.getRepository(ContainerInstanceEntity).save(containerEntity);
+
+            if (container) {
+                container.status = 'error';
+                this.containers.set(uuid, container);
+            }
+
+            return ContainerStatus.EXITED;
+        }
+    }
+
+    /**
+     * コンテナを作成して起動 (docker-compose up -d)
+     */
+    public async upContainer(req: UserRequest, uuid: string): Promise<void> {
+        const containerEntity = await ds.getRepository(ContainerInstanceEntity).findOneByOrFail(
+            safeWhere({
+                orgKey: req.info.user.orgKey,
+                projectId: uuid,
+            })
+        )
+        const container = this.getOrRestoreContainer(uuid, containerEntity);
+
+        try {
+            await execAsync(`docker-compose -f ${container.filepath} up -d`);
+            container.status = 'running';
+            containerEntity.status = ContainerStatus.RUNNING;
+            await ds.getRepository(ContainerInstanceEntity).save(containerEntity);
+            this.containers.set(uuid, container);
+        } catch (error) {
+            container.status = 'error';
+            containerEntity.status = ContainerStatus.EXITED;
+            await ds.getRepository(ContainerInstanceEntity).save(containerEntity);
+            this.containers.set(uuid, container);
+            throw new Error(`Failed to up container: ${error}`);
+        }
+    }
+
+    /**
+     * コンテナを停止して削除 (docker-compose down)
+     */
+    public async downContainer(req: UserRequest, uuid: string): Promise<void> {
+        const containerEntity = await ds.getRepository(ContainerInstanceEntity).findOneByOrFail(
+            safeWhere({
+                orgKey: req.info.user.orgKey,
+                projectId: uuid,
+            })
+        )
+        const container = this.getOrRestoreContainer(uuid, containerEntity);
+
+        try {
+            await execAsync(`docker-compose -f ${container.filepath} down`);
+            container.status = 'stopped';
+            containerEntity.status = ContainerStatus.EXITED;
+            await ds.getRepository(ContainerInstanceEntity).save(containerEntity);
+            this.containers.set(uuid, container);
+        } catch (error) {
+            container.status = 'error';
+            containerEntity.status = ContainerStatus.EXITED;
+            await ds.getRepository(ContainerInstanceEntity).save(containerEntity);
+            this.containers.set(uuid, container);
+            throw new Error(`Failed to down container: ${error}`);
+        }
+    }
+
+    /**
+     * コンテナを起動 (docker-compose start)
      */
     public async startContainer(req: UserRequest, uuid: string): Promise<void> {
         const containerEntity = await ds.getRepository(ContainerInstanceEntity).findOneByOrFail(
@@ -2029,39 +2215,45 @@ export class ContainerManager {
                 projectId: uuid,
             })
         )
-        const container = this.containers.get(uuid);
-        if (!container) {
-            throw new Error(`Container with UUID ${uuid} not found`);
-        }
+        const container = this.getOrRestoreContainer(uuid, containerEntity);
 
         try {
-            await execAsync(`docker-compose -f ${container.filepath} up -d`);
+            await execAsync(`docker-compose -f ${container.filepath} start`);
             container.status = 'running';
             containerEntity.status = ContainerStatus.RUNNING;
+            await ds.getRepository(ContainerInstanceEntity).save(containerEntity);
             this.containers.set(uuid, container);
         } catch (error) {
             container.status = 'error';
             containerEntity.status = ContainerStatus.EXITED;
+            await ds.getRepository(ContainerInstanceEntity).save(containerEntity);
             this.containers.set(uuid, container);
             throw new Error(`Failed to start container: ${error}`);
         }
     }
 
     /**
-     * コンテナを停止
+     * コンテナを停止 (docker-compose stop)
      */
-    public async stopContainer(uuid: string): Promise<void> {
-        const container = this.containers.get(uuid);
-        if (!container) {
-            throw new Error(`Container with UUID ${uuid} not found`);
-        }
+    public async stopContainer(req: UserRequest, uuid: string): Promise<void> {
+        const containerEntity = await ds.getRepository(ContainerInstanceEntity).findOneByOrFail(
+            safeWhere({
+                orgKey: req.info.user.orgKey,
+                projectId: uuid,
+            })
+        )
+        const container = this.getOrRestoreContainer(uuid, containerEntity);
 
         try {
-            await execAsync(`docker-compose -f ${container.filepath} down`);
+            await execAsync(`docker-compose -f ${container.filepath} stop`);
             container.status = 'stopped';
+            containerEntity.status = ContainerStatus.PAUSED;
+            await ds.getRepository(ContainerInstanceEntity).save(containerEntity);
             this.containers.set(uuid, container);
         } catch (error) {
             container.status = 'error';
+            containerEntity.status = ContainerStatus.EXITED;
+            await ds.getRepository(ContainerInstanceEntity).save(containerEntity);
             this.containers.set(uuid, container);
             throw new Error(`Failed to stop container: ${error}`);
         }
@@ -2141,18 +2333,59 @@ export const checkProjectPermission = [
                             await manager.getRepository(OAuthAccountEntity).save(exists); // 非同期で更新
                         } else {
                             const fileName = `docker-compose.${project.id}.yml`;
-                            const filePath = path.join(process.cwd(), fileName);
+                            const dirPath = path.join(process.cwd(), 'data', 'container');
+                            const filePath = path.join(dirPath, fileName);
+
+                            // フォルダが存在しない場合は作成
+                            if (!fs.existsSync(dirPath)) {
+                                await fs.promises.mkdir(dirPath, { recursive: true });
+                            }
                             if (fs.existsSync(filePath)) {
                                 console.log(`${fileName} が存在します。`);
-                                // ここにファイルが存在する場合の処理を書く
+                                // ファイルが存在する場合は実際のコンテナ状態をチェック
+                                const containerEntity = await manager.getRepository(ContainerInstanceEntity).findOne({
+                                    where: safeWhere({
+                                        orgKey: user.orgKey,
+                                        projectId: project.id,
+                                    })
+                                });
+
+                                if (containerEntity) {
+                                    // 実際のコンテナ状態をDockerコマンドでチェック
+                                    const actualStatus = await containerManager.checkContainerStatus(manager, req, project.id);
+
+                                    if (actualStatus === ContainerStatus.RUNNING) {
+                                        console.log(`コンテナ ${project.id} は既に起動しています。`);
+                                        // 何もしない
+                                    } else if (actualStatus === ContainerStatus.EXITED || actualStatus === ContainerStatus.PAUSED) {
+                                        console.log(`コンテナ ${project.id} は停止しているため、起動します。`);
+                                        await containerManager.startContainer(req, project.id);
+                                        await Utils.sleep(5000);
+                                    } else if (actualStatus === ContainerStatus.CREATED) {
+                                        console.log(`コンテナ ${project.id} は作成済みですが未起動のため、起動します。`);
+                                        await containerManager.upContainer(req, project.id);
+                                        await Utils.sleep(5000);
+                                    } else {
+                                        // その他のステータス（RESTARTING等）の場合は少し待つ
+                                        console.log(`コンテナ ${project.id} の状態: ${actualStatus}。待機します。`);
+                                        await Utils.sleep(3000);
+                                    }
+                                } else {
+                                    console.log(`コンテナエンティティが見つかりません。新規作成します。`);
+                                    await containerManager.createContainer(req, { uuid: project.id });
+                                    await containerManager.upContainer(req, project.id);
+                                    await Utils.sleep(5000);
+                                }
                             } else {
                                 console.log(`${fileName} が存在しません。`);
                                 // ここにファイルが存在しない場合の処理を書く
                                 await containerManager.createContainer(req, { uuid: project.id });
-                                await containerManager.startContainer(req, project.id);
+                                await containerManager.upContainer(req, project.id);
                                 await Utils.sleep(5000);
                             }
                         }
+
+                        if (originalUri === `/terminal/${projectId}/`) {
                         const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_FOR_CONSOLE_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
                         const ent = await genApiTokenCore(user, label, deviceInfo, req.ip || '', manager, expirationTime);
                         if (ent) {
@@ -2173,6 +2406,7 @@ export const checkProjectPermission = [
                         splitString(encodeURIComponent(ent.apiKey)).forEach((chunk, index) => {
                             res.setHeader(`X-API-Key_${index + 1}`, chunk);
                         });
+                        } else { /**  documentリクエスト以外はAPI鍵を発行しない */ }
                         res.status(200).json({ message: 'アクセス許可' });
                     } catch (error) {
                         console.error('Error checking project permission:', error);

@@ -3,7 +3,7 @@ import { body, param, query } from 'express-validator';
 import { EntityManager, In } from 'typeorm';
 
 import { AIModelAlias, AIModelEntity, AIModelPricingEntity, AIModelStatus, AIProviderEntity, AIProviderTemplateEntity, AIProviderType, TagEntity } from '../entity/ai-model-manager.entity.js';
-import { ScopeType } from '../entity/auth.entity.js';
+import { ScopeType, UserRoleType } from '../entity/auth.entity.js';
 
 import { Utils } from '../../common/utils.js';
 import { ScopedEntityService } from '../common/scoped-entity-service.js';
@@ -11,6 +11,24 @@ import { ds } from '../db.js';
 import { safeWhere } from '../entity/base.js';
 import { validationErrorHandler } from '../middleware/validation.js';
 import { UserRequest } from '../models/info.js';
+
+/**
+ * OpenAI互換のモデルオブジェクト
+ */
+interface OpenAIModelObject {
+    id: string;
+    object: 'model';
+    created: number;
+    owned_by: string;
+}
+
+/**
+ * OpenAI互換のモデル一覧レスポンス
+ */
+interface OpenAIModelsResponse {
+    object: 'list';
+    data: OpenAIModelObject[];
+}
 
 /**
  * [GET] AIProvider 一覧取得
@@ -38,7 +56,8 @@ export const getAIProviderTemplates = [
             // 新しいサービスを使用してスコープ考慮の一覧取得
             const providers = await ScopedEntityService.findAllWithScope(
                 ds.getRepository(AIProviderTemplateEntity),
-                req.info.user,
+                req.info.user.orgKey,
+                req.info.user.roleList,
                 { additionalFilters, includeOverridden }
             );
 
@@ -162,7 +181,8 @@ export const getAIProviders = [
             // 新しいサービスを使用してスコープ考慮の一覧取得
             const providers = await ScopedEntityService.findAllWithScope(
                 ds.getRepository(AIProviderEntity),
-                req.info.user,
+                req.info.user.orgKey,
+                req.info.user.roleList,
                 { additionalFilters, includeOverridden },
             );
 
@@ -202,7 +222,7 @@ export const upsertAIProvider = [
                 bodyData,
                 req.info.ip,
                 {
-                    uniqueFields: ['type', 'name'],
+                    uniqueFields: [['type', 'name']],
                     beforeSave: async (entity: AIProviderEntity, isNew: boolean) => {
                         // オプショナルフィールドの設定
                         if ('description' in bodyData) entity.description = bodyData.description;
@@ -285,7 +305,8 @@ export const getBaseModels = [
             // 新しいサービスを使用してスコープ考慮の一覧取得
             const models = await ScopedEntityService.findAllWithScope(
                 ds.getRepository(AIModelEntity),
-                req.info.user,
+                req.info.user.orgKey,
+                req.info.user.roleList,
                 { additionalFilters, includeOverridden }
             );
 
@@ -491,7 +512,7 @@ export const upsertBaseModel = [
                 // 価格情報の処理
                 if (pricingInfo) {
                     const repoPricing = manager.getRepository(AIModelPricingEntity);
-                    
+
                     // 既存の価格情報を取得
                     const existingPricing = await repoPricing.findOne({
                         where: safeWhere({
@@ -506,7 +527,7 @@ export const upsertBaseModel = [
                     const pricingName = pricingInfo.name || `${result.entity.name} Pricing ${new Date().toISOString().split('T')[0]}`;
                     const validFrom = pricingInfo.validFrom ? new Date(pricingInfo.validFrom) : new Date();
                     const unit = pricingInfo.unit || 'USD/1M tokens';
-                    
+
                     // 新しい価格情報エンティティを作成
                     const pricingEntity = new AIModelPricingEntity();
                     pricingEntity.orgKey = req.info.user.orgKey;
@@ -534,7 +555,7 @@ export const upsertBaseModel = [
 
                     // 新しい価格情報を保存
                     await repoPricing.save(pricingEntity);
-                    
+
                     // レスポンスに価格情報を含める
                     (result.entity as any).pricingHistory = [pricingEntity];
                 } else if (result.isNew) {
@@ -554,7 +575,7 @@ export const upsertBaseModel = [
                     defaultPricingEntity.createdIp = req.info.ip;
                     defaultPricingEntity.updatedBy = req.info.user.id;
                     defaultPricingEntity.updatedIp = req.info.ip;
-                    
+
                     await repoPricing.save(defaultPricingEntity);
                     (result.entity as any).pricingHistory = [defaultPricingEntity];
                 }
@@ -656,7 +677,7 @@ export const upsertModelPricing = [
                 bodyData,
                 req.info.ip,
                 {
-                    uniqueFields: ['name'], // nameで一意性を保証（スコープを考慮）
+                    uniqueFields: [['name', 'validFrom']], // name / validFrom で一意性を保証（スコープを考慮）
                 }
             );
 
@@ -727,7 +748,8 @@ export const getAllTags = [
             // ScopedEntityServiceを使用してスコープ考慮の一覧取得
             const tags = await ScopedEntityService.findAllWithScope(
                 ds.getRepository(TagEntity),
-                req.info.user,
+                req.info.user.orgKey,
+                req.info.user.roleList,
                 { includeOverridden }
             );
 
@@ -923,3 +945,167 @@ export const processModelTags = async (
 
     return processedTags;
 };
+
+/**
+ * [GET] OpenAI互換 /v1/models API
+ *
+ * OpenAI APIの /v1/models エンドポイントと互換性のあるレスポンスを返す。
+ * 有効なモデルの一覧をOpenAI形式で取得する。
+ *
+ * レスポンス形式:
+ * {
+ *   "object": "list",
+ *   "data": [
+ *     {
+ *       "id": "gpt-4o",
+ *       "object": "model",
+ *       "created": 1722880000,
+ *       "owned_by": "openai"
+ *     },
+ *     ...
+ *   ]
+ * }
+ */
+export const getOpenAIModels = [
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        try {
+            // アクティブなモデルのみを取得
+            const models = await ScopedEntityService.findAllWithScope(
+                ds.getRepository(AIModelEntity),
+                req.info.user.orgKey,
+                req.info.user.roleList,
+                {
+                    additionalFilters: {
+                        status: AIModelStatus.ACTIVE,
+                        isActive: true
+                    }
+                }
+            );
+
+            // OpenAI形式に変換
+            const openAIModels: OpenAIModelObject[] = models.map(model => ({
+                id: model.providerModelId || model.name,
+                object: 'model' as const,
+                created: Math.floor(new Date(model.createdAt).getTime() / 1000),
+                owned_by: model.developer || model.providerNameList?.[0] || 'system'
+            }));
+
+            // エイリアスも含める（同じモデルが複数のエイリアスを持つ場合）
+            const aliases = await ds.getRepository(AIModelAlias).find({
+                where: safeWhere({
+                    orgKey: req.info.user.orgKey,
+                    modelId: In(models.map(model => model.id))
+                }),
+            });
+
+            // エイリアス情報を追加（重複を避けるため、既存のmodel IDと異なるエイリアスのみ追加）
+            const existingIds = new Set(openAIModels.map(m => m.id));
+            for (const alias of aliases) {
+                if (!existingIds.has(alias.alias)) {
+                    const parentModel = models.find(m => m.id === alias.modelId);
+                    if (parentModel) {
+                        openAIModels.push({
+                            id: alias.alias,
+                            object: 'model' as const,
+                            created: Math.floor(new Date(parentModel.createdAt).getTime() / 1000),
+                            owned_by: parentModel.developer || parentModel.providerNameList?.[0] || 'system'
+                        });
+                        existingIds.add(alias.alias);
+                    }
+                }
+            }
+
+            const response: OpenAIModelsResponse = {
+                object: 'list',
+                data: openAIModels
+            };
+
+            res.status(200).json(response);
+        } catch (error) {
+            console.error('Error fetching OpenAI compatible models:', error);
+            res.status(500).json({
+                error: {
+                    message: 'Failed to fetch models',
+                    type: 'internal_error',
+                    code: 'internal_error'
+                }
+            });
+        }
+    }
+];
+
+/**
+ * [GET] OpenAI互換 /v1/models/:model API
+ *
+ * 特定のモデル情報をOpenAI形式で取得する。
+ */
+export const getOpenAIModel = [
+    param('model').isString().notEmpty(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { model: modelId } = req.params;
+
+        try {
+            // まずモデル名で検索
+            let model = await ds.getRepository(AIModelEntity).findOne({
+                where: safeWhere({
+                    orgKey: req.info.user.orgKey,
+                    providerModelId: modelId,
+                    isActive: true
+                })
+            });
+
+            // 見つからない場合はエイリアスで検索
+            if (!model) {
+                const alias = await ds.getRepository(AIModelAlias).findOne({
+                    where: safeWhere({
+                        orgKey: req.info.user.orgKey,
+                        alias: modelId
+                    })
+                });
+
+                if (alias) {
+                    model = await ds.getRepository(AIModelEntity).findOne({
+                        where: safeWhere({
+                            id: alias.modelId,
+                            orgKey: req.info.user.orgKey,
+                            isActive: true
+                        })
+                    });
+                }
+            }
+
+            if (!model) {
+                return res.status(404).json({
+                    error: {
+                        message: `The model '${modelId}' does not exist`,
+                        type: 'invalid_request_error',
+                        param: 'model',
+                        code: 'model_not_found'
+                    }
+                });
+            }
+
+            const openAIModel: OpenAIModelObject = {
+                id: modelId,
+                object: 'model',
+                created: Math.floor(new Date(model.createdAt).getTime() / 1000),
+                owned_by: model.developer || model.providerNameList?.[0] || 'system'
+            };
+
+            res.status(200).json(openAIModel);
+        } catch (error) {
+            console.error('Error fetching OpenAI compatible model:', error);
+            res.status(500).json({
+                error: {
+                    message: 'Failed to fetch model',
+                    type: 'internal_error',
+                    code: 'internal_error'
+                }
+            });
+        }
+    }
+];

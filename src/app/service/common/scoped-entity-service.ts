@@ -1,7 +1,8 @@
-import { Repository, Not, FindOptionsWhere } from 'typeorm';
-import { ScopedEntity, ScopeQueryOptions, ScopeUtils } from './scope-utils.js';
-import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
+import { FindOptionsWhere, Not, Repository } from 'typeorm';
+import { UserRole } from '../entity/auth.entity.js';
 import { safeWhere } from '../entity/base.js';
+import { UserTokenPayloadWithRole } from '../middleware/authenticate.js';
+import { ScopedEntity, ScopeQueryOptions, ScopeUtils } from './scope-utils.js';
 
 export interface ScopeServiceOptions extends ScopeQueryOptions {
     scopeId?: string;
@@ -17,7 +18,8 @@ export class ScopedEntityService {
     static async findByNameWithScope<T extends ScopedEntity>(
         repository: Repository<T>,
         name: string,
-        user: UserTokenPayloadWithRole,
+        orgKey: string,
+        roleList: UserRole[],
         options: ScopeQueryOptions = {}
     ): Promise<T | null> {
         const baseCriteria = {
@@ -26,7 +28,7 @@ export class ScopedEntityService {
             ...(options.includeInactive ? {} : { isActive: true }),
         };
 
-        const scopeConditions = ScopeUtils.generateScopeConditions(user, baseCriteria);
+        const scopeConditions = ScopeUtils.generateScopeConditions(orgKey, roleList, baseCriteria);
 
         const entities = await repository.find({
             where: scopeConditions,
@@ -37,7 +39,7 @@ export class ScopedEntityService {
         }
 
         // スコープ優先順位でソートして最優先のものを返す
-        const sorted = ScopeUtils.sortByScopePriority(user.roleList, entities);
+        const sorted = ScopeUtils.sortByScopePriority(roleList, entities);
         return sorted[0];
     }
 
@@ -46,7 +48,8 @@ export class ScopedEntityService {
      */
     static async findAllWithScope<T extends ScopedEntity>(
         repository: Repository<T>,
-        user: UserTokenPayloadWithRole,
+        orgKey: string,
+        roleList: UserRole[],
         options: ScopeQueryOptions = {}
     ): Promise<T[]> {
         const baseCriteria = {
@@ -54,7 +57,7 @@ export class ScopedEntityService {
             ...(options.includeInactive ? {} : { isActive: true }),
         };
 
-        const scopeConditions = ScopeUtils.generateScopeConditions(user, baseCriteria);
+        const scopeConditions = ScopeUtils.generateScopeConditions(orgKey, roleList, baseCriteria);
 
         const allEntities = await repository.find({
             where: scopeConditions,
@@ -62,8 +65,8 @@ export class ScopedEntityService {
         });
 
         return options.includeOverridden
-            ? ScopeUtils.sortByScopePriority(user.roleList, allEntities) // 重複排除無し スコープ優先順位でソート
-            : ScopeUtils.deduplicateByNameAndPriority(user.roleList, allEntities); // 重複排除（同名エンティティでスコープ優先順位を考慮）
+            ? ScopeUtils.sortByScopePriority(roleList, allEntities) // 重複排除無し スコープ優先順位でソート
+            : ScopeUtils.deduplicateByNameAndPriority(roleList, allEntities); // 重複排除（同名エンティティでスコープ優先順位を考慮）
     }
     /**
      * 重複チェック（同一スコープ内）

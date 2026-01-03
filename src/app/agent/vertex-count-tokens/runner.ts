@@ -15,7 +15,7 @@ import { ContentPartEntity } from '../../service/entity/project-models.entity.js
 import { ContentPartType } from '../../service/models/values.js';
 
 import { VertexAI } from '@google-cloud/vertexai/build/src/vertex_ai.js';
-import { getTiktokenEncoder } from '../../common/openai-api-wrapper.js';
+import { getTiktokenEncoder } from '../../common/ai/token-cost.js';
 import { COUNT_TOKEN_MODEL, COUNT_TOKEN_OPENAI_MODEL } from '../../service/controllers/chat-by-project-model.js';
 import { ToolCallPartCallBody, ToolCallPartCommandBody, ToolCallPartEntity, ToolCallPartResultBody, ToolCallPartType } from '../../service/entity/tool-call.entity.js';
 import { getAgentUser } from '../migration-count-token/runner.js';

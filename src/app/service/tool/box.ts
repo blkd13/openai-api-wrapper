@@ -1,28 +1,33 @@
-import { map, toArray } from "rxjs";
 import { promises as fs } from 'fs';
 import { detect } from 'jschardet';
+import { map, toArray } from "rxjs";
 
-import { genClientByProvider, MyToolType, OpenAIApiWrapper, plainExtensions, plainMime, providerPrediction } from "../../common/openai-api-wrapper.js";
-import { UserRequest } from "../models/info.js";
-import { ContentPartEntity, MessageEntity, MessageGroupEntity, PredictHistoryWrapperEntity } from "../entity/project-models.entity.js";
-import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
+import { convertPptxToPdf } from '../../common/media-funcs.js';
+import { MyToolType, plainExtensions, plainMime } from "../../common/openai-api-wrapper.js";
+import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
 import { Utils } from "../../common/utils.js";
+import { boxDownloadCore } from "../api/api-box.js";
+import { AIClientLike, getServiceAIClient } from '../common/ai-client.js';
+import { getPredictHistoryLoggerForRequest, getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
+import { getAIProvider, MessageArgsSet } from "../controllers/chat-by-project-model.js";
 import { ds } from "../db.js";
 import { BoxApiItemCollection, BoxFileBodyEntity } from "../entity/api-box.entity.js";
+import { ContentPartEntity, MessageEntity, MessageGroupEntity } from "../entity/project-models.entity.js";
+import { UserRequest } from "../models/info.js";
 import { getOAuthAccountForTool, reform } from "./common.js";
-import { boxDownloadCore } from "../api/api-box.js";
-import { convertToPdfMimeList } from '../../common/pdf-funcs.js';
-import { convertPptxToPdf } from '../../common/media-funcs.js';
-import { MyVertexAiClient } from "../../common/my-vertexai.js";
 
+const _aiApi = getServiceAIClient();
 
 // 1. 関数マッピングの作成
 export async function boxFunctionDefinitions(
     providerName: string,
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
-    req: UserRequest, aiApi: OpenAIApiWrapper, connectionId: string, streamId: string, message: MessageEntity, label: string,
+    req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
 ): Promise<MyToolType[]> {
+    const aiApi_ = aiApi || _aiApi; // フォールバック
     const provider = `box-${providerName}`;
+    const wrapperLogger = getPredictHistoryWrapperLoggerForRequest(req);
+    const predictHistoryLogger = getPredictHistoryLoggerForRequest(req);
     return [
         // Box コンテンツ取得 API
         {
@@ -139,29 +144,31 @@ export async function boxFunctionDefinitions(
                 delete inDto.args.tool_choice;
                 delete inDto.args.tools;
 
-                const aiProvider = await getAIProvider(req.info.user, inDto.args.model);
+                const { aiProviderClient, aiModel, aiPrice } = await getAIProvider(req.info.user, inDto.args.model);
 
                 const newLabel = `${label}-call_ai-${model}`;
                 // レスポンス返した後にゆるりとヒストリーを更新しておく。
-                const history = new PredictHistoryWrapperEntity();
-                history.orgKey = req.info.user.orgKey;
-                history.connectionId = connectionId;
-                history.streamId = streamId;
-                history.messageId = message.id;
-                history.label = newLabel;
-                history.model = inDto.args.model;
-                history.provider = aiProvider.type;
-                history.createdBy = req.info.user.id;
-                history.updatedBy = req.info.user.id;
-                history.createdIp = req.info.ip;
-                history.updatedIp = req.info.ip;
-                await ds.getRepository(PredictHistoryWrapperEntity).save(history);
+                await wrapperLogger.log({
+                    connectionId,
+                    streamId,
+                    messageId: message.id,
+                    label: newLabel,
+                    model: inDto.args.model,
+                    provider: aiProviderClient.type,
+                });
+                // await logPredictHistoryWithContext(predictHistoryLogger, {
+                //     idempotencyKey: inDto.options?.idempotencyKey || newLabel,
+                //     argsHash: inDto.options?.idempotencyKey || newLabel,
+                //     label: newLabel,
+                //     provider: aiProviderClient.type,
+                //     model: inDto.args.model,
+                // }, PredictHistoryStatus.Fine).catch((err) => console.error('Failed to log predict history', err));
 
                 return new Promise((resolve, reject) => {
                     let text = '';
                     // console.log(`call_ai: model=${model}, userPrompt=${userPrompt}`);
-                    aiApi.chatCompletionObservableStream(
-                        inDto.args, { label: newLabel }, aiProvider,
+                    aiApi_.chatCompletionObservableStream(
+                        inDto.args, { label: newLabel }, aiProviderClient, aiModel, aiPrice,
                     ).pipe(
                         map(res => res.choices.map(choice => choice.delta.content).join('')),
                         toArray(),
@@ -170,7 +177,19 @@ export async function boxFunctionDefinitions(
                         next: next => {
                             text += next;
                         },
-                        error: error => {
+                        error: async error => {
+                            // try {
+                            //     await logPredictHistoryWithContext(predictHistoryLogger, {
+                            //         idempotencyKey: inDto.options?.idempotencyKey || newLabel,
+                            //         argsHash: inDto.options?.idempotencyKey || newLabel,
+                            //         label: newLabel,
+                            //         provider: aiProviderClient.type,
+                            //         model: inDto.args.model,
+                            //         message: error?.message || String(error),
+                            //     }, PredictHistoryStatus.Error);
+                            // } catch (logErr) {
+                            //     console.error('Failed to log predict history', logErr);
+                            // }
                             reject(error);
                         },
                         complete: () => {
@@ -432,3 +451,4 @@ export async function boxFunctionDefinitions(
         },
     ]
 };
+

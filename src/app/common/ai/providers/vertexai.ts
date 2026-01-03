@@ -1,11 +1,16 @@
-import { Content, CountTokensResponse, FunctionCallingMode, FunctionDeclaration, FunctionDeclarationSchema, GenerateContentRequest, HarmBlockThreshold, HarmCategory, Part, SchemaType, Tool, UsageMetadata, VertexAI } from "@google-cloud/vertexai";
+import { Content, FunctionCallingMode, FunctionDeclaration, FunctionDeclarationSchema, GenerateContentRequest, GenerateContentResponse, HarmBlockThreshold, HarmCategory, Part, SchemaType, Tool, UsageMetadata, VertexAI } from "@google-cloud/vertexai";
+import { generateContentStream } from "@google-cloud/vertexai/build/src/functions/generate_content.js";
 import { exec } from "child_process";
 import { detect } from "jschardet";
 import OpenAI from "openai";
 import { promisify } from 'util';
 
-import { VertexAIConfig } from "../service/entity/ai-model-manager.entity.js";
-import { AIProviderClient, plainMime } from "./openai-api-wrapper.js";
+import { AIModelEntity, AIModelPricingEntity, VertexAIConfig } from "../../../service/entity/ai-model-manager.entity.js";
+import fss from '../../fss.js';
+import { AIClient, HISTORY_DIRE, plainMime } from '../../openai-api-wrapper.js';
+import { Utils } from '../../utils.js';
+import { TokenCount } from "../token-cost.js";
+import { ExecutorContext } from '../types.js';
 
 const execPromise = promisify(exec);
 interface CommandResult {
@@ -19,7 +24,7 @@ class GCloudAuthError extends Error {
     }
 }
 
-const { GCP_PROJECT_ID, GCP_REGION, GCP_CONTEXT_CACHE_LOCATION, GCP_API_BASE_PATH } = process.env;
+const { GCP_PROJECT_ID, GCP_REGION, GCP_API_BASE_PATH } = process.env;
 
 export interface CachedContent {
     name: string;
@@ -29,13 +34,6 @@ export interface CachedContent {
     expireTime: string;
 }
 
-export interface CountCharsResponse {
-    image: number;
-    text: number;
-    video: number;
-    audio: number;
-}
-export type TokenCharCount = CountCharsResponse & CountTokensResponse;
 export interface GenerateContentRequestExtended extends GenerateContentRequest {
     apiEndpoint?: string; // APIエンドポイントはオプションにする。
     resourcePath: string;
@@ -48,7 +46,7 @@ export interface GenerateContentRequestForCache {
     expire_time?: string; // "expire_time":"2024-06-30T09:00:00.000000Z"
 }
 
-export class MyVertexAiClient {
+export class MyVertexAiClient implements AIClient {
 
     counter: number = 0;
 
@@ -123,6 +121,191 @@ export class MyVertexAiClient {
             },
         }));
     }
+
+
+    async executor(
+        ctx: ExecutorContext,
+    ): Promise<void> {
+        // console.log(generativeModel);
+        ctx.commonArgs.messages[0].content = ctx.commonArgs.messages[0].content || '';
+        // argsをGemini用に変換
+        const req: GenerateContentRequestExtended = mapForGeminiExtend(ctx.commonArgs, this, mapForGemini(ctx.commonArgs));
+
+        // req は 不要な項目もまとめて保持しているので、実際のリクエスト用にスッキリさせる。
+        const args: GenerateContentRequest = { contents: req.contents, tools: req.tools || [], systemInstruction: req.systemInstruction };
+        // コンテキストキャッシュの有無で編集を変える
+        if (req.cached_content) {
+            (args as any).cached_content = req.cached_content; // コンテキストキャッシュを足しておく
+        } else {
+        }
+        fss.writeFile(`${HISTORY_DIRE}/${ctx.idempotencyKey}-${ctx.attempts}.request.json`, JSON.stringify(req, Utils.genJsonSafer()), {}, (err) => { });
+
+        const runPromise = generateContentStream(req.region, req.resourcePath, this.getAccessToken(), args, req.apiEndpoint, req.generationConfig, req.safetySettings, req.tools, {}).then(async streamingResp => {
+
+            ctx.tokenCount.tokenBuilder = '';
+
+            const usageMetadata: UsageMetadata = {};
+
+            // ストリームからデータを読み取る非同期関数
+            async function readStream() {
+                let safetyRatings;
+                let lastType: 'text' | 'function' | null = null;
+                while (true) {
+                    const { value, done } = await streamingResp.stream.next();
+                    if (done) {
+                        // ストリームが終了したらループを抜ける
+                        // tokenCount.cost = tokenCount.calcCost() * (isOver128 ? 2 : 1);
+                        console.log(ctx.logObject.output('fine', '', JSON.stringify(usageMetadata)));
+                        ctx.observer.complete();
+
+                        // _that.openApiWrapper.fire();
+
+                        // ファイルに書き出す
+                        const trg = ctx.commonArgs.response_format?.type === 'json_object' ? 'json' : 'md';
+                        fss.writeFile(`${HISTORY_DIRE}/${ctx.idempotencyKey}-${ctx.attempts}.result.${trg}`, ctx.tokenCount.tokenBuilder || '', {}, () => { });
+                        break;
+                    }
+
+                    // 中身を取り出す
+                    const content = value;
+                    // console.dir(content, { depth: null });
+
+                    // ファイルに書き出す
+                    fss.appendFile(`${HISTORY_DIRE}/${ctx.idempotencyKey}-${ctx.attempts}.txt`, (JSON.stringify(content) || '') + '\n', {}, () => { });
+
+                    // 中身がない場合はスキップ
+                    if (!content) { continue; }
+
+                    // 
+                    if (content.usageMetadata) {
+                        Object.assign(usageMetadata, content.usageMetadata);
+                        ctx.tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || ctx.tokenCount.prompt_tokens;
+                        ctx.tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || ctx.tokenCount.completion_tokens;
+                        if (ctx.aiModel && ctx.aiPrice) {
+                            ctx.tokenCount.cost = calcCost(ctx.tokenCount, ctx.aiModel, ctx.aiPrice, usageMetadata);
+                        } else {
+                        }
+                        // vertexaiの場合はレスポンスヘッダーが取れない。その代わりストリームの最後にメタデータが飛んでくるのでそれを捕まえる。
+                        fss.writeFile(`${HISTORY_DIRE}/${ctx.idempotencyKey}-${ctx.attempts}.response.json`, JSON.stringify({ req, response: content }, Utils.genJsonSafer()), {}, (err) => { });
+                    } else { }
+
+                    if (content.promptFeedback && content.promptFeedback.blockReason) {
+                        // finishReasonが指定されている、かつSTOPではない場合はエラー終了させる。
+                        // ストリームが終了したらループを抜ける
+                        // tokenCount.cost = tokenCount.calcCost() * (isOver128 ? 2 : 1);
+                        throw JSON.stringify({ promptFeedback: content.promptFeedback });
+                    } else { }
+
+                    // 中身がない場合はスキップ
+                    if (!content.candidates) { continue; }
+
+                    if (content.candidates[0] && content.candidates[0].safetyRatings) {
+                        safetyRatings = content.candidates[0] && content.candidates[0].safetyRatings;
+                    } else { }
+
+
+                    function responseRemap(content: GenerateContentResponse): OpenAI.ChatCompletionChunk[] {
+                        const remaped: OpenAI.ChatCompletionChunk[] = [];
+                        if (content.candidates) {
+                            content.candidates.forEach(candidate => {
+
+                                // partsをイテレートする前に、現在のタイプをチェック
+                                (candidate.content.parts || []).forEach((c, index) => {
+                                    const currentType = c.text ? 'text' : c.functionCall ? 'function' : null;
+
+                                    // 通常のチャンクを作成
+                                    const choice: OpenAI.ChatCompletionChunk.Choice = {
+                                        delta: {} as OpenAI.ChatCompletionChunk.Choice.Delta,
+                                        finish_reason: (candidate.finishReason?.toLocaleLowerCase() || null) as any,
+                                        index: candidate.index,
+                                        logprobs: null,
+                                    };
+
+                                    if (c.inlineData) {
+                                        // 画像とかファイルデータの場合
+                                        const dataUri = `data:${c.inlineData.mimeType};base64,${c.inlineData.data}`;
+                                        choice.delta = { content: dataUri };
+                                        (choice.delta as any).mimeType = `${c.inlineData.mimeType}`;
+                                    } else if (c.text) {
+                                        choice.delta = { content: c.text };
+                                    } else if (c.functionCall) {
+                                        const func: OpenAI.ChatCompletionChunk.Choice.Delta.ToolCall = {
+                                            id: Utils.generateUUID(),
+                                            index,
+                                            type: 'function',
+                                            'function': { name: c.functionCall.name },
+                                        };
+                                        if ((c as any).thoughtSignature) {
+                                            (func as any)['thoughtSignature'] = (c as any).thoughtSignature;
+                                        } else { }
+                                        if (c.functionCall.args && func.function) {
+                                            func.function.arguments = JSON.stringify(c.functionCall.args);
+                                        }
+                                        choice.delta = { tool_calls: [func] };
+                                        choice.finish_reason = null; // ツールコールの場合、vertexaiはfunctionが配列で返ってくるので末尾のやつだけにfinisho_reasonを付けるようにすべきだが、面倒なので全部nullにしてしまう。どうせ最後にstopが来るはずなので。
+                                        // console.log('-------------------------------===FUNC===-------------------------------------------------======');
+                                        // console.dir(func);
+                                        // console.log('-------------------------------===XXX===-------------------------------------------------======');
+                                    }
+
+                                    if (candidate.groundingMetadata) {
+                                        if (Object.keys(candidate.groundingMetadata).length > 0) {
+                                            (choice as any).groundingMetadata = candidate.groundingMetadata;
+                                        } else {
+                                            delete (choice as any).groundingMetadata;
+                                        }
+                                    } else { }
+
+                                    remaped.push({
+                                        id: (content as any).responseId,
+                                        choices: [choice],
+                                        created: 0,
+                                        model: (content as any).modelVersion || ctx.commonArgs.model,
+                                        object: 'chat.completion.chunk',
+                                        service_tier: null,
+                                        system_fingerprint: '',
+                                    });
+
+                                    lastType = currentType;
+                                });
+                            });
+                        }
+                        return remaped;
+                    }
+
+                    responseRemap(content).forEach(chunk => {
+                        // console.log(chunk.choices[0].finish_reason, chunk.choices[0].delta);
+                        ctx.observer.next(chunk);
+                    });
+
+                    if (content.candidates[0] && content.candidates[0].content && content.candidates[0].content.parts && content.candidates[0].content.parts[0]) {
+                        if (content.candidates[0].content.parts[0].text) {
+                            const text = content.candidates[0].content.parts[0].text || '';
+                            ctx.tokenCount.tokenBuilder += text;
+                            // tokenCount.tokenBuilder = tokenBuilder;
+                            // tokenCount.completion_tokens += text.replace(/\s/g, '').length; // 空白文字を除いた文字数
+                        } else {
+                            // 何もしない
+                        }
+                    } else { }
+                    // [1]   candidates: [ { finishReason: 'OTHER', index: 0, content: [Object] } ],
+                    if (content.candidates[0] && content.candidates[0].finishReason && !['STOP', 'MAX_TOKENS'].includes(content.candidates[0].finishReason)) {
+                        // // finishReasonが指定されている、かつSTOPではない場合はエラー終了させる。
+                        // // ストリームが終了したらループを抜ける
+                        // tokenCount.cost = tokenCount.calcCost() * (isOver128 ? 2 : 1);
+                        throw JSON.stringify({ safetyRatings, candidate: content.candidates[0] });
+                    } else { }
+                    // candidates: [ { finishReason: 'OTHER', index: 0, content: [Object] } ],
+                }
+                return;
+            }
+            // ストリームの読み取りを開始
+            return await readStream();
+        });
+
+        return runPromise;
+    }
+
 }
 
 export function mapForGemini(args: OpenAI.ChatCompletionCreateParams): GenerateContentRequest {
@@ -161,17 +344,22 @@ export function mapForGemini(args: OpenAI.ChatCompletionCreateParams): GenerateC
                         // contentが無ければ入れない
                     }
                     message.tool_calls.forEach(toolCall => {
+                        // console.log('------------------mapForGemini:toolCall-------------------');
                         // console.dir(toolCall, { depth: null });
                         // console.log(`tool_call_id:${toolCall.id} function name:${toolCall.function.name} arguments:${toolCall.function.arguments}`);
-                        content.parts.push({
+                        const func = {
                             functionCall: {
                                 name: (toolCall as OpenAI.ChatCompletionFunctionTool).function.name,
-                                args: (toolCall as OpenAI.ChatCompletionFunctionTool).function.parameters || {},
-                            }
-                        });
+                                args: (toolCall as OpenAI.ChatCompletionFunctionTool).function.parameters || JSON.parse((toolCall as any).function.arguments || '{}') || {},
+                            },
+                        };
+                        if ((toolCall as any)['thoughtSignature']) {
+                            (func as any)['thoughtSignature'] = (toolCall as any)['thoughtSignature'];
+                        }
+                        content.parts.push(func);
                     });
                 } else if (message.role === 'tool' && message.tool_call_id) {
-                    // tool_call_idがある場合は、functionResponseに変換する。
+                    // tool_call_idがある場合は、functionResponseに変換する.
                     const remappedContent = { role, parts: [{ text: message.content }] } as Content;
                     remappedContent.role = 'function';
                     remappedContent.parts = [{
@@ -227,12 +415,18 @@ export function mapForGemini(args: OpenAI.ChatCompletionCreateParams): GenerateC
             // arrayになることはないと思うので要らないかも。。
             if (message.role === 'assistant' && message.tool_calls) {
                 message.tool_calls.forEach(toolCall => {
-                    remappedContent.parts.push({
+                    // console.log('------------------mapForGemini:toolCall:assistant-------------------');
+                    // console.dir(toolCall, { depth: null });
+                    const fc = {
                         functionCall: {
                             name: (toolCall as OpenAI.ChatCompletionFunctionTool).function.name,
-                            args: (toolCall as OpenAI.ChatCompletionFunctionTool).function.parameters || {},
+                            args: (toolCall as OpenAI.ChatCompletionFunctionTool).function.parameters || JSON.parse((toolCall as any).function.arguments || '{}') || {},
                         }
-                    });
+                    };
+                    if ((toolCall as any)['thoughtSignature']) {
+                        (fc as any)['thoughtSignature'] = (toolCall as any)['thoughtSignature'];
+                    }
+                    remappedContent.parts.push(fc);
                 });
             } else { }
             // arrayになることはないと思うので要らないかも。。
@@ -305,10 +499,10 @@ export function mapForGemini(args: OpenAI.ChatCompletionCreateParams): GenerateC
     if ((args as any).isGoogleSearch) {
         // google検索を使う場合は、google検索のためのプロパティを追加する
         req.tools = req.tools || [];
-        if (args.model.startsWith('gemini-2.0') || args.model.startsWith('gemini-exp-1206')) {
-            req.tools.push({ googleSearch: {} } as any);
-        } else {
+        if (args.model.startsWith('gemini-1')) {
             req.tools.push({ googleSearchRetrieval: {} });
+        } else {
+            req.tools.push({ googleSearch: {} } as any);
         }
         // google検索を使う場合はtoolsは使えない
     } else {
@@ -328,7 +522,7 @@ export function mapForGemini(args: OpenAI.ChatCompletionCreateParams): GenerateC
     return req;
 }
 
-export function mapForGeminiExtend(args: OpenAI.ChatCompletionCreateParams, aiProvider: AIProviderClient, _req?: GenerateContentRequest): GenerateContentRequestExtended {
+export function mapForGeminiExtend(args: OpenAI.ChatCompletionCreateParams, aiClient: MyVertexAiClient, _req?: GenerateContentRequest): GenerateContentRequestExtended {
     const req: GenerateContentRequestExtended = (_req || mapForGemini(args)) as GenerateContentRequestExtended;
     req.generationConfig = {
         maxOutputTokens: args.max_tokens || undefined,
@@ -373,11 +567,12 @@ export function mapForGeminiExtend(args: OpenAI.ChatCompletionCreateParams, aiPr
             (req.generationConfig as any).thinking_config = { thinking_budget: 0 };
         }
     }
+
     // コンテンツキャッシュ
     const cachedContent = (args as any).cachedContent as CachedContent;
     delete (args as any).cachedContent;
     // console.dir(cachedContent);
-    const vertexAiClientParam = (aiProvider.client as MyVertexAiClient).clientParam;
+    const vertexAiClientParam = aiClient.clientParam;
     if (vertexAiClientParam) {
         const apiEndpoint = vertexAiClientParam.apiEndpoint || GCP_API_BASE_PATH || `aiplatform.googleapis.com`;
         req.region = vertexAiClientParam.location;
@@ -390,7 +585,6 @@ export function mapForGeminiExtend(args: OpenAI.ChatCompletionCreateParams, aiPr
     }
 
     if (cachedContent) {
-        (aiProvider.client.client as VertexAI)
         req.region = 'asia-northeast1';
         req.resourcePath = cachedContent.model;
         req.cached_content = cachedContent.name;
@@ -506,49 +700,44 @@ export function convertToolDef(tool: OpenAI.ChatCompletionTool): FunctionDeclara
 }
 
 
-export function countChars(args: OpenAI.ChatCompletionCreateParams): { image: number, text: number, video: number, audio: number } {
-    return args.messages.reduce((prev0, curr0) => {
-        if (curr0.content) {
-            if (typeof curr0.content === 'string') {
-                prev0.text += curr0.content.length;
-            } else {
-                (curr0.content as Array<OpenAI.ChatCompletionContentPart>).reduce((prev1, curr1) => {
-                    if (curr1.type === 'text') {
-                        prev1.text += curr1.text.replace(/\s/g, '').length; // 空白文字を除いた文字数
-                    } else if (curr1.type === 'image_url') {
-                        const mediaType = curr1.image_url.url.split(/[/:]/g)[1];
-                        switch (mediaType) {
-                            case 'audio':
-                                prev1.audio += (curr1.image_url as any).second * 0.000125 / 0.00125 * 1000;
-                                break;
-                            case 'video':
-                                prev1.video += (curr1.image_url as any).second * 0.001315 / 0.00125 * 1000;
-                                break;
-                            case 'image':
-                                prev1.image += 0.001315 / 0.00125 * 1000;
-                                break;
-                            default:
-                                const contentUrlType = curr1.image_url.url.split(',')[0];
-                                console.log(`unkown type: ${contentUrlType}`);
-                                break;
-                        }
-                    } else {
-                        console.log(`unkown obj ${Object.keys(curr1)}`);
-                    }
-                    return prev1;
-                }, prev0);
-            }
-        } else {
-            // null
-        }
-        return prev0;
-    }, { image: 0, text: 0, video: 0, audio: 0 } as { image: number, text: number, video: number, audio: number });
-}
-
-
-
-
-
+// export function countChars(args: OpenAI.ChatCompletionCreateParams): { image: number, text: number, video: number, audio: number } {
+//     return args.messages.reduce((prev0, curr0) => {
+//         if (curr0.content) {
+//             if (typeof curr0.content === 'string') {
+//                 prev0.text += curr0.content.length;
+//             } else {
+//                 (curr0.content as Array<OpenAI.ChatCompletionContentPart>).reduce((prev1, curr1) => {
+//                     if (curr1.type === 'text') {
+//                         prev1.text += curr1.text.replace(/\s/g, '').length; // 空白文字を除いた文字数
+//                     } else if (curr1.type === 'image_url') {
+//                         const mediaType = curr1.image_url.url.split(/[/:]/g)[1];
+//                         switch (mediaType) {
+//                             case 'audio':
+//                                 prev1.audio += (curr1.image_url as any).second * 0.000125 / 0.00125 * 1000;
+//                                 break;
+//                             case 'video':
+//                                 prev1.video += (curr1.image_url as any).second * 0.001315 / 0.00125 * 1000;
+//                                 break;
+//                             case 'image':
+//                                 prev1.image += 0.001315 / 0.00125 * 1000;
+//                                 break;
+//                             default:
+//                                 const contentUrlType = curr1.image_url.url.split(',')[0];
+//                                 console.log(`unkown type: ${contentUrlType}`);
+//                                 break;
+//                         }
+//                     } else {
+//                         console.log(`unkown obj ${Object.keys(curr1)}`);
+//                     }
+//                     return prev1;
+//                 }, prev0);
+//             }
+//         } else {
+//             // null
+//         }
+//         return prev0;
+//     }, { image: 0, text: 0, video: 0, audio: 0 } as { image: number, text: number, video: number, audio: number });
+// }
 
 
 
@@ -735,11 +924,11 @@ function convertVertexContentsToOpenAIMessages(contents: Content[]): OpenAI.Chat
                             function: {
                                 name: functionCall.name,
                                 arguments: JSON.stringify(functionCall.args || {})
-                            }
+                            },
+                            thoughtSignature: (part as any)['thoughtSignature'],
                         };
                     });
             }
-
             messages.push(message);
         }
     }
@@ -850,4 +1039,102 @@ export function mapForOpenAIExtended(
     }
 
     return openAIParams;
+}
+
+
+export function calcCost(tokenCount: TokenCount, aiModel: AIModelEntity, aiPrice: AIModelPricingEntity, usage: UsageMetadata): number {
+    tokenCount.cost = 0;
+    // if (ctx.commonArgs.model.startsWith('gemini-2')) {
+    //     // gemini-2系からはトークンベースの課金になるので、トークン数を使う。
+    //     tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
+    //     tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
+    // } else {
+    //     // それ以外は文字数ベースの課金なのでトークン数は使わない。
+    //     // tokenCount.prompt_tokens = content.usageMetadata.promptTokenCount || tokenCount.prompt_tokens;
+    //     // tokenCount.completion_tokens = content.usageMetadata.candidatesTokenCount || 0;
+    // }
+    // // 128k超えてるかどうか判定。
+    // if (content.usageMetadata.totalTokenCount) {
+    //     isOver128 = content.usageMetadata.totalTokenCount > 128000;
+    // } else { }
+    const unit = aiPrice.unit === 'USD/1M tokens' ? 1_000_000 : 1_000;
+    // {
+    //   "trafficType": "ON_DEMAND",
+    //   "promptTokenCount": 2201,
+    //   "candidatesTokenCount": 1120,
+    //   "totalTokenCount": 4540,
+    //   "promptTokensDetails": [
+    //     {
+    //       "modality": "TEXT",
+    //       "tokenCount": 2201
+    //     }
+    //   ],
+    //   "candidatesTokensDetails": [
+    //     {
+    //       "modality": "IMAGE",
+    //       "tokenCount": 1120
+    //     }
+    //   ],
+    //   "thoughtsTokenCount": 1219
+    // }
+    // トークン数を取得
+    const promptTokens = usage.promptTokenCount || 0;
+    const cachedTokens = usage.cachedContentTokenCount || 0;
+    let outputTokens = usage.candidatesTokenCount || 0;
+    if ((usage as any).candidatesTokensDetails && Array.isArray((usage as any).candidatesTokensDetails)) {
+        outputTokens = 0;
+        (usage as any).candidatesTokensDetails.forEach((detail: any) => {
+            if (detail.modality === 'TEXT' && detail.tokenCount) {
+                // テキスト出力分をoutputTokensに加算する。
+                outputTokens += detail.tokenCount;
+            } else if (detail.modality === 'IMAGE' && detail.tokenCount) {
+                // 画像出力分はトークン数の10倍で計算する。
+                outputTokens += detail.tokenCount * 10;
+            }
+        });
+    } else {
+    }
+
+    // 入力トークン(非キャッシュ)
+    const nonCachedInputTokens = promptTokens - cachedTokens;
+
+    // デフォルトの倍率（閾値以下の場合は等倍）
+    let inputMultiplier = 1.0;
+    let outputMultiplier = 1.0;
+
+    // モデルごとの閾値と倍率設定
+    // ※判定は promptTokenCount (Input) で行う
+    if (tokenCount.model.startsWith('gemini-1.5') || tokenCount.model.startsWith('gemini-2.0')) {
+        // gemini-1.5系などは 128k 超過で Input/Output ともに 2倍
+        if (promptTokens > 128000) {
+            inputMultiplier = 2.0;
+            outputMultiplier = 2.0;
+        }
+    } else if (tokenCount.model.startsWith('gemini-2.5-pro') || tokenCount.model.startsWith('gemini-3-pro')) {
+        // gemini-2.5系は 200k 超過で Input 2倍、Output 1.5倍 ($10 -> $15)
+        if (promptTokens > 200000) {
+            inputMultiplier = 2.0;
+            outputMultiplier = 1.5;
+        }
+    }
+
+    // --- コスト計算 ---
+
+    // 入力トークン（非キャッシュ）
+    // Input単価 × 倍率
+    tokenCount.cost += nonCachedInputTokens * (aiPrice.inputPricePerUnit * inputMultiplier) / unit;
+
+    // 出力トークン
+    // Output単価 × 倍率
+    tokenCount.cost += outputTokens * (aiPrice.outputPricePerUnit * outputMultiplier) / unit;
+
+    // キャッシュトークン
+    // Input単価の1/10 × 倍率 (Gemini 2.5 Proでも $0.125->$0.250 なので2倍で整合します)
+    tokenCount.cost += cachedTokens * ((aiPrice.inputPricePerUnit / 10) * inputMultiplier) / unit;
+
+    if (isNaN(tokenCount.cost)) {
+        console.log('calcCost: cost is NaN ======================================================-');
+        console.dir({ tokenCount, aiModel, aiPrice, usage });
+    }
+    return tokenCount.cost;
 }
