@@ -58,6 +58,7 @@ import { getDepartmentMemberLog, getDepartmentMemberLogForUser, getDepartmentMem
 import { callFunction, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId, registApiKey } from './controllers/tool-call.js';
 import { deactivateOrganization, deleteApiProvider, deleteApiProviderTemplate, deleteUserSetting, getApiProviders, getApiProviderTemplates, getOrganizations, getOrganizationUsers, getUserSetting, upsertApiProvider, upsertApiProviderTemplate, upsertOrganization, upsertUserSetting } from './controllers/user.js';
 import { vertexAIGeminiAPI, vertexAIGeminiAPIStream, vertexAIGeminiCountTokens } from './controllers/vertex-ai-gemini-proxy.js';
+import { checkExtApiConnection, getExtApiStatus } from './controllers/ext-api-status.js';
 import { UserRoleType } from './entity/auth.entity.js';
 
 import { saveBrowserLog } from './browser-logger/browser-log.controller.js';
@@ -299,6 +300,8 @@ authOAuthRouter.post(`/custom-api/box/:providerName/2.0/files/:fileId/content`, 
 
 authNoneRouter.get('/:orgKey/ext-api-providers', getApiProviders);
 authUserRouter.get('/ext-api-providers', getApiProviders);
+authUserRouter.get('/ext-api/status', getExtApiStatus);
+authUserRouter.get('/ext-api/status/:provider/check', checkExtApiConnection);
 authAdminRouter.post('/ext-api-provider', upsertApiProvider);
 authAdminRouter.put('/ext-api-provider/:id', upsertApiProvider);
 authAdminRouter.delete('/ext-api-provider/:id', deleteApiProvider);
