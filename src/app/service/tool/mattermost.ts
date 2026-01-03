@@ -1,17 +1,17 @@
 import { In } from 'typeorm';
 
+import { map, timeout, toArray } from 'rxjs';
 import { MattermostChannel, MattermostUser } from '../../agent/api-mattermost/api.js';
 import { MyToolType } from '../../common/openai-api-wrapper.js';
 import { Utils } from '../../common/utils.js';
 import { AIClientLike, getServiceAIClient } from '../common/ai-client.js';
+import { getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
 import { getAIProvider, MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
 import { MmUserEntity } from '../entity/api-mattermost.entity.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../entity/project-models.entity.js';
 import { UserRequest } from '../models/info.js';
 import { getOAuthAccountForTool, reform } from './common.js';
-import { getPredictHistoryWrapperLoggerForRequest } from '../common/predict-history-logger.js';
-import { map, timeout, toArray } from 'rxjs';
 
 
 

@@ -98,7 +98,6 @@ export const chatCompletionStream = [
         try {
             const req = _req as UserRequest;
             const predictLogger = getPredictHistoryLoggerForRequest(req);
-
             const inDto = {
                 args: {
                     model: req.body.model,

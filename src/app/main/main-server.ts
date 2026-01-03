@@ -1,10 +1,10 @@
-import { fileURLToPath } from 'url';
 import * as http from 'http';
-import * as url from 'url';
 import { ChatCompletionCreateParamsStreaming } from 'openai/resources/chat/completions';
+import * as url from 'url';
+import { fileURLToPath } from 'url';
 
-import { createAIClient } from '../common/ai/factory.js';
 import { map } from 'rxjs/dist/types/index.js';
+import { createAIClient } from '../common/ai/factory.js';
 
 interface Client {
     id: string;

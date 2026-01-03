@@ -5,7 +5,6 @@ import 'source-map-support/register.js';
 
 import bodyParser from 'body-parser';
 import cookieParser from 'cookie-parser';
-import cors from 'cors';
 import express, { Request, Response, Router } from 'express';
 import useragent from 'express-useragent';
 import moment from "moment-timezone";
@@ -13,10 +12,7 @@ import morgan from 'morgan';
 import * as promClient from 'prom-client';
 
 import { v4Router } from '../../v4/index.js';
-import { createProxyMiddleware } from 'http-proxy-middleware';
-import { getAccessToken } from './api/api-proxy.js';
 import { automationJobRunner } from './automation/job-runner.js';
-import { authenticateUserTokenWsMiddleGenerator } from './middleware/authenticate.js';
 import { authAdminRouter, authAIIntegrationAdminRouter, authAuditorRouter, authInviteRouter, authMemberManagerRouter, authNoneRouter, authSuperAdminRouter, authSystemIntegrationAdminRouter, authUserRouter } from './routes.js';
 
 const app = express();

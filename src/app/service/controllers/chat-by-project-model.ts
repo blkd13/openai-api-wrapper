@@ -37,7 +37,6 @@ import { appendToolCallPart, deriveToolCallStatus, ToolCallSet } from './tool-ca
 
 const aiApi = getServiceAIClient();
 
-
 const { GCP_PROJECT_ID, GCP_CONTEXT_CACHE_LOCATION, GCP_API_BASE_PATH } = process.env;
 
 const proxyObj: { [key: string]: string | undefined } = {

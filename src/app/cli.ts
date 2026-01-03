@@ -4,18 +4,16 @@
 import 'dotenv/config'; // dotenv を読み込む
 
 // typescriptのデバッグ用にsource-map-supportを読み込む
-import 'source-map-support/register.js'
+import 'source-map-support/register.js';
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { fileURLToPath } from 'url';
-import * as  fs from 'fs';
-import * as  path from 'path';
 
-import yargs from 'yargs/yargs';
-import { hideBin } from 'yargs/helpers';
-import { ArgumentsCamelCase } from 'yargs';
-import inquirer from 'inquirer';
 import chalk from 'chalk';
-import ora from 'ora';
+import { ArgumentsCamelCase } from 'yargs';
+import { hideBin } from 'yargs/helpers';
+import yargs from 'yargs/yargs';
 
 const messageJp = {
     usage: '使い方',

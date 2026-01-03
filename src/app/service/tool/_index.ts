@@ -1,12 +1,12 @@
 import { OpenAI } from 'openai';
 import { IsNull, MoreThan } from 'typeorm';
 import { MyToolType } from '../../common/openai-api-wrapper.js';
+import { AIClientLike } from '../common/ai-client.js';
 import { MessageArgsSet } from '../controllers/chat-by-project-model.js';
 import { ds } from '../db.js';
 import { ApiProviderEntity, OAuthAccountEntity, OAuthAccountStatus } from '../entity/auth.entity.js';
 import { ContentPartEntity, MessageEntity, MessageGroupEntity } from '../entity/project-models.entity.js';
 import { UserRequest } from '../models/info.js';
-import { AIClientLike } from '../common/ai-client.js';
 import { boxFunctionDefinitions } from './box.js';
 import { commonFunctionDefinitions } from './common.js';
 import { confluenceFunctionDefinitions } from './confluence.js';

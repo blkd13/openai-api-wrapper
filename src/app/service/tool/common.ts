@@ -384,6 +384,9 @@ const aiModels = [
     { 'model': 'claude-3-7-sonnet-20250219', 'description': '推論、コーディング、コンテンツ作成など多様なタスクに対応。安全性と倫理的な配慮が重視されており、企業での利用に適している。バランスの取れた性能も評価されている。ツール利用が得意', },
 ];
 
+// ツール定義のキャッシュ（メモリリーク防止のため WeakMap を使用）
+const toolDefinitionsCache = new WeakMap<UserRequest, MyToolType[]>();
+
 export function commonFunctionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,

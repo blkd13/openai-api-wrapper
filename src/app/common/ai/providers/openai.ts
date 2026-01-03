@@ -4,7 +4,6 @@ import { Stream } from 'openai/streaming';
 import fss from '../../fss.js';
 import { HISTORY_DIRE } from '../../openai-api-wrapper.js';
 import { Utils } from '../../utils.js';
-import { getUndiciHttpProxy } from '../network.js';
 import type { ExecutorContext } from '../types.js';
 
 export class MyOpenAI {

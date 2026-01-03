@@ -1,4 +1,3 @@
-import { AIProviderClient } from './../../common/openai-api-wrapper';
 import axios, { AxiosResponse } from 'axios';
 import * as crypto from 'crypto';
 import { Request, Response } from 'express';
@@ -17,7 +16,7 @@ import fss from '../../common/fss.js';
 import { Utils } from '../../common/utils.js';
 import { getPredictHistoryLoggerForRequest, logPredictHistoryWithContext, PredictHistoryLogContext, ServicePredictHistoryLogger } from '../common/predict-history-logger.js';
 import { PredictHistoryStatus } from '../models/values.js';
-import { getAIProvider, getAIProviderAndModel } from './chat-by-project-model.js';
+import { getAIProvider } from './chat-by-project-model.js';
 
 import { Stream } from 'stream';
 import { AIModelEntity, AIModelPricingEntity, AIProviderEntity } from '../entity/ai-model-manager.entity.js';

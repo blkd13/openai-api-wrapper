@@ -1,6 +1,6 @@
+import chalk from 'chalk';
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
-import chalk from 'chalk';
 
 import { Utils } from '../common/utils.js';
 

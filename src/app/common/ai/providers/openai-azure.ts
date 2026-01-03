@@ -1,4 +1,3 @@
-import { ResponseUsage } from 'openai/resources/responses/responses.js';
 import { socksDispatcher } from 'fetch-socks';
 import OpenAI, { AzureOpenAI } from 'openai';
 import { ProxyAgent } from 'undici';
@@ -6,8 +5,8 @@ import { ProxyAgent } from 'undici';
 import { RequestOptions } from 'openai/internal/request-options.js';
 import { AIModelEntity, AIModelPricingEntity, AzureOpenAIConfig } from '../../../service/entity/ai-model-manager.entity.js';
 import fss from '../../fss.js';
-import { HISTORY_DIRE } from '../../openai-api-wrapper.js';
 import { resizeImageToSquare } from '../../media-funcs.js';
+import { HISTORY_DIRE } from '../../openai-api-wrapper.js';
 import { Utils } from '../../utils.js';
 import { TokenCount } from '../token-cost.js';
 import type { ExecutorContext } from '../types.js';

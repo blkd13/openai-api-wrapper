@@ -1,4 +1,4 @@
-import { FunctionCall, SafetyRating } from '@google-cloud/vertexai';
+import { SafetyRating } from '@google-cloud/vertexai';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import sizeOf from 'image-size';
@@ -28,7 +28,7 @@ export const HISTORY_DIRE = `./history`;
 // export const providerInstances = {} as Record<AIProviderType, AIProviderClient>;
 // const apiVersion = '2024-08-01-preview';
 import { AIModelEntity, AIModelPricingEntity, AIProviderType } from '../service/entity/ai-model-manager.entity.js';
-import { getHttpsProxyAgent, getUndiciHttpProxy } from './ai/network.js';
+import { getHttpsProxyAgent } from './ai/network.js';
 import { CachedContent, MyVertexAiClient } from './ai/providers/vertexai.js';
 import { RunQueue } from './ai/run-queue.js';
 import { calculateTokenCost, TokenCount } from './ai/token-cost.js';
