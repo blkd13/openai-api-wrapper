@@ -1,4 +1,3 @@
-import { endWith } from 'rxjs';
 import { AxiosInstance } from 'axios';
 import bcrypt from 'bcrypt';
 import { createHmac, randomBytes, randomInt, randomUUID } from 'crypto';
@@ -1000,12 +999,12 @@ export const userLoginOAuth2Callback = [
                     if (userSetting) {
                     } else {
                         userSetting = new UserSettingEntity();
-                    userSetting.orgKey = user.orgKey;
-                    userSetting.userId = user.id;
-                    userSetting.key = 'trafficSource';
+                        userSetting.orgKey = user.orgKey;
+                        userSetting.userId = user.id;
+                        userSetting.key = 'trafficSource';
                         userSetting.value = {};
-                    userSetting.createdBy = user.id;
-                    userSetting.createdIp = ipAddress;
+                        userSetting.createdBy = user.id;
+                        userSetting.createdIp = ipAddress;
                     }
                     // リファラを保存しておく
                     userSetting.value[oAuthAccount.provider] = {
@@ -2386,26 +2385,26 @@ export const checkProjectPermission = [
                         }
 
                         if (originalUri === `/terminal/${projectId}/`) {
-                        const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_FOR_CONSOLE_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
-                        const ent = await genApiTokenCore(user, label, deviceInfo, req.ip || '', manager, expirationTime);
-                        if (ent) {
-                            apiTokenEntity = ent.entity;
-                        } else {
-                        }
-                        if (!apiTokenEntity) {
-                            res.status(400).json({ error: 'APIトークンは既に存在します。' });
-                            return;
-                        } else { }
-                        function splitString(str: string, chunkSize = 200) {
-                            const chunks = [];
-                            for (let i = 0; i < str.length; i += chunkSize) {
-                                chunks.push(str.slice(i, i + chunkSize));
+                            const expirationTime = Utils.parseTimeStringToMilliseconds(API_TOKEN_FOR_CONSOLE_EXPIRES_IN);// クッキーの有効期限をミリ秒で指定
+                            const ent = await genApiTokenCore(user, label, deviceInfo, req.ip || '', manager, expirationTime);
+                            if (ent) {
+                                apiTokenEntity = ent.entity;
+                            } else {
                             }
-                            return chunks;
-                        }
-                        splitString(encodeURIComponent(ent.apiKey)).forEach((chunk, index) => {
-                            res.setHeader(`X-API-Key_${index + 1}`, chunk);
-                        });
+                            if (!apiTokenEntity) {
+                                res.status(400).json({ error: 'APIトークンは既に存在します。' });
+                                return;
+                            } else { }
+                            function splitString(str: string, chunkSize = 200) {
+                                const chunks = [];
+                                for (let i = 0; i < str.length; i += chunkSize) {
+                                    chunks.push(str.slice(i, i + chunkSize));
+                                }
+                                return chunks;
+                            }
+                            splitString(encodeURIComponent(ent.apiKey)).forEach((chunk, index) => {
+                                res.setHeader(`X-API-Key_${index + 1}`, chunk);
+                            });
                         } else { /**  documentリクエスト以外はAPI鍵を発行しない */ }
                         res.status(200).json({ message: 'アクセス許可' });
                     } catch (error) {
