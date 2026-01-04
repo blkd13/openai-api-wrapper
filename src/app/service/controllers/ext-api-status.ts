@@ -81,9 +81,9 @@ async function verifyExtApiConnection(
         const axiosWithAuth = await axiosGenerator(userId);
 
         const url = `${e.uriBase}${e.pathUserInfo}`;
-        console.log(`Verifying connection to ${providerKey} via ${url}`);
+        // console.log(`Verifying connection to ${providerKey} via ${url}`);
         // console.log(`Using token: ${oAuthAccount.accessToken?.substring(0, 4)}...`);
-        console.log(`Using token: ${axiosWithAuth.defaults.headers['Authorization']?.toString()}`);
+        // console.log(`Using token: ${axiosWithAuth.defaults.headers['Authorization']?.toString()}`);
         // console.dir(axiosWithAuth.defaults.headers);
         await axiosWithAuth.get(url);
         // console.log(`Connection to ${providerKey} verified successfully.`);

@@ -24,6 +24,11 @@ export enum ContextResourceSyncStatus {
     Disabled = 'disabled',
 }
 
+export enum ContextSearchMode {
+    Realtime = 'realtime',
+    Vector = 'vector',
+}
+
 // ============================================
 // Context Hub Entity
 // ============================================
@@ -91,4 +96,11 @@ export class ContextResourceEntity extends MyBaseEntity {
 
     @Column({ nullable: true })
     itemCount?: number;
+
+    @Column({
+        type: 'enum',
+        enum: ContextSearchMode,
+        default: ContextSearchMode.Realtime,
+    })
+    searchMode!: ContextSearchMode;
 }

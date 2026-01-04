@@ -140,7 +140,9 @@ async function syncBoxResource(resource: ContextResourceEntity, req: UserRequest
     const axiosWithAuth = await (await e.axiosWithAuth)(req.info.user.id);
 
     // Box API: Get folder items count
-    const response = await axiosWithAuth.get(`/2.0/folders/${config.folderId}`, {
+    // uriBase を使用して完全なURLを構築
+    const baseUrl = e.uriBase || 'https://api.box.com';
+    const response = await axiosWithAuth.get(`${baseUrl}/2.0/folders/${config.folderId}`, {
         params: { fields: 'item_collection' }
     });
 
@@ -158,6 +160,7 @@ async function syncGitLabResource(resource: ContextResourceEntity, req: UserRequ
     const provider = `gitlab-${resource.providerName}`;
     const e = await getExtApiClient(req.info.user.orgKey, provider);
     const axiosWithAuth = await (await e.axiosWithAuth)(req.info.user.id);
+    const baseUrl = e.uriBase || '';
 
     let totalCount = 0;
     const includeTargets = config.includeTargets || ['source'];
@@ -165,7 +168,7 @@ async function syncGitLabResource(resource: ContextResourceEntity, req: UserRequ
     // ファイル数を取得（リポジトリツリー）
     if (includeTargets.includes('source')) {
         try {
-            const treeResponse = await axiosWithAuth.get(`/api/v4/projects/${config.projectId}/repository/tree`, {
+            const treeResponse = await axiosWithAuth.get(`${baseUrl}/api/v4/projects/${config.projectId}/repository/tree`, {
                 params: { recursive: true, per_page: 1 },
                 // ヘッダーから total を取得するため
             });
@@ -176,7 +179,7 @@ async function syncGitLabResource(resource: ContextResourceEntity, req: UserRequ
     // MR数
     if (includeTargets.includes('mr')) {
         try {
-            const mrResponse = await axiosWithAuth.get(`/api/v4/projects/${config.projectId}/merge_requests`, {
+            const mrResponse = await axiosWithAuth.get(`${baseUrl}/api/v4/projects/${config.projectId}/merge_requests`, {
                 params: { state: 'all', per_page: 1 }
             });
             totalCount += parseInt(mrResponse.headers['x-total'] || '0', 10);
@@ -186,7 +189,7 @@ async function syncGitLabResource(resource: ContextResourceEntity, req: UserRequ
     // Issue数
     if (includeTargets.includes('issues')) {
         try {
-            const issueResponse = await axiosWithAuth.get(`/api/v4/projects/${config.projectId}/issues`, {
+            const issueResponse = await axiosWithAuth.get(`${baseUrl}/api/v4/projects/${config.projectId}/issues`, {
                 params: { state: 'all', per_page: 1 }
             });
             totalCount += parseInt(issueResponse.headers['x-total'] || '0', 10);
@@ -206,6 +209,7 @@ async function syncGiteaResource(resource: ContextResourceEntity, req: UserReque
     const provider = `gitea-${resource.providerName}`;
     const e = await getExtApiClient(req.info.user.orgKey, provider);
     const axiosWithAuth = await (await e.axiosWithAuth)(req.info.user.id);
+    const baseUrl = e.uriBase || '';
 
     let totalCount = 0;
     const includeTargets = config.includeTargets || ['source'];
@@ -213,7 +217,7 @@ async function syncGiteaResource(resource: ContextResourceEntity, req: UserReque
     // リポジトリ情報
     if (includeTargets.includes('source')) {
         try {
-            const repoResponse = await axiosWithAuth.get(`/api/v1/repos/${config.owner}/${config.repo}`);
+            const repoResponse = await axiosWithAuth.get(`${baseUrl}/api/v1/repos/${config.owner}/${config.repo}`);
             // Giteaはファイル数を直接返さないので、とりあえず1としてカウント
             totalCount += 1;
         } catch { /* ignore */ }
@@ -222,7 +226,7 @@ async function syncGiteaResource(resource: ContextResourceEntity, req: UserReque
     // PR数
     if (includeTargets.includes('pr')) {
         try {
-            const prResponse = await axiosWithAuth.get(`/api/v1/repos/${config.owner}/${config.repo}/pulls`, {
+            const prResponse = await axiosWithAuth.get(`${baseUrl}/api/v1/repos/${config.owner}/${config.repo}/pulls`, {
                 params: { state: 'all', page: 1, limit: 1 }
             });
             totalCount += parseInt(prResponse.headers['x-total-count'] || '0', 10);
@@ -232,7 +236,7 @@ async function syncGiteaResource(resource: ContextResourceEntity, req: UserReque
     // Issue数
     if (includeTargets.includes('issues')) {
         try {
-            const issueResponse = await axiosWithAuth.get(`/api/v1/repos/${config.owner}/${config.repo}/issues`, {
+            const issueResponse = await axiosWithAuth.get(`${baseUrl}/api/v1/repos/${config.owner}/${config.repo}/issues`, {
                 params: { state: 'all', page: 1, limit: 1 }
             });
             totalCount += parseInt(issueResponse.headers['x-total-count'] || '0', 10);
@@ -257,6 +261,7 @@ async function syncMattermostResource(resource: ContextResourceEntity, req: User
     const provider = `mattermost-${resource.providerName}`;
     const e = await getExtApiClient(req.info.user.orgKey, provider);
     const axiosWithAuth = await (await e.axiosWithAuth)(req.info.user.id);
+    const baseUrl = e.uriBase || '';
 
     let totalCount = 0;
 
@@ -264,7 +269,7 @@ async function syncMattermostResource(resource: ContextResourceEntity, req: User
         // チャンネルごとの投稿数を取得
         for (const channelId of config.channelIds) {
             try {
-                const statsResponse = await axiosWithAuth.get(`/api/v4/channels/${channelId}/stats`);
+                const statsResponse = await axiosWithAuth.get(`${baseUrl}/api/v4/channels/${channelId}/stats`);
                 totalCount += statsResponse.data?.message_count ?? 0;
             } catch { /* ignore */ }
         }
@@ -287,19 +292,20 @@ async function syncConfluenceResource(resource: ContextResourceEntity, req: User
     const provider = `confluence-${resource.providerName}`;
     const e = await getExtApiClient(req.info.user.orgKey, provider);
     const axiosWithAuth = await (await e.axiosWithAuth)(req.info.user.id);
+    const baseUrl = e.uriBase || '';
 
     let totalCount = 0;
 
     try {
         if (config.pageId) {
             // 特定ページの子ページ数を取得
-            const childResponse = await axiosWithAuth.get(`/wiki/rest/api/content/${config.pageId}/child/page`, {
+            const childResponse = await axiosWithAuth.get(`${baseUrl}/wiki/rest/api/content/${config.pageId}/child/page`, {
                 params: { limit: 1 }
             });
             totalCount = childResponse.data?.size ?? 1;
         } else {
             // スペース内のページ数を取得
-            const contentResponse = await axiosWithAuth.get(`/wiki/rest/api/content`, {
+            const contentResponse = await axiosWithAuth.get(`${baseUrl}/wiki/rest/api/content`, {
                 params: { spaceKey: config.spaceKey, limit: 1 }
             });
             totalCount = contentResponse.data?.size ?? 0;
@@ -326,6 +332,7 @@ async function syncJiraResource(resource: ContextResourceEntity, req: UserReques
     const provider = `jira-${resource.providerName}`;
     const e = await getExtApiClient(req.info.user.orgKey, provider);
     const axiosWithAuth = await (await e.axiosWithAuth)(req.info.user.id);
+    const baseUrl = e.uriBase || '';
 
     let totalCount = 0;
 
@@ -338,7 +345,7 @@ async function syncJiraResource(resource: ContextResourceEntity, req: UserReques
         }
 
         if (jql) {
-            const searchResponse = await axiosWithAuth.get(`/rest/api/3/search`, {
+            const searchResponse = await axiosWithAuth.get(`${baseUrl}/rest/api/3/search`, {
                 params: { jql, maxResults: 0 }
             });
             totalCount = searchResponse.data?.total ?? 0;

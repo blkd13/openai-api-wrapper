@@ -9,11 +9,43 @@ import { UserRequest } from '../models/info.js';
 import { syncResource, syncAllResources } from './context-hub-sync.js';
 
 // ============================================
-// Context Hub CRUD
+// Context Hub CRUD (Project-centric URLs)
 // ============================================
 
 /**
+ * プロジェクトのContext Hubを取得するヘルパー関数
+ */
+async function getHubByProjectId(orgKey: string, projectId: string): Promise<ContextHubEntity | null> {
+    return await ds.getRepository(ContextHubEntity).findOne({
+        where: {
+            orgKey,
+            projectId,
+        }
+    });
+}
+
+/**
+ * Hub情報にリソース一覧を付与して返すヘルパー関数
+ */
+async function buildHubForView(hub: ContextHubEntity, orgKey: string) {
+    const resources = await ds.getRepository(ContextResourceEntity).find({
+        where: {
+            orgKey,
+            contextHubId: hub.id,
+        },
+        order: { sortOrder: 'ASC', createdAt: 'ASC' }
+    });
+
+    return {
+        ...hub,
+        resources,
+        resourceCount: resources.length,
+    };
+}
+
+/**
  * [user認証] プロジェクトのContext Hubを取得（なければ作成）
+ * GET /project/:projectId/context-hub
  */
 export const getOrCreateContextHub = [
     param('projectId').notEmpty().isUUID(),
@@ -23,13 +55,7 @@ export const getOrCreateContextHub = [
         const { projectId } = req.params;
 
         try {
-            // 既存のハブを検索
-            let hub = await ds.getRepository(ContextHubEntity).findOne({
-                where: {
-                    orgKey: req.info.user.orgKey,
-                    projectId: projectId,
-                }
-            });
+            let hub = await getHubByProjectId(req.info.user.orgKey, projectId);
 
             // なければ作成
             if (!hub) {
@@ -45,21 +71,7 @@ export const getOrCreateContextHub = [
                 hub = await ds.getRepository(ContextHubEntity).save(hub);
             }
 
-            // リソース一覧を取得
-            const resources = await ds.getRepository(ContextResourceEntity).find({
-                where: {
-                    orgKey: req.info.user.orgKey,
-                    contextHubId: hub.id,
-                },
-                order: { sortOrder: 'ASC', createdAt: 'ASC' }
-            });
-
-            const hubForView = {
-                ...hub,
-                resources,
-                resourceCount: resources.length,
-            };
-
+            const hubForView = await buildHubForView(hub, req.info.user.orgKey);
             res.status(200).json(hubForView);
         } catch (error) {
             console.error('Error getting context hub:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
@@ -69,66 +81,27 @@ export const getOrCreateContextHub = [
 ];
 
 /**
- * [user認証] Context Hub作成
- */
-export const createContextHub = [
-    body('projectId').notEmpty().isUUID(),
-    body('name').notEmpty().isString().trim(),
-    body('description').optional().isString().trim(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-        const { projectId, name, description } = req.body;
-
-        try {
-            const hub = new ContextHubEntity();
-            hub.projectId = projectId;
-            hub.name = name;
-            hub.description = description;
-            hub.isActive = true;
-            hub.orgKey = req.info.user.orgKey;
-            hub.createdBy = req.info.user.id;
-            hub.updatedBy = req.info.user.id;
-            hub.createdIp = req.info.ip;
-            hub.updatedIp = req.info.ip;
-
-            const savedHub = await ds.getRepository(ContextHubEntity).save(hub);
-
-            const hubForView = {
-                ...savedHub,
-                resources: [],
-                resourceCount: 0,
-            };
-
-            res.status(201).json(hubForView);
-        } catch (error) {
-            console.error('Error creating context hub:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
-            res.status(500).json({ message: 'Context Hub作成中にエラーが発生しました' });
-        }
-    }
-];
-
-/**
- * [user認証] Context Hub更新
+ * [user認証] プロジェクトのContext Hub更新
+ * PATCH /project/:projectId/context-hub
  */
 export const updateContextHub = [
-    param('hubId').notEmpty().isUUID(),
+    param('projectId').notEmpty().isUUID(),
     body('name').optional().isString().trim().notEmpty(),
     body('description').optional().isString().trim(),
     body('isActive').optional().isBoolean(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { hubId } = req.params;
+        const { projectId } = req.params;
         const { name, description, isActive } = req.body;
 
         try {
-            const hub = await ds.getRepository(ContextHubEntity).findOneOrFail({
-                where: {
-                    orgKey: req.info.user.orgKey,
-                    id: hubId,
-                }
-            });
+            const hub = await getHubByProjectId(req.info.user.orgKey, projectId);
+
+            if (!hub) {
+                res.status(404).json({ message: '指定されたプロジェクトのContext Hubが見つかりません' });
+                return;
+            }
 
             if (name !== undefined) hub.name = name;
             if (description !== undefined) hub.description = description;
@@ -137,57 +110,43 @@ export const updateContextHub = [
             hub.updatedIp = req.info.ip;
 
             const savedHub = await ds.getRepository(ContextHubEntity).save(hub);
-
-            // リソース一覧を取得
-            const resources = await ds.getRepository(ContextResourceEntity).find({
-                where: {
-                    orgKey: req.info.user.orgKey,
-                    contextHubId: hub.id,
-                },
-                order: { sortOrder: 'ASC', createdAt: 'ASC' }
-            });
-
-            const hubForView = {
-                ...savedHub,
-                resources,
-                resourceCount: resources.length,
-            };
-
+            const hubForView = await buildHubForView(savedHub, req.info.user.orgKey);
             res.status(200).json(hubForView);
         } catch (error) {
             console.error('Error updating context hub:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
-            if (error instanceof EntityNotFoundError) {
-                res.status(404).json({ message: '指定されたContext Hubが見つかりません' });
-            } else {
-                res.status(500).json({ message: 'Context Hub更新中にエラーが発生しました' });
-            }
+            res.status(500).json({ message: 'Context Hub更新中にエラーが発生しました' });
         }
     }
 ];
 
 /**
- * [user認証] Context Hub削除
+ * [user認証] プロジェクトのContext Hub削除
+ * DELETE /project/:projectId/context-hub
  */
 export const deleteContextHub = [
-    param('hubId').notEmpty().isUUID(),
+    param('projectId').notEmpty().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { hubId } = req.params;
+        const { projectId } = req.params;
 
         try {
             await ds.transaction(async (transactionalEntityManager) => {
-                const hub = await transactionalEntityManager.findOneOrFail(ContextHubEntity, {
+                const hub = await transactionalEntityManager.findOne(ContextHubEntity, {
                     where: {
                         orgKey: req.info.user.orgKey,
-                        id: hubId,
+                        projectId,
                     }
                 });
+
+                if (!hub) {
+                    throw new EntityNotFoundError(ContextHubEntity, { projectId });
+                }
 
                 // 関連リソースも削除
                 await transactionalEntityManager.delete(ContextResourceEntity, {
                     orgKey: req.info.user.orgKey,
-                    contextHubId: hubId,
+                    contextHubId: hub.id,
                 });
 
                 await transactionalEntityManager.remove(ContextHubEntity, hub);
@@ -197,10 +156,46 @@ export const deleteContextHub = [
         } catch (error) {
             console.error('Error deleting context hub:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
             if (error instanceof EntityNotFoundError) {
-                res.status(404).json({ message: '指定されたContext Hubが見つかりません' });
+                res.status(404).json({ message: '指定されたプロジェクトのContext Hubが見つかりません' });
             } else {
                 res.status(500).json({ message: 'Context Hub削除中にエラーが発生しました' });
             }
+        }
+    }
+];
+
+/**
+ * [user認証] プロジェクトのHub内全リソースを同期
+ * POST /project/:projectId/context-hub/sync-all
+ */
+export const syncAllContextResources = [
+    param('projectId').notEmpty().isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { projectId } = req.params;
+
+        try {
+            const hub = await getHubByProjectId(req.info.user.orgKey, projectId);
+
+            if (!hub) {
+                res.status(404).json({ message: '指定されたプロジェクトのContext Hubが見つかりません' });
+                return;
+            }
+
+            // 全リソースを同期
+            const resources = await syncAllResources(hub.id, req);
+
+            const hubForView = {
+                ...hub,
+                resources,
+                resourceCount: resources.length,
+            };
+
+            res.status(200).json(hubForView);
+        } catch (error) {
+            console.error('Error syncing all context resources:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
+            res.status(500).json({ message: 'Context Resource同期中にエラーが発生しました' });
         }
     }
 ];
@@ -211,6 +206,7 @@ export const deleteContextHub = [
 
 /**
  * [user認証] Context Resource作成
+ * POST /context-hub/resource
  */
 export const createContextResource = [
     body('contextHubId').notEmpty().isUUID(),
@@ -276,6 +272,7 @@ export const createContextResource = [
 
 /**
  * [user認証] Context Resource更新
+ * PATCH /context-hub/resource/:resourceId
  */
 export const updateContextResource = [
     param('resourceId').notEmpty().isUUID(),
@@ -323,6 +320,7 @@ export const updateContextResource = [
 
 /**
  * [user認証] Context Resource削除
+ * DELETE /context-hub/resource/:resourceId
  */
 export const deleteContextResource = [
     param('resourceId').notEmpty().isUUID(),
@@ -359,6 +357,7 @@ export const deleteContextResource = [
 
 /**
  * [user認証] 単一リソースを同期
+ * POST /context-hub/resource/:resourceId/sync
  */
 export const syncContextResource = [
     param('resourceId').notEmpty().isUUID(),
@@ -383,45 +382,6 @@ export const syncContextResource = [
             console.error('Error syncing context resource:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
             if (error instanceof EntityNotFoundError) {
                 res.status(404).json({ message: '指定されたContext Resourceが見つかりません' });
-            } else {
-                res.status(500).json({ message: 'Context Resource同期中にエラーが発生しました' });
-            }
-        }
-    }
-];
-
-/**
- * [user認証] Hub内の全リソースを同期
- */
-export const syncAllContextResources = [
-    param('hubId').notEmpty().isUUID(),
-    validationErrorHandler,
-    async (_req: Request, res: Response) => {
-        const req = _req as UserRequest;
-        const { hubId } = req.params;
-
-        try {
-            const hub = await ds.getRepository(ContextHubEntity).findOneOrFail({
-                where: {
-                    orgKey: req.info.user.orgKey,
-                    id: hubId,
-                }
-            });
-
-            // 全リソースを同期
-            const resources = await syncAllResources(hubId, req);
-
-            const hubForView = {
-                ...hub,
-                resources,
-                resourceCount: resources.length,
-            };
-
-            res.status(200).json(hubForView);
-        } catch (error) {
-            console.error('Error syncing all context resources:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
-            if (error instanceof EntityNotFoundError) {
-                res.status(404).json({ message: '指定されたContext Hubが見つかりません' });
             } else {
                 res.status(500).json({ message: 'Context Resource同期中にエラーが発生しました' });
             }

@@ -54,12 +54,16 @@ import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPICountTokens, vertexAIByAn
 import { deleteDivision, getDivisionList, getDivisionMembers, removeDivisionMember, upsertDivision, upsertDivisionMember } from './controllers/division.js';
 import { downloadFile, fileActivate, getFileGroup, getFileList, updateFileAccess, uploadFiles } from './controllers/file-manager.js';
 import { deleteMCPServer, getMCPServers, upsertMCPServer } from './controllers/mcp-manager.js';
+import { deleteDataSource, getDataSourceByProject, getDataSources, getProjects, getSessionDetail, getSessions, upsertDataSource, validateDataSourcePath } from './controllers/code-session.js';
 import { getDepartmentMemberLog, getDepartmentMemberLogForUser, getDepartmentMemberLogSummaryForAdmin, getDepartmentMemberLogSummaryForUser, getDivisionMemberStatsList, getJournal } from './controllers/stats.js';
 import { callFunction, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId, registApiKey } from './controllers/tool-call.js';
 import { deactivateOrganization, deleteApiProvider, deleteApiProviderTemplate, deleteUserSetting, getApiProviders, getApiProviderTemplates, getOrganizations, getOrganizationUsers, getUserSetting, upsertApiProvider, upsertApiProviderTemplate, upsertOrganization, upsertUserSetting } from './controllers/user.js';
 import { vertexAIGeminiAPI, vertexAIGeminiAPIStream, vertexAIGeminiCountTokens } from './controllers/vertex-ai-gemini-proxy.js';
 import { checkExtApiConnection, getExtApiStatus } from './controllers/ext-api-status.js';
-import { createContextHub, createContextResource, deleteContextHub, deleteContextResource, getOrCreateContextHub, syncAllContextResources, syncContextResource, updateContextHub, updateContextResource } from './controllers/context-hub.js';
+import { createContextResource, deleteContextHub, deleteContextResource, getOrCreateContextHub, syncAllContextResources, syncContextResource, updateContextHub, updateContextResource } from './controllers/context-hub.js';
+import { deleteResourceContent, fetchContextHubContent, getResourceContent } from './controllers/context-hub-content.js';
+import { generateHubEmbeddings, generateResourceEmbeddings, searchContextHub } from './controllers/context-hub-rag.js';
+import { searchRealtimeMultiple } from './controllers/context-hub-realtime-search.js';
 import { UserRoleType } from './entity/auth.entity.js';
 
 import { saveBrowserLog } from './browser-logger/browser-log.controller.js';
@@ -386,14 +390,43 @@ authAdminRouter.post('/mcp-server', upsertMCPServer);
 authAdminRouter.put('/mcp-server/:id', upsertMCPServer);
 authAdminRouter.delete('/mcp-server/:id', deleteMCPServer);
 
-// Context Hub
-authUserRouter.get('/context-hub/project/:projectId', getOrCreateContextHub);
-authUserRouter.post('/context-hub', createContextHub);
-authUserRouter.patch('/context-hub/:hubId', updateContextHub);
-authUserRouter.delete('/context-hub/:hubId', deleteContextHub);
+// Context Hub (Project-centric URLs)
+authUserRouter.get('/project/:projectId/context-hub', getOrCreateContextHub);
+authUserRouter.patch('/project/:projectId/context-hub', updateContextHub);
+authUserRouter.delete('/project/:projectId/context-hub', deleteContextHub);
+authUserRouter.post('/project/:projectId/context-hub/sync-all', syncAllContextResources);
 // Context Resources
 authUserRouter.post('/context-hub/resource', createContextResource);
 authUserRouter.patch('/context-hub/resource/:resourceId', updateContextResource);
 authUserRouter.delete('/context-hub/resource/:resourceId', deleteContextResource);
 authUserRouter.post('/context-hub/resource/:resourceId/sync', syncContextResource);
-authUserRouter.post('/context-hub/:hubId/sync-all', syncAllContextResources);
+// Context Hub Content (コンテンツキャッシュ)
+authUserRouter.post('/project/:projectId/context-hub/fetch-content', fetchContextHubContent);
+authUserRouter.get('/context-hub/resource/:resourceId/content', getResourceContent);
+authUserRouter.delete('/context-hub/resource/:resourceId/content', deleteResourceContent);
+// Context Hub RAG (Embedding生成・検索)
+authUserRouter.post('/project/:projectId/context-hub/search', searchContextHub);
+authUserRouter.post('/project/:projectId/context-hub/search-realtime', async (req, res, next) => {
+    try {
+        const projectId = req.params.projectId;
+        const result = await searchRealtimeMultiple(projectId, req.body, req);
+        res.json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+authUserRouter.post('/project/:projectId/context-hub/generate-embeddings', generateHubEmbeddings);
+authUserRouter.post('/context-hub/resource/:resourceId/generate-embeddings', generateResourceEmbeddings);
+
+// Code Sessions - Data Source Management
+authUserRouter.get('/code-sessions/data-sources', getDataSources);
+authUserRouter.post('/code-sessions/data-source', upsertDataSource);
+authUserRouter.put('/code-sessions/data-source/:id', upsertDataSource);
+authUserRouter.delete('/code-sessions/data-source/:id', deleteDataSource);
+authUserRouter.post('/code-sessions/data-source/validate', validateDataSourcePath);
+// Code Sessions - Session Data
+authUserRouter.get('/code-sessions/projects', getProjects);
+authUserRouter.get('/code-sessions/projects/:projectName/sessions', getSessions);
+authUserRouter.get('/code-sessions/projects/:projectName/sessions/:sessionId', getSessionDetail);
+// Code Sessions - Project-linked Data Source
+authUserRouter.get('/code-sessions/project/:projectId/data-source', getDataSourceByProject);

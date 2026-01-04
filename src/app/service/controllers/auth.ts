@@ -51,6 +51,7 @@ import { redirectingPage } from './auth/page.js';
 import { genTokenSet, verifyRefresh } from './auth/token.js';
 // import { uploadClickConversion } from './google-ads.js';
 import { decrypt, encrypt } from './tool-call.js';
+import { createDataSourceForProject } from './code-session.js';
 
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15分
@@ -1908,6 +1909,11 @@ interface DockerComposeConfig {
     image?: string;
     network?: string;
     outputDir?: string;
+    volumeMounts?: Array<{
+        hostPath: string;
+        containerPath: string;
+        readOnly?: boolean;
+    }>;
 }
 
 export class DockerComposeGenerator {
@@ -1918,7 +1924,14 @@ export class DockerComposeGenerator {
      * Docker Composeファイルのテンプレートを生成
      */
     private generateTemplate(config: DockerComposeConfig): string {
-        const { uuid, image = this.defaultImage, network = this.defaultNetwork } = config;
+        const { uuid, image = this.defaultImage, network = this.defaultNetwork, volumeMounts = [] } = config;
+
+        // ボリュームマウント設定を生成
+        const volumeSection = volumeMounts.length > 0
+            ? `    volumes:\n${volumeMounts.map(v =>
+                `      - "${v.hostPath}:${v.containerPath}${v.readOnly ? ':ro' : ''}"`
+              ).join('\n')}\n`
+            : '';
 
         return `version: "3.9"
 
@@ -1927,7 +1940,7 @@ services:
     # privileged: true
     image: ${image}
     networks: [ribbon-console]
-    environment:
+${volumeSection}    environment:
       - TTYD_BASE_URL=/terminal/${uuid}
       - FILEBROWSER_BASE_URL=/files/${uuid}
     expose:
@@ -2013,7 +2026,26 @@ export class ContainerManager {
         outputDir?: string;
     }): Promise<ContainerInfo> {
         try {
-            const { uuid, filepath } = await this.generator.saveToFile(config);
+            // ホストディレクトリを自動作成
+            const projectDir = `/data/projects/${config.uuid}`;
+            await fs.promises.mkdir(`${projectDir}/.claude/projects`, { recursive: true });
+
+            // デフォルトのボリュームマウント設定
+            const defaultVolumeMounts = [
+                {
+                    hostPath: `${projectDir}/.claude/projects`,
+                    containerPath: '/home/user/.claude/projects',
+                },
+                {
+                    hostPath: projectDir,
+                    containerPath: '/home/user/workspace',
+                },
+            ];
+
+            const { uuid, filepath } = await this.generator.saveToFile({
+                ...config,
+                volumeMounts: defaultVolumeMounts,
+            });
 
             const containerInfo: ContainerInfo = {
                 uuid,
@@ -2023,16 +2055,29 @@ export class ContainerManager {
                 filesUrl: `/files/${uuid}`
             };
 
-            const containerInstance = new ContainerInstanceEntity();
-            containerInstance.ports = [];
-            containerInstance.projectId = uuid;
-            containerInstance.status = ContainerStatus.CREATED;
-            containerInstance.orgKey = req.info.user.orgKey;
-            containerInstance.createdBy = req.info.user.id;
-            containerInstance.updatedBy = req.info.user.id;
-            containerInstance.createdIp = req.info.ip;
-            containerInstance.updatedIp = req.info.ip;
-            const saved = await ds.getRepository(ContainerInstanceEntity).save(containerInstance);
+            // トランザクションでコンテナとデータソースを同時作成
+            await ds.transaction(async (manager) => {
+                const containerInstance = new ContainerInstanceEntity();
+                containerInstance.ports = [];
+                containerInstance.projectId = uuid;
+                containerInstance.status = ContainerStatus.CREATED;
+                containerInstance.orgKey = req.info.user.orgKey;
+                containerInstance.createdBy = req.info.user.id;
+                containerInstance.updatedBy = req.info.user.id;
+                containerInstance.createdIp = req.info.ip;
+                containerInstance.updatedIp = req.info.ip;
+                await manager.save(ContainerInstanceEntity, containerInstance);
+
+                // データソース自動生成
+                await createDataSourceForProject(
+                    manager,
+                    uuid,
+                    req.info.user.id,
+                    req.info.user.orgKey,
+                    req.info.ip
+                );
+            });
+
             this.containers.set(uuid, containerInfo);
             return containerInfo;
         } catch (error) {
