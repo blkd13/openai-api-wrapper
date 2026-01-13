@@ -10,6 +10,7 @@ export enum ContainerStatus {
     REMOVING = 'removing',
     EXITED = 'exited',
     DEAD = 'dead',
+    NOT_FOUND = 'not_found',  // コンテナが存在しない（削除された等）
 }
 
 @Entity()

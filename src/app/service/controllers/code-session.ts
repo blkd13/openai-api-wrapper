@@ -3,10 +3,10 @@ import { body, param, query } from 'express-validator';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { EntityManager } from 'typeorm';
-import { validationErrorHandler } from '../middleware/validation.js';
-import { UserRequest } from '../models/info.js';
 import { ds } from '../db.js';
 import { CodeSessionDataSourceEntity, DataSourceType } from '../entity/code-session.entity.js';
+import { validationErrorHandler } from '../middleware/validation.js';
+import { UserRequest } from '../models/info.js';
 
 // ============================================================================
 // Helper Functions
@@ -81,12 +81,12 @@ async function validateBasePath(inputPath: string): Promise<{ valid: boolean; no
 
         // 許可パターン:
         // 1. 従来の .claude/projects, .gemini/sessions, .codex/sessions
-        // 2. 新規: /data/projects/{uuid}/ 形式（コンテナ連携用）
+        // 2. 新規: /data/container/docker-compose.{uuid}/ 形式（コンテナ連携用）
         const isAllowedPath =
             normalizedLower.includes('.claude/projects') ||
             normalizedLower.includes('.gemini/sessions') ||
             normalizedLower.includes('.codex/sessions') ||
-            /^\/data\/projects\/[a-f0-9-]{36}(\/|$)/i.test(normalizedPath);
+            /^\/data\/container\/docker-compose\.[a-f0-9-]{36}(\/|$)/i.test(normalizedPath);
 
         if (!isAllowedPath) {
             return { valid: false, error: 'Claude Code/Gemini CLI/Codex CLIのプロジェクトディレクトリを指定してください' };
@@ -122,7 +122,8 @@ export async function createDataSourceForProject(
     orgKey: string,
     ip: string
 ): Promise<CodeSessionDataSourceEntity> {
-    const basePath = `/data/projects/${projectId}/.claude/projects`;
+    // docker-composeディレクトリ内のdevuser/.claude/projectsを参照
+    const basePath = `./data/container/docker-compose.${projectId}/devuser/.claude/projects`;
 
     // 既存のデータソースをチェック
     const existing = await manager.findOne(CodeSessionDataSourceEntity, {
@@ -238,6 +239,7 @@ async function scanSessionsFromDirectory(projectPath: string, projectName: strin
         endTime?: string;
         messageCount: number;
         fileSize: number;
+        firstMessage?: string;
     }> = [];
 
     try {
@@ -255,17 +257,31 @@ async function scanSessionsFromDirectory(projectPath: string, projectName: strin
 
                 let startTime: string | undefined;
                 let endTime: string | undefined;
+                let firstMessage: string | undefined;
 
-                // 最初と最後のメッセージからタイムスタンプを取得
+                // ファイルのタイムスタンプを使用
+                startTime = stat.birthtime.toISOString();
+                endTime = stat.mtime.toISOString();
+
+                // 最初のユーザーメッセージを探す
                 if (lines.length > 0) {
-                    try {
-                        const firstMsg = JSON.parse(lines[0]);
-                        startTime = firstMsg.timestamp;
-                    } catch { /* ignore */ }
-                    try {
-                        const lastMsg = JSON.parse(lines[lines.length - 1]);
-                        endTime = lastMsg.timestamp;
-                    } catch { /* ignore */ }
+                    for (const line of lines.slice(0, 10)) {
+                        try {
+                            const msg = JSON.parse(line);
+                            if (msg.type === 'user' && msg.message?.content) {
+                                const msgContent = msg.message.content;
+                                if (typeof msgContent === 'string') {
+                                    firstMessage = msgContent.substring(0, 50);
+                                } else if (Array.isArray(msgContent)) {
+                                    const textPart = msgContent.find((p: any) => p.type === 'text');
+                                    if (textPart?.text) {
+                                        firstMessage = textPart.text.substring(0, 50);
+                                    }
+                                }
+                                if (firstMessage) break;
+                            }
+                        } catch { /* ignore */ }
+                    }
                 }
 
                 sessions.push({
@@ -276,6 +292,7 @@ async function scanSessionsFromDirectory(projectPath: string, projectName: strin
                     endTime,
                     messageCount: lines.length,
                     fileSize: stat.size,
+                    firstMessage,
                 });
             } catch (error) {
                 console.error(`Error reading session ${file}:`, error);
@@ -285,11 +302,11 @@ async function scanSessionsFromDirectory(projectPath: string, projectName: strin
         console.error(`Error scanning sessions in ${projectPath}:`, error);
     }
 
-    // 開始日時でソート（新しい順）
+    // 最終更新日時でソート（新しい順）
     return sessions.sort((a, b) => {
-        if (!a.startTime) return 1;
-        if (!b.startTime) return -1;
-        return new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
+        if (!a.endTime) return 1;
+        if (!b.endTime) return -1;
+        return new Date(b.endTime).getTime() - new Date(a.endTime).getTime();
     });
 }
 
@@ -351,6 +368,8 @@ export const getDataSources = [
 
 /**
  * データソースを作成/更新
+ * パス検証は情報提供のみで、失敗しても保存は可能
+ * （Windows/Linux両環境から同じDBを使う場合等を考慮）
  */
 export const upsertDataSource = [
     param('id').optional().isUUID(),
@@ -364,11 +383,14 @@ export const upsertDataSource = [
         const { id } = req.params;
 
         try {
-            // パス検証
+            // パス検証（失敗してもブロックしない）
             const validation = await validateBasePath(req.body.basePath);
-            if (!validation.valid) {
-                return res.status(400).json({ error: validation.error });
-            }
+            const pathWarning = !validation.valid ? validation.error : undefined;
+
+            // 保存するパス：検証成功なら正規化パス、失敗なら入力パスをそのまま使用
+            const pathToSave = validation.valid
+                ? validation.normalizedPath!
+                : expandTilde(req.body.basePath.trim());
 
             const result = await ds.transaction(async transactionalEntityManager => {
                 let dataSource: CodeSessionDataSourceEntity;
@@ -394,20 +416,62 @@ export const upsertDataSource = [
 
                 dataSource.name = req.body.name;
                 dataSource.type = req.body.type;
-                dataSource.basePath = validation.normalizedPath!;
+                dataSource.basePath = pathToSave;
                 dataSource.pathMapping = req.body.pathMapping;
                 dataSource.updatedBy = req.info.user.id;
                 dataSource.updatedIp = req.info.ip;
 
                 const saved = await transactionalEntityManager.save(CodeSessionDataSourceEntity, dataSource);
-                return { dataSource: saved, isNew };
+                return { dataSource: saved, isNew, pathWarning };
             });
 
             const statusCode = result.isNew ? 201 : 200;
-            res.status(statusCode).json(result.dataSource);
+            // 警告がある場合はレスポンスに含める
+            const response: any = { ...result.dataSource };
+            if (result.pathWarning) {
+                response._warning = result.pathWarning;
+            }
+            res.status(statusCode).json(response);
         } catch (error) {
             console.error('Error upserting data source:', error);
             res.status(500).json({ error: 'データソースの保存に失敗しました' });
+        }
+    },
+];
+
+/**
+ * データソースの有効/無効をトグル
+ */
+export const toggleDataSourceActive = [
+    param('id').isUUID(),
+    body('isActive').isBoolean(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { id } = req.params;
+        const { isActive } = req.body;
+
+        try {
+            const result = await ds.transaction(async transactionalEntityManager => {
+                const dataSource = await transactionalEntityManager.findOne(CodeSessionDataSourceEntity, {
+                    where: { id, orgKey: req.info.user.orgKey, userId: req.info.user.id },
+                });
+
+                if (!dataSource) {
+                    throw new Error('指定されたデータソースが見つかりません');
+                }
+
+                dataSource.isActive = isActive;
+                dataSource.updatedBy = req.info.user.id;
+                dataSource.updatedIp = req.info.ip;
+
+                return await transactionalEntityManager.save(CodeSessionDataSourceEntity, dataSource);
+            });
+
+            res.json(result);
+        } catch (error) {
+            console.error('Error toggling data source:', error);
+            res.status(500).json({ error: 'データソースの更新に失敗しました' });
         }
     },
 ];
@@ -636,6 +700,40 @@ export const getDataSourceByProject = [
         } catch (error) {
             console.error('Error fetching data source by project:', error);
             res.status(500).json({ error: 'データソースの取得に失敗しました' });
+        }
+    },
+];
+
+/**
+ * 特定プロジェクト（コンテナ）に紐づくCode Sessionプロジェクト一覧
+ */
+export const getProjectsByProjectId = [
+    param('projectId').isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { projectId } = req.params;
+
+        try {
+            // projectIdが設定されているデータソースのみ取得
+            const dataSources = await ds.getRepository(CodeSessionDataSourceEntity).find({
+                where: {
+                    orgKey: req.info.user.orgKey,
+                    projectId: projectId,
+                    isActive: true,
+                },
+            });
+
+            const allProjects: any[] = [];
+            for (const dataSource of dataSources) {
+                const projects = await scanProjectsFromFileSystem(dataSource);
+                allProjects.push(...projects);
+            }
+
+            res.json(allProjects);
+        } catch (error) {
+            console.error('Error fetching projects by projectId:', error);
+            res.status(500).json({ error: 'プロジェクト一覧の取得に失敗しました' });
         }
     },
 ];

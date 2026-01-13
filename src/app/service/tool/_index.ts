@@ -10,6 +10,7 @@ import { UserRequest } from '../models/info.js';
 import { boxFunctionDefinitions } from './box.js';
 import { commonFunctionDefinitions } from './common.js';
 import { confluenceFunctionDefinitions } from './confluence.js';
+import { contextHubFunctionDefinitions } from './context-hub.js';
 import { giteaFunctionDefinitions } from './gitea.js';
 import { gitlabFunctionDefinitions } from './gitlab.js';
 import { jiraFunctionDefinitions } from './jira.js';
@@ -21,6 +22,7 @@ export async function functionDefinitions(
     obj: { inDto: MessageArgsSet; messageSet: { messageGroup: MessageGroupEntity; message: MessageEntity; contentParts: ContentPartEntity[]; }; },
     req: UserRequest, aiApi: AIClientLike, connectionId: string, streamId: string, message: MessageEntity, label: string,
     connectedOnly: boolean = false,
+    projectId?: string, // Context Hub tool を含める場合にプロジェクトIDを指定（後方互換性のためオプショナル）
 ): Promise<MyToolType[]> {
 
     // APIプロバイダーを基に関数定義を取得
@@ -83,6 +85,14 @@ export async function functionDefinitions(
 
     // 共通関数定義を追加
     functionDefinitions.push(...commonFunctionDefinitions(obj, req, aiApi, connectionId, streamId, message, label));
+
+    // Context Hub tool を追加（projectIdが指定された場合のみ）
+    if (projectId) {
+        const ctxTools = await contextHubFunctionDefinitions(
+            projectId, obj, req, aiApi, connectionId, streamId, message, label
+        );
+        functionDefinitions.push(...ctxTools);
+    }
 
     // 各関数定義に対して、nameの補充とdescriptionの更新を行い、重複を排除
     // 重複排除のため、isActiveがtrueのもののみを残し、nameで一意にする

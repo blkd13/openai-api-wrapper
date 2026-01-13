@@ -358,6 +358,11 @@ export async function boxFunctionDefinitions(
                                 enum: ['non_trashed_only', 'trashed_only', 'all_items'],
                                 default: 'non_trashed_only',
                                 description: 'ごみ箱の検索設定（non_trashed_only=通常項目のみ、trashed_only=ごみ箱のみ、all_items=すべて）'
+                            },
+                            ancestor_folder_ids: {
+                                type: 'array',
+                                items: { type: 'string' },
+                                description: '検索対象の祖先フォルダIDリスト（指定したフォルダ配下のみ検索）'
                             }
                         },
                         required: ['query']
@@ -376,7 +381,8 @@ export async function boxFunctionDefinitions(
                 direction?: string,
                 limit?: number,
                 offset?: number,
-                trash_content?: string
+                trash_content?: string,
+                ancestor_folder_ids?: string[]
             }): Promise<any> => {
                 const { e, axiosWithAuth } = await getOAuthAccountForTool(req, provider);
                 // クエリパラメータの構築
@@ -395,6 +401,7 @@ export async function boxFunctionDefinitions(
                 if (args.limit) params.append('limit', args.limit.toString());
                 if (args.offset) params.append('offset', args.offset.toString());
                 if (args.trash_content) params.append('trash_content', args.trash_content);
+                if (args.ancestor_folder_ids) params.append('ancestor_folder_ids', args.ancestor_folder_ids.join(','));
 
                 const url = `${e.uriBase}/2.0/search?${params.toString()}`;
 

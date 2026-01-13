@@ -1290,13 +1290,18 @@ export const chatCompletionByProjectModel = [
                 const inDto = obj.inDto;
                 const messageSet = obj.messageSet;
                 const message = messageSet.message;
+                const projectId = inDto.threadGroup?.projectId;
+                console.log(`[DEBUG] functionDefinitions - projectId: ${projectId}, inDto.args.tools count: ${inDto.args.tools?.length || 0}`);
                 const functions = (await functionDefinitions(
-                    obj, req, aiApi, connectionId, streamId, message, label
+                    obj, req, aiApi, connectionId, streamId, message, label,
+                    false, // connectedOnly
+                    projectId // projectId - Context Hub toolを含めるため
                 )).reduce((prev, curr) => {
                     prev[(curr.definition as OpenAI.ChatCompletionFunctionTool).function.name] = curr;
                     curr.info.name = (curr.definition as OpenAI.ChatCompletionFunctionTool).function.name;
                     return prev;
                 }, {} as { [functionName: string]: MyToolType });
+                console.log(`[DEBUG] functions keys (${Object.keys(functions).length}):`, Object.keys(functions).filter(k => k.startsWith('ctx')));
                 return { inDto, messageSet, functions };
             }));
 
@@ -1311,8 +1316,12 @@ export const chatCompletionByProjectModel = [
                 const functions = toolCallFunctions[index].functions;
                 if (inDto.args.tool_choice && inDto.args.tool_choice !== 'none' && inDto.args.tools && inDto.args.tools.length > 0) {
                     // 直近のfunctions定義を当てる。
+                    const beforeToolNames = inDto.args.tools.map(tool => (tool as OpenAI.ChatCompletionFunctionTool).function.name);
+                    console.log(`[DEBUG] tools before filter (${beforeToolNames.length}):`, beforeToolNames.filter(n => n.startsWith('ctx')));
                     const dupCheck: Set<string> = new Set();
                     inDto.args.tools = inDto.args.tools.filter(tool => functions[(tool as OpenAI.ChatCompletionFunctionTool).function.name]).map(tool => functions[(tool as OpenAI.ChatCompletionFunctionTool).function.name].definition).filter(tool => dupCheck.has((tool as OpenAI.ChatCompletionFunctionTool).function.name) ? false : dupCheck.add((tool as OpenAI.ChatCompletionFunctionTool).function.name));
+                    const afterToolNames = inDto.args.tools.map(tool => (tool as OpenAI.ChatCompletionFunctionTool).function.name);
+                    console.log(`[DEBUG] tools after filter (${afterToolNames.length}):`, afterToolNames.filter(n => n.startsWith('ctx')));
 
                     // toolを使うのであればprovider毎のユーザー情報をシステムプロンプトに付与しておく。
                     const providerSet: Set<string> = new Set();

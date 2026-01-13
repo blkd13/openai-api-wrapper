@@ -21,12 +21,14 @@ const { ENCRYPTION_KEY } = process.env as { ENCRYPTION_KEY: string };
 
 export const getFunctionDefinitions = [
     query('connectedOnly').optional().isBoolean().toBoolean(),
+    query('projectId').optional().isUUID(),
     validationErrorHandler,
     async (_req: Request, res: Response) => {
         const req = _req as UserRequest;
-        const { connectedOnly } = _req.query as { connectedOnly?: boolean };
+        const { connectedOnly, projectId } = _req.query as { connectedOnly?: boolean; projectId?: string };
         // 汚い。。。
-        const funcDefs = await functionDefinitions({ inDto: { args: {} as any }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy', connectedOnly);
+        // projectId が指定された場合のみ Context Hub tool を含める（後方互換性のため）
+        const funcDefs = await functionDefinitions({ inDto: { args: {} as any }, messageSet: { messageGroup: {} as any, message: {} as any, contentParts: [] } as any } as any, req, null as any, 'dummy', 'dummy', null as any, 'dummy', connectedOnly, projectId);
         res.json(funcDefs.map(f => {
             f.info.name = (f.definition as OpenAI.ChatCompletionFunctionTool).function.name;
             return ({ info: f.info, definition: f.definition });

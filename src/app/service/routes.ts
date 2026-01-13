@@ -54,13 +54,14 @@ import { vertexAIByAnthropicAPI, vertexAIByAnthropicAPICountTokens, vertexAIByAn
 import { deleteDivision, getDivisionList, getDivisionMembers, removeDivisionMember, upsertDivision, upsertDivisionMember } from './controllers/division.js';
 import { downloadFile, fileActivate, getFileGroup, getFileList, updateFileAccess, uploadFiles } from './controllers/file-manager.js';
 import { deleteMCPServer, getMCPServers, upsertMCPServer } from './controllers/mcp-manager.js';
-import { deleteDataSource, getDataSourceByProject, getDataSources, getProjects, getSessionDetail, getSessions, upsertDataSource, validateDataSourcePath } from './controllers/code-session.js';
+import { deleteDataSource, getDataSourceByProject, getDataSources, getProjects, getProjectsByProjectId, getSessionDetail, getSessions, toggleDataSourceActive, upsertDataSource, validateDataSourcePath } from './controllers/code-session.js';
+import { cancelClaudeCode, executeClaudeCode, executeClaudeCodeInteractive, respondToClaudeCode } from './controllers/claude-code-exec.js';
 import { getDepartmentMemberLog, getDepartmentMemberLogForUser, getDepartmentMemberLogSummaryForAdmin, getDepartmentMemberLogSummaryForUser, getDivisionMemberStatsList, getJournal } from './controllers/stats.js';
 import { callFunction, deleteApiKey, getApiKeys, getFunctionDefinitions, getToolCallGroup, getToolCallGroupByToolCallId, registApiKey } from './controllers/tool-call.js';
 import { deactivateOrganization, deleteApiProvider, deleteApiProviderTemplate, deleteUserSetting, getApiProviders, getApiProviderTemplates, getOrganizations, getOrganizationUsers, getUserSetting, upsertApiProvider, upsertApiProviderTemplate, upsertOrganization, upsertUserSetting } from './controllers/user.js';
 import { vertexAIGeminiAPI, vertexAIGeminiAPIStream, vertexAIGeminiCountTokens } from './controllers/vertex-ai-gemini-proxy.js';
 import { checkExtApiConnection, getExtApiStatus } from './controllers/ext-api-status.js';
-import { createContextResource, deleteContextHub, deleteContextResource, getOrCreateContextHub, syncAllContextResources, syncContextResource, updateContextHub, updateContextResource } from './controllers/context-hub.js';
+import { createContextResource, deleteContextHub, deleteContextResource, getContextResource, getOrCreateContextHub, syncAllContextResources, syncContextResource, updateContextHub, updateContextResource } from './controllers/context-hub.js';
 import { deleteResourceContent, fetchContextHubContent, getResourceContent } from './controllers/context-hub-content.js';
 import { generateHubEmbeddings, generateResourceEmbeddings, searchContextHub } from './controllers/context-hub-rag.js';
 import { searchRealtimeMultiple } from './controllers/context-hub-realtime-search.js';
@@ -397,6 +398,7 @@ authUserRouter.delete('/project/:projectId/context-hub', deleteContextHub);
 authUserRouter.post('/project/:projectId/context-hub/sync-all', syncAllContextResources);
 // Context Resources
 authUserRouter.post('/context-hub/resource', createContextResource);
+authUserRouter.get('/context-hub/resource/:resourceId', getContextResource);
 authUserRouter.patch('/context-hub/resource/:resourceId', updateContextResource);
 authUserRouter.delete('/context-hub/resource/:resourceId', deleteContextResource);
 authUserRouter.post('/context-hub/resource/:resourceId/sync', syncContextResource);
@@ -422,6 +424,7 @@ authUserRouter.post('/context-hub/resource/:resourceId/generate-embeddings', gen
 authUserRouter.get('/code-sessions/data-sources', getDataSources);
 authUserRouter.post('/code-sessions/data-source', upsertDataSource);
 authUserRouter.put('/code-sessions/data-source/:id', upsertDataSource);
+authUserRouter.patch('/code-sessions/data-source/:id', toggleDataSourceActive);
 authUserRouter.delete('/code-sessions/data-source/:id', deleteDataSource);
 authUserRouter.post('/code-sessions/data-source/validate', validateDataSourcePath);
 // Code Sessions - Session Data
@@ -430,3 +433,10 @@ authUserRouter.get('/code-sessions/projects/:projectName/sessions', getSessions)
 authUserRouter.get('/code-sessions/projects/:projectName/sessions/:sessionId', getSessionDetail);
 // Code Sessions - Project-linked Data Source
 authUserRouter.get('/code-sessions/project/:projectId/data-source', getDataSourceByProject);
+authUserRouter.get('/code-sessions/by-project/:projectId/projects', getProjectsByProjectId);
+// ClaudeCode Execution
+authUserRouter.post('/claude-code/execute', executeClaudeCode);
+authUserRouter.post('/claude-code/cancel', cancelClaudeCode);
+// ClaudeCode Interactive Mode
+authUserRouter.post('/claude-code/execute-interactive', executeClaudeCodeInteractive);
+authUserRouter.post('/claude-code/respond', respondToClaudeCode);

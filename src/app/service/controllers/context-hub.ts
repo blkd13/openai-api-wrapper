@@ -319,6 +319,37 @@ export const updateContextResource = [
 ];
 
 /**
+ * [user認証] Context Resource取得
+ * GET /context-hub/resource/:resourceId
+ */
+export const getContextResource = [
+    param('resourceId').notEmpty().isUUID(),
+    validationErrorHandler,
+    async (_req: Request, res: Response) => {
+        const req = _req as UserRequest;
+        const { resourceId } = req.params;
+
+        try {
+            const resource = await ds.getRepository(ContextResourceEntity).findOneOrFail({
+                where: {
+                    orgKey: req.info.user.orgKey,
+                    id: resourceId,
+                }
+            });
+
+            res.status(200).json(resource);
+        } catch (error) {
+            console.error('Error getting context resource:', JSON.stringify(error, Utils.genJsonSafer()) === '{}' ? error : JSON.stringify(error, Utils.genJsonSafer()));
+            if (error instanceof EntityNotFoundError) {
+                res.status(404).json({ message: '指定されたContext Resourceが見つかりません' });
+            } else {
+                res.status(500).json({ message: 'Context Resource取得中にエラーが発生しました' });
+            }
+        }
+    }
+];
+
+/**
  * [user認証] Context Resource削除
  * DELETE /context-hub/resource/:resourceId
  */

@@ -50,8 +50,8 @@ import { UserSettingEntity } from '../entity/user.entity.js';
 import { redirectingPage } from './auth/page.js';
 import { genTokenSet, verifyRefresh } from './auth/token.js';
 // import { uploadClickConversion } from './google-ads.js';
-import { decrypt, encrypt } from './tool-call.js';
 import { createDataSourceForProject } from './code-session.js';
+import { decrypt, encrypt } from './tool-call.js';
 
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15分
@@ -1930,7 +1930,7 @@ export class DockerComposeGenerator {
         const volumeSection = volumeMounts.length > 0
             ? `    volumes:\n${volumeMounts.map(v =>
                 `      - "${v.hostPath}:${v.containerPath}${v.readOnly ? ':ro' : ''}"`
-              ).join('\n')}\n`
+            ).join('\n')}\n`
             : '';
 
         return `version: "3.9"
@@ -2026,19 +2026,31 @@ export class ContainerManager {
         outputDir?: string;
     }): Promise<ContainerInfo> {
         try {
-            // ホストディレクトリを自動作成
-            const projectDir = `/data/projects/${config.uuid}`;
-            await fs.promises.mkdir(`${projectDir}/.claude/projects`, { recursive: true });
+            // docker-composeファイルの出力先ディレクトリ
+            const outputDir = config.outputDir || './data/container';
+
+            // ホストディレクトリを自動作成（docker-composeファイルからの相対パス用）
+            const projectSubDir = `docker-compose.${config.uuid}`;
+            const devuserDir = path.join(outputDir, projectSubDir, 'devuser');
+            const motdFile = path.join(outputDir, projectSubDir, 'motd');
+            await fs.promises.mkdir(devuserDir, { recursive: true });
+            // motdファイルが存在しなければ空ファイルを作成
+            try {
+                await fs.promises.access(motdFile);
+            } catch {
+                await fs.promises.writeFile(motdFile, '');
+            }
 
             // デフォルトのボリュームマウント設定
+            // docker-composeファイルからの相対パスで指定
             const defaultVolumeMounts = [
                 {
-                    hostPath: `${projectDir}/.claude/projects`,
-                    containerPath: '/home/user/.claude/projects',
+                    hostPath: `./${projectSubDir}/devuser`,
+                    containerPath: '/home/devuser',
                 },
                 {
-                    hostPath: projectDir,
-                    containerPath: '/home/user/workspace',
+                    hostPath: `./${projectSubDir}/motd`,
+                    containerPath: '/etc/motd',
                 },
             ];
 
@@ -2124,13 +2136,14 @@ export class ContainerManager {
         const container = this.getOrRestoreContainer(uuid, containerEntity);
 
         try {
-            // docker-compose ps で実際の状態を確認
-            // const { stdout } = await execAsync(`docker-compose -f ${container.filepath} ps --format json`);
+            // docker-compose ps で実際の状態を確認（タイムアウト5秒）
             console.log(`docker ps -a --filter "name=-project-${uuid}" --format '{{json .}}'`);
-            const { stdout } = await execAsync(`docker ps -a --filter "name=-project-${uuid}-" --format '{{json .}}'`);
-            // docker ps -a --filter "name=-1 --format '{{json .}}'"
+            const { stdout } = await execAsync(
+                `docker ps -a --filter "name=-project-${uuid}-" --format '{{json .}}'`,
+                { timeout: 5000 }
+            );
 
-            let actualStatus = ContainerStatus.EXITED;
+            let actualStatus = ContainerStatus.NOT_FOUND;
 
             // console.log(stdout.trim());
             if (stdout.trim()) {
@@ -2172,6 +2185,8 @@ export class ContainerManager {
                 container.status = 'stopped';
             } else if (actualStatus === ContainerStatus.CREATED) {
                 container.status = 'created';
+            } else if (actualStatus === ContainerStatus.NOT_FOUND) {
+                container.status = 'stopped';  // 存在しない場合もstoppedとして扱う
             } else {
                 container.status = 'error';
             }
@@ -2409,6 +2424,12 @@ export const checkProjectPermission = [
                                         console.log(`コンテナ ${project.id} は作成済みですが未起動のため、起動します。`);
                                         await containerManager.upContainer(req, project.id);
                                         await Utils.sleep(5000);
+                                    } else if (actualStatus === ContainerStatus.NOT_FOUND) {
+                                        // コンテナが削除されている場合は再作成
+                                        console.log(`コンテナ ${project.id} が見つかりません。再作成します。`);
+                                        await containerManager.createContainer(req, { uuid: project.id, outputDir: dirPath });
+                                        await containerManager.upContainer(req, project.id);
+                                        await Utils.sleep(5000);
                                     } else {
                                         // その他のステータス（RESTARTING等）の場合は少し待つ
                                         console.log(`コンテナ ${project.id} の状態: ${actualStatus}。待機します。`);
@@ -2416,14 +2437,14 @@ export const checkProjectPermission = [
                                     }
                                 } else {
                                     console.log(`コンテナエンティティが見つかりません。新規作成します。`);
-                                    await containerManager.createContainer(req, { uuid: project.id });
+                                    await containerManager.createContainer(req, { uuid: project.id, outputDir: dirPath });
                                     await containerManager.upContainer(req, project.id);
                                     await Utils.sleep(5000);
                                 }
                             } else {
                                 console.log(`${fileName} が存在しません。`);
                                 // ここにファイルが存在しない場合の処理を書く
-                                await containerManager.createContainer(req, { uuid: project.id });
+                                await containerManager.createContainer(req, { uuid: project.id, outputDir: dirPath });
                                 await containerManager.upContainer(req, project.id);
                                 await Utils.sleep(5000);
                             }
